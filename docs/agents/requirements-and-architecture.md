@@ -165,8 +165,8 @@ ASR、LLM、TTS 必须是三个独立的小接口，不创建统一的“大模�
 配置发现使用固定路径 `GET|POST /xiaozhi/ota/`。部署者将该完整地址写入固件 `ota_url`。
 
 - `POST` 正文是固件系统信息；`GET` 用于没有正文的设备。
-- 请求正文最大 64 KiB。首期不使用其中字段，只做有界读取和合法 JSON 校验；空正文允许。
-- 读取并限制 `Activation-Version`、`Device-Id`、`Client-Id`、`Serial-Number`、`User-Agent` 和 `Accept-Language` 的长度。
+- 请求正文最大 64 KiB（65536 字节，配置项 `max_http_body_bytes`，合法范围 1 KiB ~ 10 MiB）。使用 `http.MaxBytesReader` 限制，超限立即中止读取并返回 HTTP 413 Payload Too Large；空正文允许。
+- 读取并限制 `Activation-Version`、`Device-Id`、`Client-Id`、`Serial-Number`、`User-Agent` 和 `Accept-Language` 等请求头长度（单 Header 上限 1024 字符，配置项 `max_http_header_bytes`，合法范围 128 ~ 8192 字符；全部 Header 汇总上限 8192 字节）。超出限制直接返回 HTTP 400 Bad Request 或 HTTP 431 Request Header Fields Too Large。
 - 这些请求头只用于有限诊断日志，不参与身份认证、唯一性判断或数据保存。
 - 不因 `Activation-Version` 为 1 或 2 进入不同业务流程。
 
@@ -198,14 +198,14 @@ WebSocket 使用固定路径 `/xiaozhi/v1/`。
 
 - 要求 `Authorization: Bearer <token>` 与环境变量中的共享 Token 匹配。
 - 要求 `Protocol-Version` 等于 `1`。
-- 接收 `Device-Id` 和 `Client-Id`，但只做长度限制并写入必要的会话日志字段。
+- 接收 `Device-Id` 和 `Client-Id`，单个 Header 长度上限 1024 字符（超限拒绝握手），只写入必要的会话日志字段。
 - 不要求 `Serial-Number`，保证没有序列号的当前 v1 固件能够接入。
 - 禁用 WebSocket 压缩；Opus 数据不得重复压缩。
-- Token 错误、协议版本错误或达到会话保护上限时在升级前拒绝。
+- Token 错误、协议版本错误或达到会话保护上限（`max_concurrent_sessions`）时在升级前拒绝；达到会话上限时直接返回 HTTP 503 Service Unavailable。
 
 ### 8.2 hello
 
-连接升级后，设备必须在 10 秒内发送文本 hello。服务端至少校验：
+连接升级后，设备必须在 10 秒内（配置项 `hello_timeout`，默认 10s，合法范围 3s ~ 30s）发送文本 hello。超限以 WebSocket 1008 (Policy Violation) 关闭连接。服务端至少校验：
 
 - `type` 等于 `hello`。
 - `transport` 等于 `websocket`。
@@ -235,7 +235,7 @@ WebSocket 使用固定路径 `/xiaozhi/v1/`。
 
 ### 8.3 文本消息
 
-首期只处理以下设备消息：
+首期只处理以下设备消息（WebSocket 文本消息上限 32 KiB / 32768 字节，配置项 `max_ws_text_message_bytes`，合法范围 4 KiB ~ 512 KiB；超限以 WebSocket 1009 Message Too Big 关闭连接）：
 
 - `{"type":"hello", ...}`。
 - `{"type":"listen","state":"start","mode":"auto"}`。
@@ -252,11 +252,12 @@ WebSocket 使用固定路径 `/xiaozhi/v1/`。
 - `{"session_id":"...","type":"tts","state":"sentence_start","text":"..."}`。
 - `{"session_id":"...","type":"tts","state":"stop"}`。
 
-不得发送 `llm` 表情、MCP、System、Custom、Glyph Push 或其他扩展消息。格式正确但不在范围内的扩展消息只做限频诊断并忽略；除第 8.4 节明确允许丢弃的音频外，格式错误、超限或违反当前状态的消息关闭连接。
+不得发送 `llm` 表情、MCP、System、Custom、Glyph Push 或其他扩展消息。格式正确但不在范围内的扩展消息只做限频诊断（同一连接每秒最多 1 条诊断日志，burst 3 条）并忽略；除第 8.4 节明确允许丢弃的音频外，格式错误、超限或违反当前状态的消息关闭连接。
 
 ### 8.4 二进制音频
 
 - 每个 WebSocket binary message 必须且只能包含一个原始 Opus 包。
+- 单包大小上限 1024 字节（配置项 `max_opus_packet_bytes`，合法范围 128 ~ 4096 字节）。收到超过上限或 0 字节的空包视为协议错误，立即以 WebSocket 1003 (Unsupported Data) 或 1008 (Policy Violation) 关闭连接。
 - 不解析或生成额外二进制头、时间戳、版本字段和 payload 长度字段。
 - 上行 Opus 按 hello 中的 16000 Hz、单声道、60 ms 解码。
 - 下行 Opus 按服务端 hello 中的 24000 Hz、单声道、60 ms 编码。
@@ -342,41 +343,140 @@ ASR 连接和音频队列必须在超时、`abort`、设备断开或服务停止
 
 ## 10. 并发与资源边界
 
-首期不声明固定并发容量，也不做容量 SLA。运行时仍必须有明确上限：
+首期不声明固定并发容量，也不做容量 SLA，但运行时所有资源、队列、消息和超时均必须具备确定数值的硬边界，严禁出现无界分配或隐式无限等待。
 
-- `max_concurrent_sessions` 是必填正整数配置，不提供“无限”值。
-- 使用进程内信号量限制已升级的 WebSocket 会话；达到上限时拒绝新握手。
-- 每个连接只有一个读取流程和一个串行写入流程。
-- WebSocket 文本、Opus 上行、PCM 下行和待发送 Opus 队列全部有界。
-- 不为每个音频帧创建 goroutine。
-- 每个会话独立持有 ASR/TTS 流、Opus 编解码器、上下文和取消函数。
-- 不跨会话复用可变音频状态或对话历史。
-- 所有外部请求都传递 `context`，并受配置的连接、首响应和整体超时约束。
-- 单次收音时长必须有有限上限，默认 30 秒；超限取消本轮并关闭连接。
-- 服务停止时停止接收新连接，取消全部会话并在有限宽限期内退出。
+### 10.1 资源边界基准总表
 
-配置值应根据机器资源和百炼配额确定。自动化测试只验证上限和拒绝行为，不承诺某个并发数量下的性能。
+下表为首期系统全部资源边界、超时、队列和容量的确定数值与行为规范：
+
+| 边界分类 | 配置键名 / 常量名 | 类型 / 单位 | 默认值 / 必填规则 | 校验合法范围 | 超限 / 失败行为 |
+| --- | --- | --- | --- | --- | --- |
+| 并发会话 | `max_concurrent_sessions` | 整数（个） | **必填正整数**（无默认值） | `[1, 10000]` | 达到上限时拒绝新握手，HTTP 握手阶段返回 `503 Service Unavailable` |
+| HTTP 请求体 | `max_http_body_bytes` | 整数（字节） | `65536`（64 KiB） | `[1024, 10485760]` (1 KiB ~ 10 MiB) | `http.MaxBytesReader` 限制，超限中止读取并返回 `413 Payload Too Large` |
+| 单 Header 长度 | `max_http_header_bytes` | 整数（字符/字节） | `1024` 字符 | `[128, 8192]` | 单个请求头超限直接返回 `400 Bad Request` 或 `431 Request Header Fields Too Large` |
+| WS 文本消息 | `max_ws_text_message_bytes` | 整数（字节） | `32768`（32 KiB） | `[4096, 524288]` (4 KiB ~ 512 KiB) | WebSocket ReadLimit 限制，超限发送 `1009 (Message Too Big)` 并关闭连接 |
+| 上行 Opus 单包 | `max_opus_packet_bytes` | 整数（字节） | `1024` 字节 | `[128, 4096]` | 收到超过 1024 字节或 0 字节二进制包，发送 `1003/1008` 并关闭连接 |
+| ASR PCM 队列 | `asr_pcm_queue_capacity` | 整数（帧） | `100` 帧 (约 6.0s 音频) | `[20, 500]` | ASR 写入阻塞导致队列满时触发背压，丢弃新帧；阻塞超 5s 则取消 ASR 并关闭连接 |
+| TTS PCM 队列 | `tts_pcm_queue_capacity` | 整数（块） | `100` 块 | `[20, 500]` | 编码消费阻塞导致队列满时暂停读取；阻塞超 5s 则取消 TTS 并关闭连接 |
+| 下行 Opus 队列 | `downlink_opus_queue_capacity` | 整数（包） | `100` 包 (约 6.0s 播放) | `[20, 500]` | 写设备受阻导致下行队列积压满时，触发背压保护，记录 WARN 并主动关闭连接 |
+| 单次收音时长 | `max_listening_duration` | 时间（秒） | `30s` | `[5s, 120s]` | 持续收音超 30s 仍未断句，立即停止收音，取消本轮 ASR 并关闭连接 |
+| 客户端 Hello 超时 | `hello_timeout` | 时间（秒） | `10s` | `[3s, 30s]` | 升级后 10s 内未收到合法 hello，以 `1008` 关闭连接 |
+| ASR 建连超时 | `asr_connect_timeout` | 时间（秒） | `10s` | `[3s, 30s]` | 百炼 ASR WebSocket 握手建连超时，记录 ERROR 并关闭设备连接 |
+| TTS 建连超时 | `tts_connect_timeout` | 时间（秒） | `10s` | `[3s, 30s]` | 百炼 TTS WebSocket 握手建连超时，记录 ERROR 并关闭设备连接 |
+| LLM 首 token 超时 | `llm_first_token_timeout` | 时间（秒） | `15s` | `[3s, 30s]` | 15s 未收到 LLM 首个增量 chunk，取消 LLM，记录 ERROR 并关闭设备连接 |
+| LLM 整体超时 | `llm_overall_timeout` | 时间（秒） | `60s` | `[10s, 180s]`（必须 > 首 token 超时） | LLM 流总耗时超 60s，取消 LLM，记录 ERROR 并关闭设备连接 |
+| TTS 首音频超时 | `tts_first_audio_timeout` | 时间（秒） | `10s` | `[3s, 30s]` | 首句送入 TTS 后 10s 未收到首个 PCM 块，取消 TTS 并关闭设备连接 |
+| TTS 单句合成超时 | `tts_sentence_timeout` | 时间（秒） | `15s` | `[5s, 60s]` | 单句 TTS 合成耗时超限，取消 TTS 并关闭设备连接 |
+| HTTP 读取超时 | `http_read_timeout` | 时间（秒） | `15s` | `[5s, 60s]` | HTTP Server ReadTimeout 超限中断读取 |
+| HTTP 写入超时 | `http_write_timeout` | 时间（秒） | `30s` | `[5s, 60s]` | HTTP Server WriteTimeout 超限中断写入 |
+| HTTP 空闲超时 | `http_idle_timeout` | 时间（秒） | `60s` | `[10s, 300s]` | HTTP Keep-Alive 空闲超时关闭连接 |
+| 优雅关闭宽限期 | `shutdown_timeout` | 时间（秒） | `10s` | `[1s, 60s]` | 进程优雅退出等待所有会话清理的最大时长，超限强制退出 |
+| 内存历史轮数 | `max_history_turns` | 整数（轮） | `6` 轮 | `[1, 50]` | 成功轮次超限时按 FIFO 滚动淘汰最旧的一整轮对话（1 问 1 答） |
+| 日志字段截断 | `log_truncate_limit` | 整数（字符） | `64` 字符（**代码常量**） | 固定 `64` | 日志记录的设备 ID、消息片段等超长字段截断为 64 字符 + `...` |
+| 诊断日志限频 | `diag_rate_limit` | 频率（条/秒） | `1 msg/s`, burst `3`（**代码常量**） | 固定 | 未知扩展消息或诊断日志超过限频阈值时静默丢弃或聚合计数，防日志刷屏 |
+
+### 10.2 队列与背压设计
+
+1. **ASR PCM 缓冲队列**：
+   - 上行 Opus 解码后生成 16000 Hz 16-bit 单声道 PCM 帧（每帧 60 ms / 960 采样点 / 1920 字节），送入容量为 100 帧的有界 channel。
+   - 消费协程持续从队列读取并通过 WebSocket binary 帧写入百炼 ASR。
+   - 若百炼 ASR 写入阻塞导致队列满（积压约 6.0 秒音频），背压机制丢弃后续新 PCM 帧并记录 WARN；若单次阻塞超过 5 秒，判定百炼 ASR 链路不可用，主动取消 ASR 任务并关闭设备连接。
+2. **TTS PCM 缓冲队列**：
+   - 百炼 TTS 产生的 PCM 音频块送入容量为 100 块的有界 channel。
+   - 编码协程持续取出 PCM 块组装为 24000 Hz 60 ms PCM 帧（每帧 1440 采样点 / 2880 字节）并进行 Opus 编码。
+   - 队列满时暂停 TTS 读取协程；若阻塞超过 5 秒未恢复，取消 TTS 任务并记录异常。
+3. **下行 Opus 串行写队列**：
+   - 编码后的 60 ms Opus 包按实时时序推入容量为 100 包（可缓冲 6.0 秒音频）的待发送队列。
+   - 会话内唯一串行写入协程负责将 Opus 包发送至设备 WebSocket。
+   - 若设备网络缓慢或断开导致下行队列积压满 100 包，判定下行通道严重阻塞，立即触发背压保护，记录 WARN 并主动关闭设备连接，防止服务端内存泄露。
+
+### 10.3 超时与生命周期
+
+1. **会话级超时**：
+   - 握手后 10 秒内未收到合法 `hello`，断开连接。
+   - 收音状态下，单次收音超过 30 秒未触发 VAD 结束或收到 `listen.stop`，超时取消收音并关闭连接。
+2. **外部服务调用超时**：
+   - 百炼 ASR / TTS WebSocket 建连必须在 10 秒内完成。
+   - 百炼 LLM 首 token（TTFT）必须在 15 秒内到达；LLM 整体文本流耗时不得超过 60 秒（启动校验强制验证 `llm_overall_timeout > llm_first_token_timeout`）。
+   - 百炼 TTS 写入首句后必须在 10 秒内收到首个 PCM 块；单句合成耗时不得超过 15 秒。
+   - 任何外部超时均通过 `context.WithTimeout` 严格实施，超时后立即取消下游并在会话边界记录错误。
+3. **服务生命周期超时**：
+   - HTTP 基础参数配置：`ReadTimeout` 15s、`WriteTimeout` 30s、`IdleTimeout` 60s。
+   - 优雅退出宽限期 10s：收到终止信号后，停止接收入口请求，广播取消所有活跃会话，在 10 秒内等待资源清理完成并退出。
+
+### 10.4 并发控制与多轮对话
+
+1. **并发控制**：
+   - 部署者必须显式配置 `max_concurrent_sessions`（正整数，无默认值，如 `10`）。
+   - 采用进程内带缓冲 channel 或信号量严格限制活跃 WebSocket 会话数量。
+   - 当活跃会话数达到上限时，新 WebSocket 握手请求在 HTTP 阶段直接返回 `503 Service Unavailable`，不执行协议升级。
+2. **多轮对话上下文淘汰**：
+   - 会话内仅在内存中保留最近有限轮完整对话（默认 6 轮，合法范围 1 ~ 50 轮）。
+   - 一轮对话仅在用户识别文本与助手完整回复均成功结束后才提交写入。
+   - 对话轮数超过配置上限时，按先进先出（FIFO）原则滚动丢弃最旧的一整轮对话（1 条 user 消息 + 1 条 assistant 消息），系统提示词始终保持在最前。
+
+### 10.5 不可变协议参数（代码常量）
+
+以下参数属于固件通信与音频编解码协议契约，固定为代码常量，严禁作为外部可变配置项：
+
+- `ProtocolVersion = 1`
+- 上行音频参数：`SampleRate = 16000` Hz，`Channels = 1`（单声道），`FrameDurationMs = 60` ms（每帧 `960` 采样点 / `1920` 字节 16-bit PCM）
+- 下行音频参数：`SampleRate = 24000` Hz，`Channels = 1`（单声道），`FrameDurationMs = 60` ms（每帧 `1440` 采样点 / `2880` 字节 16-bit PCM）
+- PCM 编码格式：`16-bit signed little-endian`
 
 ## 11. 配置
 
 ### 11.1 YAML
 
-非敏感配置使用一个 YAML 文件，至少包含：
+非敏感配置使用单一 YAML 文件，结构与字段如下：
 
-- 服务监听地址。
-- 对外 WebSocket 完整 URL。
-- `max_concurrent_sessions` 和关闭宽限期。
-- 最大消息、音频队列、单次收音时长及外部调用超时。
-- 系统提示词和内存历史轮数。
-- 百炼 ASR/TTS WebSocket 地址：`wss://llm-hi9nns9y8jekpmpt.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference`。
-- 百炼 LLM 地址：`https://llm-hi9nns9y8jekpmpt.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`。
-- ASR 模型 `qwen-audio-3.0-asr-flash-streaming`。
-- LLM 模型 `qwen3.7-flash`。
-- TTS 模型 `qwen-audio-3.0-tts-flash` 和音色 `longanlingxi`。
+```yaml
+server:
+  listen_addr: ":8080"
+  websocket_url: "wss://example.com/xiaozhi/v1/"
+  max_concurrent_sessions: 10          # 必填正整数，无默认值
+  shutdown_timeout: 10s                # 默认 10s
+  http_read_timeout: 15s               # 默认 15s
+  http_write_timeout: 30s              # 默认 30s
+  http_idle_timeout: 60s               # 默认 60s
+  max_http_body_bytes: 65536           # 默认 64 KiB
+  max_http_header_bytes: 1024          # 默认 1024 字符
 
-模型、音色和地址虽然在首期只有一个合法组合，仍放在配置中，便于环境切换和后续替换适配器。协议版本、音频采样率、声道数和帧长属于设备契约，固定在代码中，不提供配置项。
+session:
+  hello_timeout: 10s                   # 默认 10s
+  max_ws_text_message_bytes: 32768     # 默认 32 KiB
+  max_opus_packet_bytes: 1024          # 默认 1024 字节
+  max_listening_duration: 30s          # 默认 30s
+  asr_pcm_queue_capacity: 100          # 默认 100 帧
+  tts_pcm_queue_capacity: 100          # 默认 100 块
+  downlink_opus_queue_capacity: 100    # 默认 100 包
+  max_history_turns: 6                 # 默认 6 轮
+  system_prompt: "你是小智，一个智能语音助手。请用简明、友好的中文回答，回答适合直接语音朗读。"
 
-YAML 必须严格映射到明确 struct。未知字段、缺失必填项、非法 URL、非正数上限和相互矛盾的超时必须导致启动失败。不实现热更新。
+ai:
+  bailian:
+    ws_endpoint: "wss://llm-hi9nns9y8jekpmpt.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
+    llm_endpoint: "https://llm-hi9nns9y8jekpmpt.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+    asr_model: "qwen-audio-3.0-asr-flash-streaming"
+    llm_model: "qwen3.7-flash"
+    tts_model: "qwen-audio-3.0-tts-flash"
+    tts_voice: "longanlingxi"
+    asr_connect_timeout: 10s           # 默认 10s
+    tts_connect_timeout: 10s           # 默认 10s
+    llm_first_token_timeout: 15s       # 默认 15s
+    llm_overall_timeout: 60s           # 默认 60s
+    tts_first_audio_timeout: 10s       # 默认 10s
+    tts_sentence_timeout: 15s          # 默认 15s
+```
+
+YAML 必须严格映射到明确 struct（启用未知字段检查 `Decoder.KnownFields(true)`）。以下情况启动校验必须直接返回错误并拒绝启动：
+- 包含未在 struct 中定义的未知 YAML 字段。
+- 缺失必需环境变量（`DASHSCOPE_API_KEY`、`DEVICE_SHARED_TOKEN`）。
+- 缺失必填字段（如 `max_concurrent_sessions`）或字段值为非正数（<= 0）。
+- 任何数值或时长超出第 10.1 节定义的合法范围。
+- 超时逻辑矛盾（如 `llm_overall_timeout <= llm_first_token_timeout`）。
+- 非法 URL 格式或空监听地址。
+- 不实现配置热更新，配置变更需重启进程。
 
 ### 11.2 环境变量
 
@@ -404,8 +504,10 @@ YAML 必须严格映射到明确 struct。未知字段、缺失必填项、非�
 - `Device-Id`、`Client-Id` 和 `Serial-Number` 都是客户端声明，不得在日志或响应中描述为可信身份。
 - 公网传输必须由受控反向代理提供 HTTPS/WSS；本服务首期不自行终止 TLS。
 - 配置发现、WebSocket 头、JSON、Opus 包、队列和收音时长必须有上限。
-- Token 比较使用常量时间方式，日志不记录 `Authorization`、API Key、共享 Token 或完整外部响应。
-- 不记录原始 PCM、Opus、完整系统提示词或完整对话正文。
+- Token 比较使用常量时间比较（`crypto/subtle.ConstantTimeCompare`），日志严禁记录 `Authorization`、API Key、共享 Token 或完整外部响应。
+- 严禁记录原始 PCM、Opus、完整系统提示词或完整对话正文。
+- 日志字段截断规则：客户端声明字段（如 `device_id`、`client_id`、`serial_number`）、未识别扩展消息 payload 及错误摘要等，在日志输出时按最大 64 字符（常量 `log_truncate_limit`）进行截断并追加 `...`。
+- 诊断日志限频规则：针对未识别扩展消息或高频异常，采用会话级令牌桶/滑动窗口限频器，每秒最多输出 1 条日志（常量 `diag_rate_limit = 1 msg/s`，突发容量 3 条），超限部分静默丢弃或聚合计数。
 - 日志只保留会话 ID、截断后的设备声明、状态转换、取消原因以及 ASR/LLM/TTS 耗时和错误对象。
 - 同一个错误只在能够决定处理方式的边界记录一次。
 
@@ -413,25 +515,29 @@ YAML 必须严格映射到明确 struct。未知字段、缺失必填项、非�
 
 ### 14.1 单元测试
 
-- 配置严格解析、缺失密钥、非法 URL、非正数上限和未知字段。
-- hello、`listen`、`abort`、`stt`、`tts` JSON 的解析与编码。
-- WebSocket v1 二进制消息直接承载单个 Opus 包。
-- 16 kHz Opus 解码和 24 kHz、60 ms Opus 编码边界。
-- 状态机合法/非法转换、回答代次和迟到结果丢弃。
-- LLM 分句、最大长度切分和有限轮上下文淘汰。
-- `abort`、超时、断开和启动失败时的资源释放。
+- 配置严格解析：未知字段报错、缺失 `max_concurrent_sessions` 报错、数值超出合法范围报错、`llm_overall_timeout <= llm_first_token_timeout` 矛盾报错。
+- 环境变量注入：缺失 `DASHSCOPE_API_KEY` 或 `DEVICE_SHARED_TOKEN` 报错，空字符串报错。
+- HTTP 发现与边界：超大请求体（>64 KiB）返回 413、超长请求头（>1024 字符）返回 400/431、合法请求返回正确 200 JSON。
+- WebSocket 协议与消息边界：超大文本消息（>32 KiB）关闭连接（1009）、超大 Opus 包（>1024 字节）或空包关闭连接（1003/1008）、未知扩展消息限频与忽略。
+- 编解码与音频边界：16 kHz Opus 解码为 1920 字节 PCM 帧、24 kHz PCM 组 1440 采样点编码为 60 ms Opus 帧。
+- 队列与背压测试：ASR PCM 队列满 100 帧背压丢弃与超时断开、TTS PCM 队列满 100 块暂停读取与超时断开、下行 Opus 队列满 100 包主动关闭连接。
+- 状态机与代次：合法/非法状态转换、回答代次递增、旧代次迟到结果丢弃。
+- LLM 分句与上下文淘汰：标点分句、最长字符切分、内存历史超过 6 轮按 FIFO 淘汰最旧完整轮次。
+- 超时与清理：Hello 10s 超时断开、收音 30s 超时断开、LLM 首 token 15s 超时取消、TTS 首音频 10s 超时取消、优雅关闭 10s 超时强退、`abort` 资源清理。
+- 日志截断与限频：日志辅助函数对 >64 字符字段截断、限频器丢弃 >1 msg/s 诊断日志。
 
 ### 14.2 集成测试
 
 使用本地模拟服务，不调用真实收费接口，覆盖：
 
 - 配置发现返回固定 WebSocket v1 配置。
-- Token、协议版本、hello 字段和 10 秒超时。
+- Token 校验、协议版本 1 校验、hello 字段协商和 10 秒超时。
+- 达到 `max_concurrent_sessions` 上限时握手直接返回 503 拒绝。
 - 模拟百炼 ASR 的部分结果、VAD 最终结果、错误和取消。
 - 模拟 OpenAI 兼容 LLM 的流式文本、流中错误和取消。
 - 模拟百炼 TTS 的 PCM 分块、结束、错误和取消。
 - 一轮完整语音、连续多轮、`manual` 停止、`abort` 和断线重连。
-- 达到配置会话上限时明确拒绝，不出现无界队列或并发写 WebSocket。
+- 队列满载背压与串行下发保护。
 
 实现完成后至少运行：
 
