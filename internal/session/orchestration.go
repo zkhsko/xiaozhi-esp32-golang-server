@@ -209,6 +209,9 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if s.Generation() > gen {
+			return errors.New("generation mismatch")
+		}
 
 		startMsgBytes, err := EncodeTTSSentenceStartMessage(sessionID, sentence)
 		if err != nil {
@@ -233,7 +236,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
 				return
 			}
 			s.logger.Warn("llm stream read failed",
@@ -250,6 +253,10 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 			return
 		}
 
+		if ctx.Err() != nil || s.Generation() > gen {
+			return
+		}
+
 		if chunk == "" {
 			continue
 		}
@@ -258,7 +265,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		sentences := splitter.Feed(chunk)
 		for _, sentence := range sentences {
 			if err := sendSentence(sentence); err != nil {
-				if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
 					return
 				}
 				s.logger.Warn("failed to deliver sentence to tts",
@@ -277,11 +284,15 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		}
 	}
 
+	if ctx.Err() != nil || s.Generation() > gen {
+		return
+	}
+
 	// 4. LLM 正常结束时，刷新末尾残句
 	remaining := splitter.Flush()
 	for _, sentence := range remaining {
 		if err := sendSentence(sentence); err != nil {
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
 				return
 			}
 			s.logger.Warn("failed to deliver flushed sentence to tts",
@@ -299,9 +310,13 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		}
 	}
 
+	if ctx.Err() != nil || s.Generation() > gen {
+		return
+	}
+
 	// 5. 调用且只调用一次 Finish 通知 TTS 输入结束
 	if err := ttsStream.Finish(ctx); err != nil {
-		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
 			return
 		}
 		s.logger.Warn("failed to finish tts stream",
@@ -323,6 +338,10 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	case <-ctx.Done():
 		return
 	case <-pcmDone:
+	}
+
+	if s.Generation() > gen {
+		return
 	}
 
 	pipelineSucceeded = true
@@ -358,12 +377,22 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 	sessionID := s.SessionID()
 
 	for {
+		if ctx.Err() != nil || s.Generation() > gen {
+			return
+		}
+
 		pcmChunk, err := stream.NextPCM(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				if ctx.Err() != nil || s.Generation() > gen {
+					return
+				}
 				// TTS PCM 流正常结束，刷新尾帧（若有残余数据，补静音输出最后一帧 Opus；若无残余则不输出多余包）
 				packets, flushErr := streamEncoder.Flush()
 				if flushErr != nil {
+					if ctx.Err() != nil || s.Generation() > gen {
+						return
+					}
 					s.logger.Warn("failed to flush tts opus encoder",
 						"error", flushErr,
 						"session_id", sessionID,
@@ -378,6 +407,9 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 					return
 				}
 				for _, pkt := range packets {
+					if s.Generation() > gen {
+						return
+					}
 					s.handleEncodedOpusPacket(gen, pkt)
 					if pacer != nil {
 						if err := pacer.Enqueue(pkt); err != nil {
@@ -388,7 +420,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 				return
 			}
 
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
 				return
 			}
 
@@ -406,12 +438,19 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 			return
 		}
 
+		if ctx.Err() != nil || s.Generation() > gen {
+			return
+		}
+
 		if len(pcmChunk) == 0 {
 			continue
 		}
 
 		packets, err := streamEncoder.Feed(pcmChunk)
 		if err != nil {
+			if ctx.Err() != nil || s.Generation() > gen {
+				return
+			}
 			s.logger.Warn("failed to encode tts pcm to opus",
 				"error", err,
 				"session_id", sessionID,
@@ -427,6 +466,9 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 		}
 
 		for _, pkt := range packets {
+			if s.Generation() > gen {
+				return
+			}
 			s.handleEncodedOpusPacket(gen, pkt)
 			if pacer != nil {
 				if err := pacer.Enqueue(pkt); err != nil {
@@ -439,6 +481,9 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 
 // handleEncodedOpusPacket 处理编码产出的单个 24 kHz 60 ms Opus 数据包。
 func (s *Session) handleEncodedOpusPacket(gen uint64, packet []byte) {
+	if s.Generation() > gen {
+		return
+	}
 	s.mu.RLock()
 	cb := s.onEncodedOpus
 	s.mu.RUnlock()

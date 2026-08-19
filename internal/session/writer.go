@@ -223,6 +223,20 @@ func (w *Writer) Close() error {
 	return w.Err()
 }
 
+// DrainPending 快速清空当前写队列中积压的全部未发送消息，用于 abort 或打断时清理旧轮次残留。
+func (w *Writer) DrainPending() {
+	if w == nil {
+		return
+	}
+	for {
+		select {
+		case <-w.queue:
+		default:
+			return
+		}
+	}
+}
+
 // QueueLen 返回当前队列中等待发送的消息数量。
 func (w *Writer) QueueLen() int {
 	return len(w.queue)

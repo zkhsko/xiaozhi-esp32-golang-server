@@ -136,6 +136,10 @@ func (p *DownlinkPacer) Enqueue(packet []byte) error {
 	}
 	p.mu.Unlock()
 
+	if p.session != nil && p.session.Generation() > p.gen {
+		return ErrPacerStopped
+	}
+
 	// 跨异步边界独立深拷贝数据
 	copied := make([]byte, len(packet))
 	copy(copied, packet)
@@ -298,6 +302,10 @@ func (p *DownlinkPacer) sendTTSStart() error {
 	p.hasSentStart = true
 	p.mu.Unlock()
 
+	if p.session != nil && p.session.Generation() > p.gen {
+		return nil
+	}
+
 	sessionID := p.sessionID()
 	startBytes, err := EncodeTTSStartMessage(sessionID)
 	if err != nil {
@@ -305,6 +313,9 @@ func (p *DownlinkPacer) sendTTSStart() error {
 	}
 
 	if p.session != nil {
+		if p.session.Generation() > p.gen {
+			return nil
+		}
 		if err := p.session.sendTextMessage(startBytes); err != nil {
 			return fmt.Errorf("send tts start message: %w", err)
 		}
@@ -319,6 +330,10 @@ func (p *DownlinkPacer) sendTTSStart() error {
 
 // sendPacket 发送单个 Opus 音频包，并在首包就绪时确保先发送 tts.start 文本消息。
 func (p *DownlinkPacer) sendPacket(pkt []byte) error {
+	if p.session != nil && p.session.Generation() > p.gen {
+		return nil
+	}
+
 	p.mu.Lock()
 	needStart := !p.hasSentStart
 	p.mu.Unlock()
@@ -331,6 +346,10 @@ func (p *DownlinkPacer) sendPacket(pkt []byte) error {
 			}
 			return err
 		}
+	}
+
+	if p.session != nil && p.session.Generation() > p.gen {
+		return nil
 	}
 
 	if p.writer != nil {

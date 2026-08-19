@@ -930,11 +930,6 @@ func (s *Session) handleAbortEvent(reason string) {
 		return
 	}
 
-	s.stopListeningTimer()
-	s.stopASR()
-	s.stopTTS()
-	s.stopPacer()
-
 	s.mu.Lock()
 	s.generation++
 	newGen := s.generation
@@ -945,6 +940,15 @@ func (s *Session) handleAbortEvent(reason string) {
 	wasSpeaking := (s.state == StateSpeaking)
 	s.state = StateReady
 	s.mu.Unlock()
+
+	s.stopListeningTimer()
+	s.stopASR()
+	s.stopTTS()
+	s.stopPacer()
+
+	if s.writer != nil {
+		s.writer.DrainPending()
+	}
 
 	if wasSpeaking {
 		stopBytes, err := EncodeTTSStopMessage(s.SessionID())
