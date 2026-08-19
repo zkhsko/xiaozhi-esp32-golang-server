@@ -1,0 +1,277 @@
+package session
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+
+	"xiaozhi-esp32-golang-server/internal/ai"
+)
+
+// buildLLMMessages 根据系统提示词、会话历史与当前用户识别文本构造发送给大语言模型的消息列表。
+func (s *Session) buildLLMMessages(userText string) []ai.Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var messages []ai.Message
+
+	if s.cfg != nil && s.cfg.Session.SystemPrompt != "" {
+		messages = append(messages, ai.Message{
+			Role:    ai.RoleSystem,
+			Content: s.cfg.Session.SystemPrompt,
+		})
+	}
+
+	if len(s.history) > 0 {
+		messages = append(messages, s.history...)
+	}
+
+	messages = append(messages, ai.Message{
+		Role:    ai.RoleUser,
+		Content: userText,
+	})
+
+	return messages
+}
+
+// AppendHistory 将一轮成功的用户文本与助手完整回复追加至会话历史，并按上限滚动淘汰最旧轮次。
+func (s *Session) AppendHistory(userText, assistantText string) {
+	if userText == "" || assistantText == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.history = append(s.history,
+		ai.Message{Role: ai.RoleUser, Content: userText},
+		ai.Message{Role: ai.RoleAssistant, Content: assistantText},
+	)
+
+	maxTurns := DefaultMaxHistoryTurns
+	if s.cfg != nil && s.cfg.Session.MaxHistoryTurns > 0 {
+		maxTurns = s.cfg.Session.MaxHistoryTurns
+	}
+
+	maxMessages := maxTurns * 2
+	if len(s.history) > maxMessages {
+		s.history = s.history[len(s.history)-maxMessages:]
+	}
+}
+
+// History 返回当前会话的历史消息列表副本。
+func (s *Session) History() []ai.Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if len(s.history) == 0 {
+		return nil
+	}
+	copied := make([]ai.Message, len(s.history))
+	copy(copied, s.history)
+	return copied
+}
+
+// stopTTS 停止并清理当前轮次的 TTS 流。
+func (s *Session) stopTTS() {
+	s.mu.Lock()
+	stream := s.ttsStream
+	s.ttsStream = nil
+	s.mu.Unlock()
+
+	if stream != nil {
+		_ = stream.Close()
+	}
+}
+
+// orchestrateLLMAndTTS 在后台协程中协同编排流式大语言模型生成、增量分句与回答级流式语音合成。
+func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText string) {
+	if s.llmClient == nil && s.ttsClient == nil {
+		return
+	}
+	if s.llmClient == nil || s.ttsClient == nil {
+		s.logger.Error("llm client or tts client not configured",
+			"session_id", s.SessionID(),
+			"generation", gen,
+		)
+		s.postEvent(event{
+			kind:       eventKindError,
+			generation: gen,
+			err:        errors.New("ai clients not configured"),
+			fatal:      true,
+		})
+		return
+	}
+
+	if err := ctx.Err(); err != nil {
+		return
+	}
+
+	// 1. 创建单条回答级 TTS 合成流
+	ttsStream, err := s.ttsClient.CreateStream(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return
+		}
+		s.logger.Warn("failed to create tts stream",
+			"error", err,
+			"session_id", s.SessionID(),
+			"generation", gen,
+		)
+		s.postEvent(event{
+			kind:       eventKindError,
+			generation: gen,
+			err:        err,
+			fatal:      true,
+		})
+		return
+	}
+
+	s.mu.Lock()
+	s.ttsStream = ttsStream
+	s.mu.Unlock()
+
+	// 2. 构造上下文消息并创建 LLM 流式输出会话
+	messages := s.buildLLMMessages(userText)
+	llmStream, err := s.llmClient.CreateStream(ctx, messages)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return
+		}
+		s.logger.Warn("failed to create llm stream",
+			"error", err,
+			"session_id", s.SessionID(),
+			"generation", gen,
+		)
+		s.postEvent(event{
+			kind:       eventKindError,
+			generation: gen,
+			err:        err,
+			fatal:      true,
+		})
+		return
+	}
+	defer func() {
+		_ = llmStream.Close()
+	}()
+
+	splitter := NewSentenceSplitter()
+	var assistantText strings.Builder
+	sessionID := s.SessionID()
+
+	// sendSentence 先下发设备文本消息 tts.sentence_start，再调用 ttsStream.SendSentence 写入，保证文本严格先于对应音频
+	sendSentence := func(sentence string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		startMsgBytes, err := EncodeTTSSentenceStartMessage(sessionID, sentence)
+		if err != nil {
+			return fmt.Errorf("encode sentence start message: %w", err)
+		}
+
+		if err := s.sendTextMessage(startMsgBytes); err != nil {
+			return fmt.Errorf("send sentence start text message: %w", err)
+		}
+
+		if err := ttsStream.SendSentence(ctx, sentence); err != nil {
+			return fmt.Errorf("send sentence to tts: %w", err)
+		}
+
+		return nil
+	}
+
+	// 3. 消费 LLM 流文本增量并通过分句器切分为完整句子
+	for {
+		chunk, err := llmStream.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				return
+			}
+			s.logger.Warn("llm stream read failed",
+				"error", err,
+				"session_id", sessionID,
+				"generation", gen,
+			)
+			s.postEvent(event{
+				kind:       eventKindError,
+				generation: gen,
+				err:        err,
+				fatal:      true,
+			})
+			return
+		}
+
+		if chunk == "" {
+			continue
+		}
+
+		assistantText.WriteString(chunk)
+		sentences := splitter.Feed(chunk)
+		for _, sentence := range sentences {
+			if err := sendSentence(sentence); err != nil {
+				if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+					return
+				}
+				s.logger.Warn("failed to deliver sentence to tts",
+					"error", err,
+					"session_id", sessionID,
+					"generation", gen,
+				)
+				s.postEvent(event{
+					kind:       eventKindError,
+					generation: gen,
+					err:        err,
+					fatal:      true,
+				})
+				return
+			}
+		}
+	}
+
+	// 4. LLM 正常结束时，刷新末尾残句
+	remaining := splitter.Flush()
+	for _, sentence := range remaining {
+		if err := sendSentence(sentence); err != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				return
+			}
+			s.logger.Warn("failed to deliver flushed sentence to tts",
+				"error", err,
+				"session_id", sessionID,
+				"generation", gen,
+			)
+			s.postEvent(event{
+				kind:       eventKindError,
+				generation: gen,
+				err:        err,
+				fatal:      true,
+			})
+			return
+		}
+	}
+
+	// 5. 调用且只调用一次 Finish 通知 TTS 输入结束
+	if err := ttsStream.Finish(ctx); err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return
+		}
+		s.logger.Warn("failed to finish tts stream",
+			"error", err,
+			"session_id", sessionID,
+			"generation", gen,
+		)
+		s.postEvent(event{
+			kind:       eventKindError,
+			generation: gen,
+			err:        err,
+			fatal:      true,
+		})
+		return
+	}
+}

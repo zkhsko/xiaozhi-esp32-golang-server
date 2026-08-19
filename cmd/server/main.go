@@ -58,20 +58,18 @@ func main() {
 		slog.Error("failed to initialize bailian llm client", "error", err)
 		os.Exit(1)
 	}
-	_ = llmClient
 
 	ttsClient, err := bailian.NewTTSClient(cfg)
 	if err != nil {
 		slog.Error("failed to initialize bailian tts client", "error", err)
 		os.Exit(1)
 	}
-	_ = ttsClient
 
 	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 
 	mux := http.NewServeMux()
 	mux.Handle(bootstrap.OTAPath, bootstrap.NewHandler(cfg, slog.Default()))
-	mux.Handle(session.WebSocketPath, session.NewHandler(cfg, sessionLimiter, asrClient, slog.Default()))
+	mux.Handle(session.WebSocketPath, session.NewHandler(cfg, sessionLimiter, asrClient, llmClient, ttsClient, slog.Default()))
 
 	srv := server.New(cfg.Server, mux)
 

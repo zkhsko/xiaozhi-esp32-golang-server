@@ -1642,6 +1642,7 @@ func TestTTSStream_CancelMethod(t *testing.T) {
 					receivedCancelTask = true
 					cancelTaskID = msg.Header.TaskID
 					mu.Unlock()
+					_ = conn.Close(websocket.StatusNormalClosure, "task-canceled")
 					return
 				}
 			}

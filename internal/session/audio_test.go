@@ -210,7 +210,7 @@ func createTestSessionWithASR(ctx context.Context, asrClient ai.ASRClient, queue
 		ClientID:     "test-client",
 		SerialNumber: "test-sn",
 	}
-	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, asrClient, nil)
+	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, asrClient, nil, nil, nil)
 	return sess, fakeConn, writer
 }
 

@@ -40,7 +40,7 @@ func createTestSessionWithCustomDuration(ctx context.Context, asrClient *mockSes
 		ClientID:     "test-client",
 		SerialNumber: "test-sn",
 	}
-	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, asrClient, nil)
+	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, asrClient, nil, nil, nil)
 	return sess, fakeConn, writer
 }
 

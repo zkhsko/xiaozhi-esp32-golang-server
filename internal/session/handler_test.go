@@ -91,7 +91,7 @@ func waitQuotaReleased(t *testing.T, limiter *SessionLimiter, timeout time.Durat
 // TestHandler_PathNotFound 验证访问非 WebSocketPath 时直接返回 404。
 func TestHandler_PathNotFound(t *testing.T) {
 	cfg := createTestConfig("valid-token", 5)
-	h := NewHandler(cfg, nil, nil, nil)
+	h := NewHandler(cfg, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/other/path", nil)
 	w := httptest.NewRecorder()
@@ -110,7 +110,7 @@ func TestHandler_AuthRejectionBeforeLimiter(t *testing.T) {
 
 	cfg := createTestConfig("correct-token", 2)
 	limiter := NewSessionLimiter(2)
-	h := NewHandler(cfg, limiter, nil, testLogger)
+	h := NewHandler(cfg, limiter, nil, nil, nil, testLogger)
 
 	tests := []struct {
 		name           string
@@ -170,7 +170,7 @@ func TestHandler_MaxCapacityRejection_503(t *testing.T) {
 
 	cfg := createTestConfig(token, maxSessions)
 	limiter := NewSessionLimiter(maxSessions)
-	handler := NewHandler(cfg, limiter, nil, slog.Default())
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -271,7 +271,7 @@ func TestHandler_NonWebSocketRequestReleaseQuota(t *testing.T) {
 	const token = "secret-token-test"
 	cfg := createTestConfig(token, 2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(cfg, limiter, nil, slog.Default())
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -307,7 +307,7 @@ func TestHandler_CompressionDisabled(t *testing.T) {
 	const token = "secret-token-comp"
 	cfg := createTestConfig(token, 2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(cfg, limiter, nil, slog.Default())
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -349,7 +349,7 @@ func TestHandler_ConcurrentSessionsWithRace(t *testing.T) {
 
 	cfg := createTestConfig(token, maxSessions)
 	limiter := NewSessionLimiter(maxSessions)
-	handler := NewHandler(cfg, limiter, nil, slog.Default())
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -417,7 +417,7 @@ func TestHandler_HelloHandshake_Success(t *testing.T) {
 	const token = "hello-test-token"
 	cfg := createTestConfig(token, 2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(cfg, limiter, nil, slog.Default())
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -521,7 +521,7 @@ func TestHandler_HelloHandshake_Timeout(t *testing.T) {
 	cfg.Session.HelloTimeout = 100 * time.Millisecond // 设置极短超时以加快测试
 
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(cfg, limiter, nil, slog.Default())
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -554,7 +554,7 @@ func TestHandler_HelloHandshake_BinaryFirstMessage(t *testing.T) {
 	const token = "hello-binary-first-token"
 	cfg := createTestConfig(token, 2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(cfg, limiter, nil, slog.Default())
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -680,7 +680,7 @@ func TestHandler_HelloHandshake_FieldValidation(t *testing.T) {
 			const token = "field-validation-token"
 			cfg := createTestConfig(token, 2)
 			limiter := NewSessionLimiter(2)
-			handler := NewHandler(cfg, limiter, nil, slog.Default())
+			handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
 
 			mux := http.NewServeMux()
 			mux.Handle(WebSocketPath, handler)
@@ -717,7 +717,7 @@ func TestHandler_HelloHandshake_MalformedJSON(t *testing.T) {
 	const token = "malformed-json-token"
 	cfg := createTestConfig(token, 2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(cfg, limiter, nil, slog.Default())
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -755,7 +755,7 @@ func TestHandler_HelloHandshake_MessageTooBig(t *testing.T) {
 	cfg.Session.MaxWSTextMessageBytes = 4096 // 设置为 4 KiB 限制
 
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(cfg, limiter, nil, slog.Default())
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -788,7 +788,7 @@ func TestHandler_HelloHandshake_DuplicateHello(t *testing.T) {
 	const token = "dup-hello-token"
 	cfg := createTestConfig(token, 2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(cfg, limiter, nil, slog.Default())
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -854,7 +854,7 @@ func TestHandler_HelloHandshake_NoAICalls(t *testing.T) {
 	const token = "no-ai-token"
 	cfg := createTestConfig(token, 2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(cfg, limiter, nil, testLogger)
+	handler := NewHandler(cfg, limiter, nil, nil, nil, testLogger)
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -911,19 +911,45 @@ func (f *fakeASRClientForTest) CreateStream(ctx context.Context) (ai.ASRStream, 
 	return nil, nil
 }
 
-// TestHandler_ASRClientInjection 验证 Handler 与 Session 正确持有注入的 ASRClient 依赖。
-func TestHandler_ASRClientInjection(t *testing.T) {
+type fakeLLMClientForTest struct{}
+
+func (f *fakeLLMClientForTest) CreateStream(ctx context.Context, messages []ai.Message) (ai.LLMStream, error) {
+	return nil, nil
+}
+
+type fakeTTSClientForTest struct{}
+
+func (f *fakeTTSClientForTest) CreateStream(ctx context.Context) (ai.TTSStream, error) {
+	return nil, nil
+}
+
+// TestHandler_AIClientsInjection 验证 Handler 与 Session 正确持有注入的 ASRClient、LLMClient 与 TTSClient 依赖。
+func TestHandler_AIClientsInjection(t *testing.T) {
 	cfg := createTestConfig("token", 2)
 	limiter := NewSessionLimiter(2)
 	var fakeASR ai.ASRClient = &fakeASRClientForTest{}
+	var fakeLLM ai.LLMClient = &fakeLLMClientForTest{}
+	var fakeTTS ai.TTSClient = &fakeTTSClientForTest{}
 
-	h := NewHandler(cfg, limiter, fakeASR, slog.Default())
+	h := NewHandler(cfg, limiter, fakeASR, fakeLLM, fakeTTS, slog.Default())
 	if h.ASRClient() != fakeASR {
 		t.Errorf("expected Handler.ASRClient to match injected client")
 	}
+	if h.LLMClient() != fakeLLM {
+		t.Errorf("expected Handler.LLMClient to match injected client")
+	}
+	if h.TTSClient() != fakeTTS {
+		t.Errorf("expected Handler.TTSClient to match injected client")
+	}
 
-	sess := NewSession(context.Background(), nil, nil, cfg, fakeASR, slog.Default())
+	sess := NewSession(context.Background(), nil, nil, cfg, fakeASR, fakeLLM, fakeTTS, slog.Default())
 	if sess.ASRClient() != fakeASR {
 		t.Errorf("expected Session.ASRClient to match injected client")
+	}
+	if sess.LLMClient() != fakeLLM {
+		t.Errorf("expected Session.LLMClient to match injected client")
+	}
+	if sess.TTSClient() != fakeTTS {
+		t.Errorf("expected Session.TTSClient to match injected client")
 	}
 }

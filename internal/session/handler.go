@@ -17,11 +17,13 @@ type Handler struct {
 	cfg       *config.Config
 	limiter   *SessionLimiter
 	asrClient ai.ASRClient
+	llmClient ai.LLMClient
+	ttsClient ai.TTSClient
 	logger    *slog.Logger
 }
 
 // NewHandler 创建配置就绪的 WebSocket HTTP 升级处理器。
-func NewHandler(cfg *config.Config, limiter *SessionLimiter, asrClient ai.ASRClient, l *slog.Logger) *Handler {
+func NewHandler(cfg *config.Config, limiter *SessionLimiter, asrClient ai.ASRClient, llmClient ai.LLMClient, ttsClient ai.TTSClient, l *slog.Logger) *Handler {
 	if l == nil {
 		l = slog.Default()
 	}
@@ -36,6 +38,8 @@ func NewHandler(cfg *config.Config, limiter *SessionLimiter, asrClient ai.ASRCli
 		cfg:       cfg,
 		limiter:   limiter,
 		asrClient: asrClient,
+		llmClient: llmClient,
+		ttsClient: ttsClient,
 		logger:    l,
 	}
 }
@@ -48,6 +52,16 @@ func (h *Handler) Limiter() *SessionLimiter {
 // ASRClient 返回当前关联的 ASR 客户端。
 func (h *Handler) ASRClient() ai.ASRClient {
 	return h.asrClient
+}
+
+// LLMClient 返回当前关联的大语言模型客户端。
+func (h *Handler) LLMClient() ai.LLMClient {
+	return h.llmClient
+}
+
+// TTSClient 返回当前关联的流式语音合成客户端。
+func (h *Handler) TTSClient() ai.TTSClient {
+	return h.ttsClient
 }
 
 // ServeHTTP 校验 HTTP 认证并执行会话准入控制与 WebSocket 升级。
@@ -126,6 +140,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serveConn 创建并运行会话状态机。
 func (h *Handler) serveConn(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInfo) {
-	sess := NewSession(ctx, conn, info, h.cfg, h.asrClient, h.logger)
+	sess := NewSession(ctx, conn, info, h.cfg, h.asrClient, h.llmClient, h.ttsClient, h.logger)
 	_ = sess.Run()
 }

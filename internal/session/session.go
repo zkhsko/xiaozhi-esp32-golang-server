@@ -25,6 +25,9 @@ const (
 	// DefaultMaxListeningDuration 默认单次最大收音时长（30 秒）。
 	DefaultMaxListeningDuration = 30 * time.Second
 
+	// DefaultMaxHistoryTurns 默认最多保留历史轮数（6 轮）。
+	DefaultMaxHistoryTurns = 6
+
 	// DefaultEventChannelCapacity 默认会话监督事件通道容量。
 	DefaultEventChannelCapacity = 100
 )
@@ -66,6 +69,8 @@ type Session struct {
 	clientInfo  *ClientHeaderInfo
 	cfg         *config.Config
 	asrClient   ai.ASRClient
+	llmClient   ai.LLMClient
+	ttsClient   ai.TTSClient
 	logger      *slog.Logger
 	diagLimiter *logger.RateLimiter
 
@@ -75,6 +80,7 @@ type Session struct {
 	decoder   *audio.Decoder
 	asrStream ai.ASRStream
 	asrQueue  *audio.ASRAudioQueue
+	ttsStream ai.TTSStream
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -87,6 +93,7 @@ type Session struct {
 	generation         uint64
 	sessionID          string
 	manualStopReceived bool
+	history            []ai.Message
 
 	turnCtx    context.Context
 	turnCancel context.CancelFunc
@@ -96,7 +103,7 @@ type Session struct {
 }
 
 // NewSession 创建配置就绪的 WebSocket 会话对象。
-func NewSession(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInfo, cfg *config.Config, asrClient ai.ASRClient, l *slog.Logger) *Session {
+func NewSession(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInfo, cfg *config.Config, asrClient ai.ASRClient, llmClient ai.LLMClient, ttsClient ai.TTSClient, l *slog.Logger) *Session {
 	var w *Writer
 	if conn != nil {
 		queueCap := DefaultWriteQueueCapacity
@@ -105,11 +112,11 @@ func NewSession(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInf
 		}
 		w = NewWriter(ctx, conn, queueCap, l)
 	}
-	return NewSessionWithWriter(ctx, conn, w, info, cfg, asrClient, l)
+	return NewSessionWithWriter(ctx, conn, w, info, cfg, asrClient, llmClient, ttsClient, l)
 }
 
 // NewSessionWithWriter 创建指定串行写流程的 WebSocket 会话对象。
-func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Writer, info *ClientHeaderInfo, cfg *config.Config, asrClient ai.ASRClient, l *slog.Logger) *Session {
+func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Writer, info *ClientHeaderInfo, cfg *config.Config, asrClient ai.ASRClient, llmClient ai.LLMClient, ttsClient ai.TTSClient, l *slog.Logger) *Session {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -137,6 +144,8 @@ func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Wri
 		clientInfo:  info,
 		cfg:         cfg,
 		asrClient:   asrClient,
+		llmClient:   llmClient,
+		ttsClient:   ttsClient,
 		logger:      l,
 		diagLimiter: logger.NewDiagRateLimiter(),
 		writer:      writer,
@@ -153,6 +162,23 @@ func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Wri
 // ASRClient 返回当前关联的 ASR 客户端。
 func (s *Session) ASRClient() ai.ASRClient {
 	return s.asrClient
+}
+
+// LLMClient 返回当前关联的 LLM 客户端。
+func (s *Session) LLMClient() ai.LLMClient {
+	return s.llmClient
+}
+
+// TTSClient 返回当前关联的 TTS 客户端。
+func (s *Session) TTSClient() ai.TTSClient {
+	return s.ttsClient
+}
+
+// TTSStream 返回当前轮次的 TTS 流。
+func (s *Session) TTSStream() ai.TTSStream {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ttsStream
 }
 
 // State 返回当前会话的状态。
@@ -699,12 +725,18 @@ func (s *Session) handleASRFinalEvent(ev event) {
 
 	s.mu.Lock()
 	s.state = StateProcessing
+	turnCtx := s.turnCtx
 	s.mu.Unlock()
 
 	s.logger.Info("session entered processing state",
 		"session_id", s.SessionID(),
 		"generation", ev.generation,
 	)
+
+	if turnCtx == nil {
+		turnCtx = s.ctx
+	}
+	go s.orchestrateLLMAndTTS(turnCtx, ev.generation, ev.text)
 }
 
 // handleTTSStartedEvent 处理 TTS 首音频就绪下发 tts.start 事件。
@@ -775,6 +807,7 @@ func (s *Session) handleTurnFinishedEvent(ev event) {
 	}
 
 	s.stopASR()
+	s.stopTTS()
 
 	s.mu.Lock()
 	if s.turnCancel != nil {
@@ -799,6 +832,7 @@ func (s *Session) handleAbortEvent(reason string) {
 
 	s.stopListeningTimer()
 	s.stopASR()
+	s.stopTTS()
 
 	s.mu.Lock()
 	s.generation++
@@ -917,6 +951,7 @@ func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 		s.mu.Unlock()
 
 		s.stopASR()
+		s.stopTTS()
 
 		if s.writer != nil {
 			_ = s.writer.Close()
