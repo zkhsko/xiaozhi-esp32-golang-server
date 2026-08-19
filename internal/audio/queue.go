@@ -33,6 +33,7 @@ type ASRAudioQueue struct {
 
 	mu        sync.Mutex
 	closed    bool
+	finished  bool
 	workerErr error
 	done      chan struct{}
 }
@@ -71,7 +72,7 @@ func (q *ASRAudioQueue) Push(data []byte) error {
 	}
 
 	q.mu.Lock()
-	if q.closed {
+	if q.closed || q.finished {
 		q.mu.Unlock()
 		return ErrQueueClosed
 	}
@@ -102,6 +103,19 @@ func (q *ASRAudioQueue) Push(data []byte) error {
 	}
 }
 
+// Finish 标记音频输入结束，关闭音频输入通道并在消费完所有积压帧后通知下游 ASR 流。
+func (q *ASRAudioQueue) Finish() error {
+	q.mu.Lock()
+	if q.closed || q.finished {
+		q.mu.Unlock()
+		return nil
+	}
+	q.finished = true
+	close(q.queue)
+	q.mu.Unlock()
+	return nil
+}
+
 // Capacity 返回当前队列的容量。
 func (q *ASRAudioQueue) Capacity() int {
 	return cap(q.queue)
@@ -122,6 +136,20 @@ func (q *ASRAudioQueue) worker() {
 			return
 		case pcm, ok := <-q.queue:
 			if !ok {
+				if q.stream != nil {
+					if err := q.stream.Finish(q.ctx); err != nil {
+						if !errors.Is(err, context.Canceled) {
+							q.mu.Lock()
+							if q.workerErr == nil {
+								q.workerErr = err
+							}
+							q.mu.Unlock()
+							q.logger.Warn("failed to finish asr stream",
+								"error", err,
+							)
+						}
+					}
+				}
 				return
 			}
 			if q.stream == nil {

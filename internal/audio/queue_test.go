@@ -304,3 +304,78 @@ func TestASRAudioQueue_EmptyPushIgnored(t *testing.T) {
 		t.Errorf("expected queue length 0, got %d", q.Len())
 	}
 }
+
+// TestASRAudioQueue_Finish_DrainsAndFinishesStream 验证 Finish 调用后积压的所有帧均被消费写入，且调用了 ASRStream 的 Finish。
+func TestASRAudioQueue_Finish_DrainsAndFinishesStream(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStream := newMockASRStream()
+	q := NewASRAudioQueue(ctx, mockStream, 10, nil)
+
+	const frameCount = 4
+	for i := 0; i < frameCount; i++ {
+		frame := make([]byte, UplinkBytesPerFrame)
+		frame[0] = byte(i + 1)
+		if err := q.Push(frame); err != nil {
+			t.Fatalf("push frame %d failed: %v", i, err)
+		}
+	}
+
+	if err := q.Finish(); err != nil {
+		t.Fatalf("finish failed: %v", err)
+	}
+
+	select {
+	case <-q.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not exit after Finish()")
+	}
+
+	if mockStream.FrameCount() != frameCount {
+		t.Fatalf("expected %d frames consumed, got %d", frameCount, mockStream.FrameCount())
+	}
+
+	mockStream.mu.Lock()
+	finished := mockStream.finished
+	mockStream.mu.Unlock()
+
+	if !finished {
+		t.Fatal("expected mockStream.Finish to be called")
+	}
+}
+
+// TestASRAudioQueue_Finish_PushAfterFinishReturnsError 验证 Finish 之后再次 Push 会被拒绝。
+func TestASRAudioQueue_Finish_PushAfterFinishReturnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStream := newMockASRStream()
+	q := NewASRAudioQueue(ctx, mockStream, 10, nil)
+	defer q.Close()
+
+	if err := q.Finish(); err != nil {
+		t.Fatalf("finish failed: %v", err)
+	}
+
+	err := q.Push(make([]byte, UplinkBytesPerFrame))
+	if !errors.Is(err, ErrQueueClosed) {
+		t.Fatalf("expected ErrQueueClosed after Finish, got %v", err)
+	}
+}
+
+// TestASRAudioQueue_Finish_Idempotent 验证重复调用 Finish 幂等且安全。
+func TestASRAudioQueue_Finish_Idempotent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStream := newMockASRStream()
+	q := NewASRAudioQueue(ctx, mockStream, 10, nil)
+	defer q.Close()
+
+	for i := 0; i < 3; i++ {
+		if err := q.Finish(); err != nil {
+			t.Fatalf("call %d Finish failed: %v", i, err)
+		}
+	}
+}

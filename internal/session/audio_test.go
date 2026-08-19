@@ -122,6 +122,12 @@ func (m *mockSessionASRStream) IsClosed() bool {
 	return m.closed
 }
 
+func (m *mockSessionASRStream) IsFinished() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.finished
+}
+
 // mockSessionASRClient 实现测试用的 ai.ASRClient。
 type mockSessionASRClient struct {
 	mu          sync.Mutex

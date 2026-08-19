@@ -81,11 +81,12 @@ type Session struct {
 	closeOnce sync.Once
 	done      chan struct{}
 
-	mu         sync.RWMutex
-	state      State
-	mode       string
-	generation uint64
-	sessionID  string
+	mu                 sync.RWMutex
+	state              State
+	mode               string
+	generation         uint64
+	sessionID          string
+	manualStopReceived bool
 
 	turnCtx    context.Context
 	turnCancel context.CancelFunc
@@ -482,6 +483,7 @@ func (s *Session) handleClientTextEvent(ev event) {
 			s.mu.Lock()
 			s.state = StateListening
 			s.mode = mode
+			s.manualStopReceived = false
 			s.generation++
 			gen := s.generation
 			s.turnCtx, s.turnCancel = context.WithCancel(s.ctx)
@@ -515,10 +517,23 @@ func (s *Session) handleClientTextEvent(ev event) {
 					"generation", s.Generation(),
 				)
 			} else {
+				s.mu.Lock()
+				if s.manualStopReceived {
+					s.mu.Unlock()
+					s.logDiag("duplicate listen.stop ignored in manual mode",
+						"generation", s.Generation(),
+					)
+					return
+				}
+				s.manualStopReceived = true
+				s.mu.Unlock()
+
 				s.logger.Info("manual listen.stop received",
 					"session_id", s.SessionID(),
 					"generation", s.Generation(),
 				)
+				s.stopListeningTimer()
+				s.finishASR()
 			}
 		default:
 			s.logDiag("listen.stop ignored in non-listening state",
@@ -574,6 +589,15 @@ func (s *Session) handleClientAudioEvent(ev event) {
 		// READY 状态收到客户端 Opus 音频直接丢弃（如唤醒词残留音频），不触发 ASR，不缓存
 		return
 	case StateListening:
+		s.mu.RLock()
+		manualStopped := (s.mode == ListenModeManual && s.manualStopReceived)
+		s.mu.RUnlock()
+
+		if manualStopped {
+			// manual 模式已收到 listen.stop，后续到达的残留音频直接丢弃
+			return
+		}
+
 		if s.decoder == nil {
 			s.logger.Error("opus decoder not initialized",
 				"session_id", s.SessionID(),
@@ -1150,6 +1174,20 @@ func (s *Session) readASRResult(ctx context.Context, stream ai.ASRStream, gen ui
 		generation: gen,
 		text:       text,
 	})
+}
+
+// finishASR 通知当前轮次的 ASR 音频队列与流结束音频输入。
+func (s *Session) finishASR() {
+	s.mu.RLock()
+	q := s.asrQueue
+	stream := s.asrStream
+	s.mu.RUnlock()
+
+	if q != nil {
+		_ = q.Finish()
+	} else if stream != nil {
+		_ = stream.Finish(s.TurnContext())
+	}
 }
 
 // stopASR 停止并清理当前轮次的 ASR 流与音频队列。
