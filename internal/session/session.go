@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/audio"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/logger"
 )
@@ -71,6 +72,10 @@ type Session struct {
 	writer *Writer
 	events chan event
 
+	decoder   *audio.Decoder
+	asrStream ai.ASRStream
+	asrQueue  *audio.ASRAudioQueue
+
 	ctx       context.Context
 	cancel    context.CancelFunc
 	closeOnce sync.Once
@@ -117,6 +122,15 @@ func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Wri
 		eventCap = cfg.Session.ASRPCMQueueCapacity
 	}
 
+	maxOpusBytes := DefaultMaxOpusPacketBytes
+	if cfg != nil && cfg.Session.MaxOpusPacketBytes > 0 {
+		maxOpusBytes = cfg.Session.MaxOpusPacketBytes
+	}
+	dec, err := audio.NewDecoder(maxOpusBytes)
+	if err != nil {
+		l.Error("failed to initialize session opus decoder", "error", err)
+	}
+
 	return &Session{
 		conn:        conn,
 		clientInfo:  info,
@@ -131,6 +145,7 @@ func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Wri
 		done:        make(chan struct{}),
 		state:       StateConnected,
 		mode:        ListenModeAuto,
+		decoder:     dec,
 	}
 }
 
@@ -170,6 +185,18 @@ func (s *Session) SessionID() string {
 // Writer 返回当前关联的串行写流程对象。
 func (s *Session) Writer() *Writer {
 	return s.writer
+}
+
+// Decoder 返回当前会话的 Opus 解码器。
+func (s *Session) Decoder() *audio.Decoder {
+	return s.decoder
+}
+
+// ASRQueue 返回当前轮次的 ASR 音频队列。
+func (s *Session) ASRQueue() *audio.ASRAudioQueue {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.asrQueue
 }
 
 // TurnContext 返回当前轮次上下文（随 abort 或轮次结束取消）。
@@ -461,6 +488,7 @@ func (s *Session) handleClientTextEvent(ev event) {
 			s.mu.Unlock()
 
 			s.startListeningTimer(gen)
+			s.startASRStream(gen)
 			s.logger.Info("session entered listening state",
 				"session_id", s.SessionID(),
 				"generation", gen,
@@ -546,8 +574,41 @@ func (s *Session) handleClientAudioEvent(ev event) {
 		// READY 状态收到客户端 Opus 音频直接丢弃（如唤醒词残留音频），不触发 ASR，不缓存
 		return
 	case StateListening:
-		// LISTENING 状态音频为正常收音音频
-		return
+		if s.decoder == nil {
+			s.logger.Error("opus decoder not initialized",
+				"session_id", s.SessionID(),
+			)
+			s.closeWithReason(websocket.StatusInternalError, "decoder not initialized")
+			return
+		}
+
+		pcmBytes, err := s.decoder.Decode(ev.audioData)
+		if err != nil {
+			s.logger.Warn("failed to decode uplink opus packet",
+				"error", err,
+				"session_id", s.SessionID(),
+				"generation", s.Generation(),
+			)
+			s.closeWithReason(websocket.StatusPolicyViolation, "opus decode error")
+			return
+		}
+
+		s.mu.RLock()
+		queue := s.asrQueue
+		s.mu.RUnlock()
+
+		if queue != nil {
+			if err := queue.Push(pcmBytes); err != nil {
+				s.logger.Warn("asr audio queue push failed",
+					"error", err,
+					"session_id", s.SessionID(),
+					"generation", s.Generation(),
+				)
+				s.closeWithReason(websocket.StatusPolicyViolation, "asr queue full or unavailable")
+				return
+			}
+		}
+
 	case StateProcessing:
 		// PROCESSING 状态下首个 tts.start 前残留音频直接丢弃
 		return
@@ -665,6 +726,8 @@ func (s *Session) handleTurnFinishedEvent(ev event) {
 		}
 	}
 
+	s.stopASR()
+
 	s.mu.Lock()
 	if s.turnCancel != nil {
 		s.turnCancel()
@@ -687,6 +750,7 @@ func (s *Session) handleAbortEvent(reason string) {
 	}
 
 	s.stopListeningTimer()
+	s.stopASR()
 
 	s.mu.Lock()
 	s.generation++
@@ -803,6 +867,8 @@ func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 			s.turnCancel = nil
 		}
 		s.mu.Unlock()
+
+		s.stopASR()
 
 		if s.writer != nil {
 			_ = s.writer.Close()
@@ -996,6 +1062,57 @@ func (s *Session) truncatedSerialNumber() string {
 		return ""
 	}
 	return logger.TruncateString(s.clientInfo.SerialNumber)
+}
+
+// startASRStream 为指定代次启动 ASR 流式识别与音频消费队列。
+func (s *Session) startASRStream(gen uint64) {
+	if s.asrClient == nil {
+		return
+	}
+
+	turnCtx := s.TurnContext()
+	stream, err := s.asrClient.CreateStream(turnCtx)
+	if err != nil {
+		s.logger.Error("failed to create asr stream",
+			"error", err,
+			"session_id", s.SessionID(),
+			"generation", gen,
+		)
+		s.postEvent(event{
+			kind:       eventKindError,
+			generation: gen,
+			err:        err,
+			fatal:      true,
+		})
+		return
+	}
+
+	queueCap := audio.DefaultASRPCMQueueCapacity
+	if s.cfg != nil && s.cfg.Session.ASRPCMQueueCapacity > 0 {
+		queueCap = s.cfg.Session.ASRPCMQueueCapacity
+	}
+
+	s.mu.Lock()
+	s.asrStream = stream
+	s.asrQueue = audio.NewASRAudioQueue(turnCtx, stream, queueCap, s.logger)
+	s.mu.Unlock()
+}
+
+// stopASR 停止并清理当前轮次的 ASR 流与音频队列。
+func (s *Session) stopASR() {
+	s.mu.Lock()
+	q := s.asrQueue
+	stream := s.asrStream
+	s.asrQueue = nil
+	s.asrStream = nil
+	s.mu.Unlock()
+
+	if q != nil {
+		q.Close()
+	}
+	if stream != nil {
+		_ = stream.Close()
+	}
 }
 
 // logDiag 限频记录诊断日志。
