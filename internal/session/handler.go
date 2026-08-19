@@ -265,10 +265,9 @@ func (h *Handler) handleHelloHandshake(ctx context.Context, conn *websocket.Conn
 	}
 
 	// 5. 下发服务端 hello 响应
-	serverHello := NewServerHello(sessionID)
-	respBytes, err := json.Marshal(serverHello)
+	respBytes, err := EncodeServerHelloMessage(sessionID)
 	if err != nil {
-		h.logger.Error("failed to marshal server hello",
+		h.logger.Error("failed to encode server hello",
 			"error", err,
 			"session_id", sessionID,
 		)
