@@ -127,6 +127,10 @@ type ttsFinishTaskMessage struct {
 	Payload ttsFinishPayload `json:"payload"`
 }
 
+type ttsCancelTaskMessage struct {
+	Header ttsRequestHeader `json:"header"`
+}
+
 type ttsResponseMessage struct {
 	Header struct {
 		Action       string `json:"action"`
@@ -335,8 +339,10 @@ func (s *TTSStream) recordError(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err == nil {
-		if s.closed || s.ctx.Err() != nil {
+		if s.closed {
 			s.err = context.Canceled
+		} else if s.ctx.Err() != nil {
+			s.err = s.ctx.Err()
 		} else {
 			s.err = err
 		}
@@ -347,6 +353,13 @@ func (s *TTSStream) recordError(err error) {
 func (s *TTSStream) SendSentence(ctx context.Context, text string) error {
 	if text == "" {
 		return nil
+	}
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.ctx.Err(); err != nil {
+		return err
 	}
 
 	s.mu.RLock()
@@ -414,6 +427,13 @@ func (s *TTSStream) SendSentence(ctx context.Context, text string) error {
 
 // Finish 通知百炼服务端文本输入已全部结束。
 func (s *TTSStream) Finish(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.ctx.Err(); err != nil {
+		return err
+	}
+
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -471,6 +491,9 @@ func (s *TTSStream) NextPCM(ctx context.Context) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
+			if s.ctx.Err() != nil {
+				return nil, s.ctx.Err()
+			}
 			return nil, io.EOF
 		}
 		return chunk, nil
@@ -499,6 +522,33 @@ func (s *TTSStream) NextPCM(ctx context.Context) ([]byte, error) {
 		}
 		return nil, s.ctx.Err()
 	}
+}
+
+// Cancel 尝试向百炼服务端发送 cancel-task 结束指令并安全关闭会话。
+func (s *TTSStream) Cancel(ctx context.Context) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	s.mu.Lock()
+	if s.closed || s.finished {
+		s.mu.Unlock()
+		return s.Close()
+	}
+	taskID := s.taskID
+	s.mu.Unlock()
+
+	cancelMsg := ttsCancelTaskMessage{
+		Header: ttsRequestHeader{
+			Action:    "cancel-task",
+			TaskID:    taskID,
+			Streaming: "duplex",
+		},
+	}
+	if cancelBytes, err := json.Marshal(cancelMsg); err == nil {
+		_ = s.conn.Write(ctx, websocket.MessageText, cancelBytes)
+	}
+
+	return s.Close()
 }
 
 // Close 关闭并释放流式合成会话的所有网络与内存资源。
