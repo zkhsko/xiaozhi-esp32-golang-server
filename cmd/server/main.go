@@ -4,10 +4,12 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"xiaozhi-esp32-golang-server/internal/bootstrap"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/logger"
 	"xiaozhi-esp32-golang-server/internal/server"
@@ -43,7 +45,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	srv := server.New(cfg.Server, nil)
+	mux := http.NewServeMux()
+	mux.Handle(bootstrap.OTAPath, bootstrap.NewHandler(cfg, slog.Default()))
+
+	srv := server.New(cfg.Server, mux)
 
 	slog.Info("starting HTTP server", "addr", cfg.Server.ListenAddr)
 	if err := srv.Run(ctx); err != nil {
