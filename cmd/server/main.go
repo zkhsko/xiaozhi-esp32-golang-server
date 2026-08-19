@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/server"
 )
 
 func main() {
@@ -34,5 +37,16 @@ func main() {
 		"proxy_enabled", cfg.Proxy.Enabled,
 	)
 
-	fmt.Println("server configuration initialized")
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	srv := server.New(cfg.Server, nil)
+
+	slog.Info("starting HTTP server", "addr", cfg.Server.ListenAddr)
+	if err := srv.Run(ctx); err != nil {
+		slog.Error("server stopped with error", "error", err)
+		os.Exit(1)
+	}
+
+	slog.Info("server stopped gracefully")
 }
