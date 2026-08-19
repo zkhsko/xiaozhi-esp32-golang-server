@@ -50,16 +50,18 @@ const (
 
 // event 封装投递给单一监督主循环的统一事件对象。
 type event struct {
-	kind       eventKind
-	generation uint64
-	text       string
-	clientMsg  *ClientMessage
-	audioData  []byte
-	rawBytes   []byte
-	isBinary   bool
-	err        error
-	fatal      bool
-	closeCode  websocket.StatusCode
+	kind          eventKind
+	generation    uint64
+	text          string
+	userText      string
+	assistantText string
+	clientMsg     *ClientMessage
+	audioData     []byte
+	rawBytes      []byte
+	isBinary      bool
+	err           error
+	fatal         bool
+	closeCode     websocket.StatusCode
 }
 
 // Session 负责管理单个 WebSocket 连接的状态机、事件所有权、监听模式与回答代次。
@@ -351,10 +353,20 @@ func (s *Session) PostTTSStarted(generation uint64) bool {
 }
 
 // PostTurnFinished 投递指定代次的问答轮次结束事件。
-func (s *Session) PostTurnFinished(generation uint64) bool {
+// 可选传入本轮正常完成的用户输入文本与完整助手回复。
+func (s *Session) PostTurnFinished(generation uint64, turnTexts ...string) bool {
+	var userText, assistantText string
+	if len(turnTexts) > 0 {
+		userText = turnTexts[0]
+	}
+	if len(turnTexts) > 1 {
+		assistantText = turnTexts[1]
+	}
 	return s.postEvent(event{
-		kind:       eventKindTurnFinished,
-		generation: generation,
+		kind:          eventKindTurnFinished,
+		generation:    generation,
+		userText:      userText,
+		assistantText: assistantText,
 	})
 }
 
@@ -866,6 +878,7 @@ func (s *Session) handleTurnFinishedEvent(ev event) {
 		return
 	}
 
+	var stopSucceeded bool
 	if currentState == StateSpeaking {
 		stopBytes, err := EncodeTTSStopMessage(s.SessionID())
 		if err != nil {
@@ -874,8 +887,22 @@ func (s *Session) handleTurnFinishedEvent(ev event) {
 				"session_id", s.SessionID(),
 			)
 		} else {
-			_ = s.sendTextMessage(stopBytes)
+			if sendErr := s.sendTextMessage(stopBytes); sendErr != nil {
+				s.logger.Warn("failed to send tts stop message",
+					"error", sendErr,
+					"session_id", s.SessionID(),
+					"generation", ev.generation,
+				)
+				s.closeWithReason(websocket.StatusInternalError, sendErr.Error())
+				return
+			}
+			stopSucceeded = true
 		}
+	}
+
+	// 只有在 tts.stop 成功写出且本轮问答文本完整时，才正式提交至会话历史
+	if stopSucceeded && ev.userText != "" && ev.assistantText != "" {
+		s.AppendHistory(ev.userText, ev.assistantText)
 	}
 
 	s.stopASR()
@@ -1009,6 +1036,7 @@ func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.state = StateClosed
+		s.history = nil
 
 		if s.helloTimer != nil {
 			s.helloTimer.Stop()

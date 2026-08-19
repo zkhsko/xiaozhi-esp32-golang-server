@@ -65,10 +65,12 @@ type DownlinkPacer struct {
 	tickerFactory func(time.Duration) Ticker
 	frameDuration time.Duration
 
-	mu           sync.Mutex
-	hasSentStart bool
-	hasSentStop  bool
-	stopped      bool
+	mu            sync.Mutex
+	hasSentStart  bool
+	hasSentStop   bool
+	stopped       bool
+	userText      string
+	assistantText string
 }
 
 // NewDownlinkPacer 创建指定代次的下行 60 ms 节奏调度器。
@@ -157,7 +159,17 @@ func (p *DownlinkPacer) Enqueue(packet []byte) error {
 }
 
 // FinishInput 标记上游 TTS PCM 输入与分帧编码已全部完成。
-func (p *DownlinkPacer) FinishInput() {
+// 可选传入本轮对话的用户文本与完整助手回复。
+func (p *DownlinkPacer) FinishInput(turnTexts ...string) {
+	p.mu.Lock()
+	if len(turnTexts) > 0 {
+		p.userText = turnTexts[0]
+	}
+	if len(turnTexts) > 1 {
+		p.assistantText = turnTexts[1]
+	}
+	p.mu.Unlock()
+
 	p.finishOnce.Do(func() {
 		close(p.finishChan)
 	})
@@ -342,9 +354,11 @@ func (p *DownlinkPacer) finishTurn() {
 		p.mu.Unlock()
 		return
 	}
+	uText := p.userText
+	aText := p.assistantText
 	p.mu.Unlock()
 
 	if p.session != nil {
-		p.session.PostTurnFinished(p.gen)
+		p.session.PostTurnFinished(p.gen, uText, aText)
 	}
 }

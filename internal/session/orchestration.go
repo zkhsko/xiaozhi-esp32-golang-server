@@ -16,7 +16,12 @@ func (s *Session) buildLLMMessages(userText string) []ai.Message {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var messages []ai.Message
+	capacity := 1 + len(s.history)
+	if s.cfg != nil && s.cfg.Session.SystemPrompt != "" {
+		capacity++
+	}
+
+	messages := make([]ai.Message, 0, capacity)
 
 	if s.cfg != nil && s.cfg.Session.SystemPrompt != "" {
 		messages = append(messages, ai.Message{
@@ -58,8 +63,17 @@ func (s *Session) AppendHistory(userText, assistantText string) {
 
 	maxMessages := maxTurns * 2
 	if len(s.history) > maxMessages {
-		s.history = s.history[len(s.history)-maxMessages:]
+		trimmed := make([]ai.Message, maxMessages)
+		copy(trimmed, s.history[len(s.history)-maxMessages:])
+		s.history = trimmed
 	}
+}
+
+// ClearHistory 清空当前会话的对话历史。
+func (s *Session) ClearHistory() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.history = nil
 }
 
 // History 返回当前会话的历史消息列表副本。
@@ -312,7 +326,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	}
 
 	pipelineSucceeded = true
-	pacer.FinishInput()
+	pacer.FinishInput(userText, assistantText.String())
 }
 
 // consumeTTSPCM 持续消费百炼 TTS 生成的 24 kHz PCM 数据块，通过分帧编码器组装为 60 ms 帧、进行 Opus 编码并送入节奏调度器。
