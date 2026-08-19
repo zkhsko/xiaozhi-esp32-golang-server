@@ -205,8 +205,16 @@ func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 	}
 
 	if event == "task-failed" {
+		code := initResp.Header.ErrorCode
+		if code == "" {
+			code = "UNKNOWN_ERROR"
+		}
+		msg := initResp.Header.ErrorMessage
+		if msg == "" {
+			msg = "task start failed"
+		}
 		_ = conn.Close(websocket.StatusNormalClosure, "task-failed")
-		return nil, fmt.Errorf("asr task start failed: [%s] %s", initResp.Header.ErrorCode, initResp.Header.ErrorMessage)
+		return nil, fmt.Errorf("asr task start failed: [%s] %s", code, msg)
 	}
 
 	if event != "task-started" {
@@ -243,6 +251,7 @@ type ASRStream struct {
 	mu          sync.RWMutex
 	closed      bool
 	finished    bool
+	partialText string
 	finalText   string
 	err         error
 	resultReady chan struct{}
@@ -250,6 +259,9 @@ type ASRStream struct {
 
 func (s *ASRStream) readLoop() {
 	defer func() {
+		if s.conn != nil {
+			_ = s.conn.Close(websocket.StatusNormalClosure, "stream closed")
+		}
 		s.mu.Lock()
 		select {
 		case <-s.resultReady:
@@ -262,7 +274,7 @@ func (s *ASRStream) readLoop() {
 	for {
 		msgType, data, err := s.conn.Read(s.ctx)
 		if err != nil {
-			s.recordError(err)
+			s.recordError(fmt.Errorf("read bailian asr websocket: %w", err))
 			return
 		}
 
@@ -282,34 +294,74 @@ func (s *ASRStream) readLoop() {
 
 		switch event {
 		case "result-generated":
-			if resp.Payload.Output.Sentence != nil && resp.Payload.Output.Sentence.Text != "" {
-				s.updateText(resp.Payload.Output.Sentence.Text)
+			sentence := resp.Payload.Output.Sentence
+			if sentence != nil {
+				if sentence.SentenceEnd {
+					if resp.Payload.Output.Text != "" {
+						s.updateFinalText(resp.Payload.Output.Text)
+					} else if sentence.Text != "" {
+						s.updateFinalText(sentence.Text)
+					}
+				} else {
+					if resp.Payload.Output.Text != "" {
+						s.updatePartialText(resp.Payload.Output.Text)
+					} else if sentence.Text != "" {
+						s.updatePartialText(sentence.Text)
+					}
+				}
 			} else if resp.Payload.Output.Text != "" {
-				s.updateText(resp.Payload.Output.Text)
+				s.updatePartialText(resp.Payload.Output.Text)
 			}
 
 		case "task-finished":
-			if resp.Payload.Output.Sentence != nil && resp.Payload.Output.Sentence.Text != "" {
-				s.updateText(resp.Payload.Output.Sentence.Text)
-			} else if resp.Payload.Output.Text != "" {
-				s.updateText(resp.Payload.Output.Text)
+			if resp.Payload.Output.Text != "" {
+				s.updateFinalText(resp.Payload.Output.Text)
+			} else if resp.Payload.Output.Sentence != nil && resp.Payload.Output.Sentence.Text != "" {
+				s.updateFinalText(resp.Payload.Output.Sentence.Text)
+			} else {
+				s.mu.Lock()
+				if s.finalText == "" && s.partialText != "" {
+					s.finalText = s.partialText
+				}
+				s.mu.Unlock()
 			}
 			s.markFinished()
 			return
 
 		case "task-failed":
-			s.recordError(fmt.Errorf("bailian asr task failed: [%s] %s", resp.Header.ErrorCode, resp.Header.ErrorMessage))
+			code := resp.Header.ErrorCode
+			if code == "" {
+				code = "UNKNOWN_ERROR"
+			}
+			msg := resp.Header.ErrorMessage
+			if msg == "" {
+				msg = "asr task failed on server"
+			}
+			s.recordError(fmt.Errorf("bailian asr task failed: [%s] %s", code, msg))
 			return
+
+		default:
+			// 忽略百炼未知事件，保证状态不混乱、不崩溃
 		}
 	}
 }
 
-func (s *ASRStream) updateText(text string) {
+func (s *ASRStream) updatePartialText(text string) {
+	if text == "" {
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if text != "" {
-		s.finalText = text
+	s.partialText = text
+}
+
+func (s *ASRStream) updateFinalText(text string) {
+	if text == "" {
+		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.finalText = text
 }
 
 func (s *ASRStream) recordError(err error) {
@@ -369,9 +421,15 @@ func (s *ASRStream) WritePCM(ctx context.Context, data []byte) error {
 		s.mu.RUnlock()
 		return errors.New("asr stream is closed")
 	}
+	if s.err != nil {
+		err := s.err
+		s.mu.RUnlock()
+		return err
+	}
 	s.mu.RUnlock()
 
 	if err := s.conn.Write(ctx, websocket.MessageBinary, data); err != nil {
+		s.recordError(fmt.Errorf("write pcm binary: %w", err))
 		return fmt.Errorf("write pcm binary: %w", err)
 	}
 	return nil
@@ -391,6 +449,11 @@ func (s *ASRStream) Finish(ctx context.Context) error {
 		s.mu.Unlock()
 		return nil
 	}
+	if s.err != nil {
+		err := s.err
+		s.mu.Unlock()
+		return err
+	}
 	s.finished = true
 	taskID := s.taskID
 	s.mu.Unlock()
@@ -408,6 +471,7 @@ func (s *ASRStream) Finish(ctx context.Context) error {
 	}
 
 	if err := s.conn.Write(ctx, websocket.MessageText, msgBytes); err != nil {
+		s.recordError(fmt.Errorf("write finish-task: %w", err))
 		return fmt.Errorf("write finish-task: %w", err)
 	}
 	return nil
