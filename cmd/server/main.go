@@ -53,6 +53,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	llmClient, err := bailian.NewLLMClient(cfg)
+	if err != nil {
+		slog.Error("failed to initialize bailian llm client", "error", err)
+		os.Exit(1)
+	}
+	_ = llmClient
+
 	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 
 	mux := http.NewServeMux()
