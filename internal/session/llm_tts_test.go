@@ -190,8 +190,10 @@ type mockTTSStream struct {
 	closeCalls      int
 	sendErrOnIndex  int // 在第几个句子时报错（1-based，0 表示不报错）
 	finishErr       error
+	nextPCMErr      error
 	closed          bool
 	pcmDataToReturn [][]byte
+	pcmIndex        int
 }
 
 func newMockTTSStream(recorder *traceRecorder) *mockTTSStream {
@@ -244,7 +246,24 @@ func (s *mockTTSStream) Finish(ctx context.Context) error {
 }
 
 func (s *mockTTSStream) NextPCM(ctx context.Context) ([]byte, error) {
-	return nil, io.EOF
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil, errors.New("tts stream is closed")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.nextPCMErr != nil {
+		return nil, s.nextPCMErr
+	}
+	if s.pcmIndex >= len(s.pcmDataToReturn) {
+		return nil, io.EOF
+	}
+	chunk := s.pcmDataToReturn[s.pcmIndex]
+	s.pcmIndex++
+	return chunk, nil
 }
 
 func (s *mockTTSStream) FinishCalls() int {

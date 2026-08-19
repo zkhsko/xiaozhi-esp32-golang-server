@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/audio"
 )
 
 // buildLLMMessages 根据系统提示词、会话历史与当前用户识别文本构造发送给大语言模型的消息列表。
@@ -132,6 +133,9 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	s.mu.Lock()
 	s.ttsStream = ttsStream
 	s.mu.Unlock()
+
+	// 启动后台协程消费 TTS PCM 数据并送入 24 kHz Opus 分帧编码器
+	go s.consumeTTSPCM(ctx, gen, ttsStream)
 
 	// 2. 构造上下文消息并创建 LLM 流式输出会话
 	messages := s.buildLLMMessages(userText)
@@ -273,5 +277,94 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 			fatal:      true,
 		})
 		return
+	}
+}
+
+// consumeTTSPCM 持续消费百炼 TTS 生成的 24 kHz PCM 数据块，通过分帧编码器组装为 60 ms 帧并进行 Opus 编码。
+func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSStream) {
+	if stream == nil || s.encoder == nil {
+		return
+	}
+
+	streamEncoder := audio.NewStreamEncoder(s.encoder)
+	sessionID := s.SessionID()
+
+	for {
+		pcmChunk, err := stream.NextPCM(ctx)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				// TTS PCM 流正常结束，刷新尾帧（若有残余数据，补静音输出最后一帧 Opus；若无残余则不输出多余包）
+				packets, flushErr := streamEncoder.Flush()
+				if flushErr != nil {
+					s.logger.Warn("failed to flush tts opus encoder",
+						"error", flushErr,
+						"session_id", sessionID,
+						"generation", gen,
+					)
+					s.postEvent(event{
+						kind:       eventKindError,
+						generation: gen,
+						err:        flushErr,
+						fatal:      true,
+					})
+					return
+				}
+				for _, pkt := range packets {
+					s.handleEncodedOpusPacket(gen, pkt)
+				}
+				return
+			}
+
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				return
+			}
+
+			s.logger.Warn("tts stream pcm read failed",
+				"error", err,
+				"session_id", sessionID,
+				"generation", gen,
+			)
+			s.postEvent(event{
+				kind:       eventKindError,
+				generation: gen,
+				err:        err,
+				fatal:      true,
+			})
+			return
+		}
+
+		if len(pcmChunk) == 0 {
+			continue
+		}
+
+		packets, err := streamEncoder.Feed(pcmChunk)
+		if err != nil {
+			s.logger.Warn("failed to encode tts pcm to opus",
+				"error", err,
+				"session_id", sessionID,
+				"generation", gen,
+			)
+			s.postEvent(event{
+				kind:       eventKindError,
+				generation: gen,
+				err:        err,
+				fatal:      true,
+			})
+			return
+		}
+
+		for _, pkt := range packets {
+			s.handleEncodedOpusPacket(gen, pkt)
+		}
+	}
+}
+
+// handleEncodedOpusPacket 处理编码产出的单个 24 kHz 60 ms Opus 数据包。
+func (s *Session) handleEncodedOpusPacket(gen uint64, packet []byte) {
+	s.mu.RLock()
+	cb := s.onEncodedOpus
+	s.mu.RUnlock()
+	if cb != nil {
+		cb(gen, packet)
 	}
 }

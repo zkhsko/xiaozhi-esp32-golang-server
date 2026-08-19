@@ -77,10 +77,13 @@ type Session struct {
 	writer *Writer
 	events chan event
 
-	decoder   *audio.Decoder
-	asrStream ai.ASRStream
-	asrQueue  *audio.ASRAudioQueue
-	ttsStream ai.TTSStream
+	decoder       *audio.Decoder
+	encoder       *audio.Encoder
+	streamEncoder *audio.StreamEncoder
+	onEncodedOpus func(gen uint64, packet []byte)
+	asrStream     ai.ASRStream
+	asrQueue      *audio.ASRAudioQueue
+	ttsStream     ai.TTSStream
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -138,24 +141,34 @@ func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Wri
 	if err != nil {
 		l.Error("failed to initialize session opus decoder", "error", err)
 	}
+	enc, err := audio.NewEncoder(maxOpusBytes)
+	if err != nil {
+		l.Error("failed to initialize session opus encoder", "error", err)
+	}
+	var streamEnc *audio.StreamEncoder
+	if enc != nil {
+		streamEnc = audio.NewStreamEncoder(enc)
+	}
 
 	return &Session{
-		conn:        conn,
-		clientInfo:  info,
-		cfg:         cfg,
-		asrClient:   asrClient,
-		llmClient:   llmClient,
-		ttsClient:   ttsClient,
-		logger:      l,
-		diagLimiter: logger.NewDiagRateLimiter(),
-		writer:      writer,
-		events:      make(chan event, eventCap),
-		ctx:         sessionCtx,
-		cancel:      cancel,
-		done:        make(chan struct{}),
-		state:       StateConnected,
-		mode:        ListenModeAuto,
-		decoder:     dec,
+		conn:          conn,
+		clientInfo:    info,
+		cfg:           cfg,
+		asrClient:     asrClient,
+		llmClient:     llmClient,
+		ttsClient:     ttsClient,
+		logger:        l,
+		diagLimiter:   logger.NewDiagRateLimiter(),
+		writer:        writer,
+		events:        make(chan event, eventCap),
+		ctx:           sessionCtx,
+		cancel:        cancel,
+		done:          make(chan struct{}),
+		state:         StateConnected,
+		mode:          ListenModeAuto,
+		decoder:       dec,
+		encoder:       enc,
+		streamEncoder: streamEnc,
 	}
 }
 
@@ -217,6 +230,23 @@ func (s *Session) Writer() *Writer {
 // Decoder 返回当前会话的 Opus 解码器。
 func (s *Session) Decoder() *audio.Decoder {
 	return s.decoder
+}
+
+// Encoder 返回当前会话持有的 24 kHz Opus 编码器。
+func (s *Session) Encoder() *audio.Encoder {
+	return s.encoder
+}
+
+// StreamEncoder 返回当前会话持有的流式分帧编码器。
+func (s *Session) StreamEncoder() *audio.StreamEncoder {
+	return s.streamEncoder
+}
+
+// SetOnEncodedOpus 设置单个 Opus 包编码完成后的回调。
+func (s *Session) SetOnEncodedOpus(cb func(gen uint64, packet []byte)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onEncodedOpus = cb
 }
 
 // ASRQueue 返回当前轮次的 ASR 音频队列。
