@@ -84,6 +84,8 @@ type Session struct {
 	asrStream     ai.ASRStream
 	asrQueue      *audio.ASRAudioQueue
 	ttsStream     ai.TTSStream
+	pacer         *DownlinkPacer
+	tickerFactory func(time.Duration) Ticker
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -192,6 +194,46 @@ func (s *Session) TTSStream() ai.TTSStream {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ttsStream
+}
+
+// Pacer 返回当前轮次的下行节奏调度器。
+func (s *Session) Pacer() *DownlinkPacer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pacer
+}
+
+// SetTickerFactory 设置下行节奏器使用的定时器工厂，供可控时钟单元测试使用。
+func (s *Session) SetTickerFactory(factory func(time.Duration) Ticker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tickerFactory = factory
+}
+
+// stopPacer 停止并清空当前轮次的下行节奏调度器。
+func (s *Session) stopPacer() {
+	s.mu.Lock()
+	p := s.pacer
+	s.pacer = nil
+	s.mu.Unlock()
+
+	if p != nil {
+		p.Stop()
+	}
+}
+
+// transitionToSpeaking 将指定代次的会话状态由 Processing 转换为 Speaking。
+func (s *Session) transitionToSpeaking(gen uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.generation == gen && s.state == StateProcessing {
+		s.state = StateSpeaking
+		s.logger.Info("session entered speaking state",
+			"session_id", s.sessionID,
+			"generation", gen,
+		)
+	}
 }
 
 // State 返回当前会话的状态。
@@ -838,6 +880,7 @@ func (s *Session) handleTurnFinishedEvent(ev event) {
 
 	s.stopASR()
 	s.stopTTS()
+	s.stopPacer()
 
 	s.mu.Lock()
 	if s.turnCancel != nil {
@@ -863,6 +906,7 @@ func (s *Session) handleAbortEvent(reason string) {
 	s.stopListeningTimer()
 	s.stopASR()
 	s.stopTTS()
+	s.stopPacer()
 
 	s.mu.Lock()
 	s.generation++
@@ -932,6 +976,7 @@ func (s *Session) handleErrorEvent(ev event) {
 	}
 
 	if ev.fatal {
+		s.stopPacer()
 		if s.State() == StateSpeaking {
 			stopBytes, _ := EncodeTTSStopMessage(s.SessionID())
 			if len(stopBytes) > 0 {
@@ -982,6 +1027,7 @@ func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 
 		s.stopASR()
 		s.stopTTS()
+		s.stopPacer()
 
 		if s.writer != nil {
 			_ = s.writer.Close()

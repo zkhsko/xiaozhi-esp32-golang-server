@@ -134,10 +134,35 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	s.ttsStream = ttsStream
 	s.mu.Unlock()
 
-	// 启动后台协程消费 TTS PCM 数据并送入 24 kHz Opus 分帧编码器
-	go s.consumeTTSPCM(ctx, gen, ttsStream)
+	// 2. 创建并启动当前轮次的下行 60 ms 节奏调度器
+	queueCap := DefaultWriteQueueCapacity
+	if s.cfg != nil && s.cfg.Session.DownlinkOpusQueueCapacity > 0 {
+		queueCap = s.cfg.Session.DownlinkOpusQueueCapacity
+	}
+	s.mu.RLock()
+	factory := s.tickerFactory
+	s.mu.RUnlock()
 
-	// 2. 构造上下文消息并创建 LLM 流式输出会话
+	pacer := NewDownlinkPacer(ctx, s, gen, queueCap, factory)
+	s.mu.Lock()
+	s.pacer = pacer
+	s.mu.Unlock()
+
+	go pacer.Run()
+
+	pipelineSucceeded := false
+	defer func() {
+		if !pipelineSucceeded {
+			pacer.Stop()
+		}
+	}()
+
+	pcmDone := make(chan struct{})
+
+	// 启动后台协程消费 TTS PCM 数据并送入 24 kHz Opus 分帧编码器与节奏调度器
+	go s.consumeTTSPCM(ctx, gen, ttsStream, pacer, pcmDone)
+
+	// 3. 构造上下文消息并创建 LLM 流式输出会话
 	messages := s.buildLLMMessages(userText)
 	llmStream, err := s.llmClient.CreateStream(ctx, messages)
 	if err != nil {
@@ -278,10 +303,39 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		})
 		return
 	}
+
+	// 6. 等待 TTS PCM 数据流完全消费并编码入队
+	select {
+	case <-ctx.Done():
+		return
+	case <-pcmDone:
+	}
+
+	pipelineSucceeded = true
+	pacer.FinishInput()
 }
 
-// consumeTTSPCM 持续消费百炼 TTS 生成的 24 kHz PCM 数据块，通过分帧编码器组装为 60 ms 帧并进行 Opus 编码。
-func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSStream) {
+// consumeTTSPCM 持续消费百炼 TTS 生成的 24 kHz PCM 数据块，通过分帧编码器组装为 60 ms 帧、进行 Opus 编码并送入节奏调度器。
+func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSStream, args ...any) {
+	var pacer *DownlinkPacer
+	var doneCh chan struct{}
+
+	for _, arg := range args {
+		switch v := arg.(type) {
+		case *DownlinkPacer:
+			pacer = v
+		case chan struct{}:
+			doneCh = v
+		}
+	}
+	if pacer == nil {
+		pacer = s.Pacer()
+	}
+
+	if doneCh != nil {
+		defer close(doneCh)
+	}
+
 	if stream == nil || s.encoder == nil {
 		return
 	}
@@ -311,6 +365,11 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 				}
 				for _, pkt := range packets {
 					s.handleEncodedOpusPacket(gen, pkt)
+					if pacer != nil {
+						if err := pacer.Enqueue(pkt); err != nil {
+							return
+						}
+					}
 				}
 				return
 			}
@@ -355,6 +414,11 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 
 		for _, pkt := range packets {
 			s.handleEncodedOpusPacket(gen, pkt)
+			if pacer != nil {
+				if err := pacer.Enqueue(pkt); err != nil {
+					return
+				}
+			}
 		}
 	}
 }

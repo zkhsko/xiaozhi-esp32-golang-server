@@ -846,13 +846,12 @@ func TestOrchestration_EndToEndIntegration(t *testing.T) {
 	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
 	waitState(t, sess, StateListening, 2*time.Second)
 
-	// 3. ASR 产生最终识别结果 "今天天气" -> 状态机进入 PROCESSING 并触发 LLM/TTS
+	// 3. ASR 产生最终识别结果 "今天天气" -> 状态机进入 PROCESSING 并触发 LLM/TTS 编排
 	sess.postEvent(event{
 		kind:       eventKindASRFinal,
 		generation: 1,
 		text:       "今天天气",
 	})
-	waitState(t, sess, StateProcessing, 2*time.Second)
 
 	// 等待编排完成
 	deadline := time.Now().Add(2 * time.Second)
@@ -866,6 +865,8 @@ func TestOrchestration_EndToEndIntegration(t *testing.T) {
 	if mockTTS.FinishCalls() != 1 {
 		t.Fatalf("expected TTS finish to be called, got %d", mockTTS.FinishCalls())
 	}
+
+	waitState(t, sess, StateReady, 2*time.Second)
 
 	// 验证下发了 STT 消息和 sentence_start 消息
 	textMsgs := conn.TextMessages()
