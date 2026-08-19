@@ -28,13 +28,20 @@ import (
 
 // mockASRTurn 描述单轮 ASR 模拟配置。
 type mockASRTurn struct {
-	text   string
-	manual bool
+	text      string
+	manual    bool
+	fail      bool
+	errorCode string
+	errorMsg  string
 }
 
 // mockTTSTurn 描述单轮 TTS 模拟配置。
 type mockTTSTurn struct {
-	pcmChunks [][]byte
+	pcmChunks       [][]byte
+	fail            bool
+	failAfterChunks int
+	errorCode       string
+	errorMsg        string
 }
 
 // mockBailianWSServer 实现本地模拟的百炼 ASR 与 TTS WebSocket 流式服务，支持多轮与 manual 模式。
@@ -125,6 +132,29 @@ func newMultiTurnMockBailianWSServer(t *testing.T, asrTurns []mockASRTurn, ttsTu
 				mType, mData, rErr := conn.Read(r.Context())
 				if rErr != nil {
 					break
+				}
+				if curTurn.fail {
+					errCode := curTurn.errorCode
+					if errCode == "" {
+						errCode = "ASR_FAILED"
+					}
+					errMsg := curTurn.errorMsg
+					if errMsg == "" {
+						errMsg = "mock asr failed"
+					}
+					failResp := map[string]any{
+						"header": map[string]any{
+							"action":        "task-failed",
+							"task_id":       taskID,
+							"event":         "task-failed",
+							"error_code":    errCode,
+							"error_message": errMsg,
+						},
+					}
+					failBytes, _ := json.Marshal(failResp)
+					_ = conn.Write(r.Context(), websocket.MessageText, failBytes)
+					_ = conn.Close(websocket.StatusNormalClosure, "asr failed")
+					return
 				}
 				if curTurn.manual {
 					// manual 模式：持续接收 PCM 二进制，直到收到 finish-task 文本指令
@@ -223,9 +253,57 @@ func newMultiTurnMockBailianWSServer(t *testing.T, asrTurns []mockASRTurn, ttsTu
 				}
 
 				if ttsReq.Header.Action == "continue-task" {
+					if curTurn.fail && curTurn.failAfterChunks == 0 {
+						errCode := curTurn.errorCode
+						if errCode == "" {
+							errCode = "TTS_FAILED"
+						}
+						errMsg := curTurn.errorMsg
+						if errMsg == "" {
+							errMsg = "mock tts failed"
+						}
+						failResp := map[string]any{
+							"header": map[string]any{
+								"action":        "task-failed",
+								"task_id":       taskID,
+								"event":         "task-failed",
+								"error_code":    errCode,
+								"error_message": errMsg,
+							},
+						}
+						failBytes, _ := json.Marshal(failResp)
+						_ = conn.Write(r.Context(), websocket.MessageText, failBytes)
+						_ = conn.Close(websocket.StatusNormalClosure, "tts failed")
+						return
+					}
+
 					if chunkIdx < len(curTurn.pcmChunks) {
 						_ = conn.Write(r.Context(), websocket.MessageBinary, curTurn.pcmChunks[chunkIdx])
 						chunkIdx++
+					}
+
+					if curTurn.fail && curTurn.failAfterChunks > 0 && chunkIdx >= curTurn.failAfterChunks {
+						errCode := curTurn.errorCode
+						if errCode == "" {
+							errCode = "TTS_FAILED"
+						}
+						errMsg := curTurn.errorMsg
+						if errMsg == "" {
+							errMsg = "mock tts failed"
+						}
+						failResp := map[string]any{
+							"header": map[string]any{
+								"action":        "task-failed",
+								"task_id":       taskID,
+								"event":         "task-failed",
+								"error_code":    errCode,
+								"error_message": errMsg,
+							},
+						}
+						failBytes, _ := json.Marshal(failResp)
+						_ = conn.Write(r.Context(), websocket.MessageText, failBytes)
+						_ = conn.Close(websocket.StatusNormalClosure, "tts failed")
+						return
 					}
 				} else if ttsReq.Header.Action == "finish-task" {
 					for chunkIdx < len(curTurn.pcmChunks) {
@@ -278,6 +356,7 @@ type mockBailianLLMServer struct {
 	mu               sync.Mutex
 	turnChunks       [][]string
 	turnIndex        int
+	turnFailures     map[int]int
 	receivedRequests []llmRequestRecord
 }
 
@@ -286,8 +365,15 @@ func newMockBailianLLMServer(t *testing.T, chunks []string) *mockBailianLLMServe
 }
 
 func newMultiTurnMockBailianLLMServer(t *testing.T, turnChunks [][]string) *mockBailianLLMServer {
+	return newMultiTurnMockBailianLLMServerWithFailures(t, turnChunks, nil)
+}
+
+func newMultiTurnMockBailianLLMServerWithFailures(t *testing.T, turnChunks [][]string, turnFailures map[int]int) *mockBailianLLMServer {
 	t.Helper()
-	m := &mockBailianLLMServer{turnChunks: turnChunks}
+	m := &mockBailianLLMServer{
+		turnChunks:   turnChunks,
+		turnFailures: turnFailures,
+	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -314,7 +400,16 @@ func newMultiTurnMockBailianLLMServer(t *testing.T, turnChunks [][]string) *mock
 		} else if len(m.turnChunks) > 0 {
 			chunks = m.turnChunks[len(m.turnChunks)-1]
 		}
+		failStatus := 0
+		if m.turnFailures != nil {
+			failStatus = m.turnFailures[curIdx]
+		}
 		m.mu.Unlock()
+
+		if failStatus != 0 {
+			http.Error(w, fmt.Sprintf("mock llm failure status %d", failStatus), failStatus)
+			return
+		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
