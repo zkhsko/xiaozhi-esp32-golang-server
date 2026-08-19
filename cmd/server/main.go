@@ -66,12 +66,18 @@ func main() {
 	}
 
 	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
+	sessionRegistry := session.NewRegistry(sessionLimiter, slog.Default())
+
+	wsHandler := session.NewHandlerWithRegistry(cfg, sessionRegistry, asrClient, llmClient, ttsClient, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(bootstrap.OTAPath, bootstrap.NewHandler(cfg, slog.Default()))
-	mux.Handle(session.WebSocketPath, session.NewHandler(cfg, sessionLimiter, asrClient, llmClient, ttsClient, slog.Default()))
+	mux.Handle(session.WebSocketPath, wsHandler)
 
 	srv := server.New(cfg.Server, mux)
+	srv.RegisterOnShutdown(func(shutdownCtx context.Context) error {
+		return sessionRegistry.Shutdown(shutdownCtx)
+	})
 
 	slog.Info("starting HTTP server", "addr", cfg.Server.ListenAddr)
 	if err := srv.Run(ctx); err != nil {
