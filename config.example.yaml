@@ -1,0 +1,40 @@
+server:
+  listen_addr: ":8080"
+  websocket_url: "wss://example.com/xiaozhi/v1/"
+  max_concurrent_sessions: 10
+  shutdown_timeout: 10s
+  http_read_timeout: 15s
+  http_write_timeout: 30s
+  http_idle_timeout: 60s
+  max_http_body_bytes: 65536
+  max_http_header_bytes: 1024
+
+session:
+  hello_timeout: 10s
+  max_ws_text_message_bytes: 32768
+  max_opus_packet_bytes: 1024
+  max_listening_duration: 30s
+  asr_pcm_queue_capacity: 100
+  tts_pcm_queue_capacity: 100
+  downlink_opus_queue_capacity: 100
+  max_history_turns: 6
+  system_prompt: "你是小智，一个智能语音助手。请用简明、友好的中文回答，回答适合直接语音朗读。"
+
+ai:
+  bailian:
+    ws_endpoint: "wss://llm-hi9nns9y8jekpmpt.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
+    llm_endpoint: "https://llm-hi9nns9y8jekpmpt.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+    asr_model: "qwen-audio-3.0-asr-flash-streaming"
+    llm_model: "qwen3.7-flash"
+    tts_model: "qwen-audio-3.0-tts-flash"
+    tts_voice: "longanlingxi"
+    asr_connect_timeout: 10s
+    tts_connect_timeout: 10s
+    llm_first_token_timeout: 15s
+    llm_overall_timeout: 60s
+    tts_first_audio_timeout: 10s
+    tts_sentence_timeout: 15s
+
+proxy:
+  enabled: false
+  url: ""
