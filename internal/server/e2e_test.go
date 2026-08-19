@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,18 +26,39 @@ import (
 	"xiaozhi-esp32-golang-server/internal/session"
 )
 
-// mockBailianWSServer 实现本地模拟的百炼 ASR 与 TTS WebSocket 流式服务。
+// mockASRTurn 描述单轮 ASR 模拟配置。
+type mockASRTurn struct {
+	text   string
+	manual bool
+}
+
+// mockTTSTurn 描述单轮 TTS 模拟配置。
+type mockTTSTurn struct {
+	pcmChunks [][]byte
+}
+
+// mockBailianWSServer 实现本地模拟的百炼 ASR 与 TTS WebSocket 流式服务，支持多轮与 manual 模式。
 type mockBailianWSServer struct {
-	server       *httptest.Server
-	asrFinalText string
-	ttsPCMChunks [][]byte
+	server   *httptest.Server
+	mu       sync.Mutex
+	asrTurns []mockASRTurn
+	ttsTurns []mockTTSTurn
+	asrIndex int
+	ttsIndex int
 }
 
 func newMockBailianWSServer(t *testing.T, asrFinalText string, ttsPCMChunks [][]byte) *mockBailianWSServer {
+	return newMultiTurnMockBailianWSServer(t,
+		[]mockASRTurn{{text: asrFinalText, manual: false}},
+		[]mockTTSTurn{{pcmChunks: ttsPCMChunks}},
+	)
+}
+
+func newMultiTurnMockBailianWSServer(t *testing.T, asrTurns []mockASRTurn, ttsTurns []mockTTSTurn) *mockBailianWSServer {
 	t.Helper()
 	m := &mockBailianWSServer{
-		asrFinalText: asrFinalText,
-		ttsPCMChunks: ttsPCMChunks,
+		asrTurns: asrTurns,
+		ttsTurns: ttsTurns,
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,38 +107,101 @@ func newMockBailianWSServer(t *testing.T, asrFinalText string, ttsPCMChunks [][]
 		}
 
 		if taskType == "asr" {
-			// ASR 识别流：接收上行 PCM 帧，收到数据后返回最终识别文本
+			m.mu.Lock()
+			idx := m.asrIndex
+			if idx < len(m.asrTurns) {
+				m.asrIndex++
+			}
+			var curTurn mockASRTurn
+			if idx < len(m.asrTurns) {
+				curTurn = m.asrTurns[idx]
+			} else if len(m.asrTurns) > 0 {
+				curTurn = m.asrTurns[len(m.asrTurns)-1]
+			}
+			m.mu.Unlock()
+
+			// ASR 识别流：接收上行 PCM 帧，并在符合条件时返回最终识别文本
 			for {
-				mType, _, rErr := conn.Read(r.Context())
+				mType, mData, rErr := conn.Read(r.Context())
 				if rErr != nil {
 					break
 				}
-				if mType == websocket.MessageBinary || mType == websocket.MessageText {
-					finalResp := map[string]any{
-						"header": map[string]any{
-							"action":  "task-finished",
-							"task_id": taskID,
-							"event":   "task-finished",
-						},
-						"payload": map[string]any{
-							"output": map[string]any{
-								"sentence": map[string]any{
-									"sentence_id":    1,
-									"sentence_begin": true,
-									"sentence_end":   true,
-									"text":           m.asrFinalText,
+				if curTurn.manual {
+					// manual 模式：持续接收 PCM 二进制，直到收到 finish-task 文本指令
+					if mType == websocket.MessageText {
+						var finishReq struct {
+							Header struct {
+								Action string `json:"action"`
+							} `json:"header"`
+						}
+						_ = json.Unmarshal(mData, &finishReq)
+						if finishReq.Header.Action == "finish-task" {
+							finalResp := map[string]any{
+								"header": map[string]any{
+									"action":  "task-finished",
+									"task_id": taskID,
+									"event":   "task-finished",
 								},
-								"text": m.asrFinalText,
-							},
-						},
+								"payload": map[string]any{
+									"output": map[string]any{
+										"sentence": map[string]any{
+											"sentence_id":    1,
+											"sentence_begin": true,
+											"sentence_end":   true,
+											"text":           curTurn.text,
+										},
+										"text": curTurn.text,
+									},
+								},
+							}
+							finalBytes, _ := json.Marshal(finalResp)
+							_ = conn.Write(r.Context(), websocket.MessageText, finalBytes)
+							_ = conn.Close(websocket.StatusNormalClosure, "asr finished")
+							return
+						}
 					}
-					finalBytes, _ := json.Marshal(finalResp)
-					_ = conn.Write(r.Context(), websocket.MessageText, finalBytes)
-					_ = conn.Close(websocket.StatusNormalClosure, "asr finished")
-					return
+				} else {
+					// auto 模式：收到音频数据或 finish-task 立即返回识别结果
+					if mType == websocket.MessageBinary || mType == websocket.MessageText {
+						finalResp := map[string]any{
+							"header": map[string]any{
+								"action":  "task-finished",
+								"task_id": taskID,
+								"event":   "task-finished",
+							},
+							"payload": map[string]any{
+								"output": map[string]any{
+									"sentence": map[string]any{
+										"sentence_id":    1,
+										"sentence_begin": true,
+										"sentence_end":   true,
+										"text":           curTurn.text,
+									},
+									"text": curTurn.text,
+								},
+							},
+						}
+						finalBytes, _ := json.Marshal(finalResp)
+						_ = conn.Write(r.Context(), websocket.MessageText, finalBytes)
+						_ = conn.Close(websocket.StatusNormalClosure, "asr finished")
+						return
+					}
 				}
 			}
 		} else if taskType == "tts" {
+			m.mu.Lock()
+			idx := m.ttsIndex
+			if idx < len(m.ttsTurns) {
+				m.ttsIndex++
+			}
+			var curTurn mockTTSTurn
+			if idx < len(m.ttsTurns) {
+				curTurn = m.ttsTurns[idx]
+			} else if len(m.ttsTurns) > 0 {
+				curTurn = m.ttsTurns[len(m.ttsTurns)-1]
+			}
+			m.mu.Unlock()
+
 			// TTS 合成流：接收 continue-task 和 finish-task 消息，并下发 24 kHz PCM 数据
 			chunkIdx := 0
 			for {
@@ -137,13 +223,13 @@ func newMockBailianWSServer(t *testing.T, asrFinalText string, ttsPCMChunks [][]
 				}
 
 				if ttsReq.Header.Action == "continue-task" {
-					if chunkIdx < len(m.ttsPCMChunks) {
-						_ = conn.Write(r.Context(), websocket.MessageBinary, m.ttsPCMChunks[chunkIdx])
+					if chunkIdx < len(curTurn.pcmChunks) {
+						_ = conn.Write(r.Context(), websocket.MessageBinary, curTurn.pcmChunks[chunkIdx])
 						chunkIdx++
 					}
 				} else if ttsReq.Header.Action == "finish-task" {
-					for chunkIdx < len(m.ttsPCMChunks) {
-						_ = conn.Write(r.Context(), websocket.MessageBinary, m.ttsPCMChunks[chunkIdx])
+					for chunkIdx < len(curTurn.pcmChunks) {
+						_ = conn.Write(r.Context(), websocket.MessageBinary, curTurn.pcmChunks[chunkIdx])
 						chunkIdx++
 					}
 					finishedResp := map[string]any{
@@ -174,21 +260,61 @@ func (m *mockBailianWSServer) Close() {
 	m.server.Close()
 }
 
+// llmMessageRecord 记录 mock LLM 收到的单条聊天消息。
+type llmMessageRecord struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// llmRequestRecord 记录 mock LLM 收到的完整请求体。
+type llmRequestRecord struct {
+	Model    string             `json:"model"`
+	Messages []llmMessageRecord `json:"messages"`
+}
+
 // mockBailianLLMServer 实现本地模拟的百炼 OpenAI 兼容 Chat Completions SSE 流式服务。
 type mockBailianLLMServer struct {
-	server *httptest.Server
-	chunks []string
+	server           *httptest.Server
+	mu               sync.Mutex
+	turnChunks       [][]string
+	turnIndex        int
+	receivedRequests []llmRequestRecord
 }
 
 func newMockBailianLLMServer(t *testing.T, chunks []string) *mockBailianLLMServer {
+	return newMultiTurnMockBailianLLMServer(t, [][]string{chunks})
+}
+
+func newMultiTurnMockBailianLLMServer(t *testing.T, turnChunks [][]string) *mockBailianLLMServer {
 	t.Helper()
-	m := &mockBailianLLMServer{chunks: chunks}
+	m := &mockBailianLLMServer{turnChunks: turnChunks}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+
+		// 读取并记录客户端发送的 Messages 列表
+		var req llmRequestRecord
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err == nil {
+			_ = json.Unmarshal(bodyBytes, &req)
+		}
+
+		m.mu.Lock()
+		m.receivedRequests = append(m.receivedRequests, req)
+		curIdx := m.turnIndex
+		if curIdx < len(m.turnChunks) {
+			m.turnIndex++
+		}
+		var chunks []string
+		if curIdx < len(m.turnChunks) {
+			chunks = m.turnChunks[curIdx]
+		} else if len(m.turnChunks) > 0 {
+			chunks = m.turnChunks[len(m.turnChunks)-1]
+		}
+		m.mu.Unlock()
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -201,7 +327,7 @@ func newMockBailianLLMServer(t *testing.T, chunks []string) *mockBailianLLMServe
 			return
 		}
 
-		for i, text := range m.chunks {
+		for i, text := range chunks {
 			delta := map[string]any{
 				"content": text,
 			}
@@ -237,6 +363,68 @@ func (m *mockBailianLLMServer) BaseURL() string {
 
 func (m *mockBailianLLMServer) Close() {
 	m.server.Close()
+}
+
+func (m *mockBailianLLMServer) ReceivedRequests() []llmRequestRecord {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := make([]llmRequestRecord, len(m.receivedRequests))
+	copy(res, m.receivedRequests)
+	return res
+}
+
+// readDownstreamUntilTTSStop 持续读取下行消息直至收到 tts.stop。
+func readDownstreamUntilTTSStop(t *testing.T, conn *websocket.Conn, timeout time.Duration) []e2eReceivedItem {
+	t.Helper()
+	var received []e2eReceivedItem
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for {
+		mType, mData, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("failed to read downstream message: %v", err)
+		}
+
+		item := e2eReceivedItem{
+			msgType: mType,
+			payload: mData,
+		}
+
+		if mType == websocket.MessageText {
+			var base struct {
+				Type      string `json:"type"`
+				State     string `json:"state"`
+				Text      string `json:"text"`
+				SessionID string `json:"session_id"`
+			}
+			if err := json.Unmarshal(mData, &base); err == nil {
+				item.textType = base.Type
+				item.state = base.State
+				item.text = base.Text
+				item.sessionID = base.SessionID
+			}
+		}
+
+		received = append(received, item)
+
+		if item.textType == session.MessageTypeTTS && item.state == session.TTSStateStop {
+			break
+		}
+	}
+	return received
+}
+
+// waitSessionState 等待指定会话流转至目标状态。
+func waitSessionState(t *testing.T, sess *session.Session, expected session.State, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for sess.State() != expected && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.State() != expected {
+		t.Fatalf("timed out waiting for session state %v, got %v", expected, sess.State())
+	}
 }
 
 // generateSinePCM16k 在内存中生成 16 kHz 60 ms 单声道（960 采样点，1920 字节）PCM。
