@@ -1,0 +1,1000 @@
+package session
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/coder/websocket"
+
+	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/logger"
+)
+
+// 会话管理相关的默认常量。
+const (
+	// DefaultMaxOpusPacketBytes 默认单 Opus 包最大字节数（1024 字节）。
+	DefaultMaxOpusPacketBytes = 1024
+
+	// DefaultMaxListeningDuration 默认单次最大收音时长（30 秒）。
+	DefaultMaxListeningDuration = 30 * time.Second
+
+	// DefaultEventChannelCapacity 默认会话监督事件通道容量。
+	DefaultEventChannelCapacity = 100
+)
+
+// eventKind 定义进入监督流程的事件类型。
+type eventKind int
+
+const (
+	eventKindClientHello eventKind = iota
+	eventKindClientText
+	eventKindClientAudio
+	eventKindASRFinal
+	eventKindTTSStarted
+	eventKindTurnFinished
+	eventKindAbort
+	eventKindTimeout
+	eventKindError
+	eventKindClose
+)
+
+// event 封装投递给单一监督主循环的统一事件对象。
+type event struct {
+	kind       eventKind
+	generation uint64
+	text       string
+	clientMsg  *ClientMessage
+	audioData  []byte
+	rawBytes   []byte
+	isBinary   bool
+	err        error
+	fatal      bool
+	closeCode  websocket.StatusCode
+}
+
+// Session 负责管理单个 WebSocket 连接的状态机、事件所有权、监听模式与回答代次。
+// 所有状态变更由单一主监督循环串行处理，保证线程安全与代次隔离。
+type Session struct {
+	conn        *websocket.Conn
+	clientInfo  *ClientHeaderInfo
+	cfg         *config.Config
+	logger      *slog.Logger
+	diagLimiter *logger.RateLimiter
+
+	writer *Writer
+	events chan event
+
+	ctx       context.Context
+	cancel    context.CancelFunc
+	closeOnce sync.Once
+	done      chan struct{}
+
+	mu         sync.RWMutex
+	state      State
+	mode       string
+	generation uint64
+	sessionID  string
+
+	turnCtx    context.Context
+	turnCancel context.CancelFunc
+
+	helloTimer     *time.Timer
+	listeningTimer *time.Timer
+}
+
+// NewSession 创建配置就绪的 WebSocket 会话对象。
+func NewSession(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInfo, cfg *config.Config, l *slog.Logger) *Session {
+	var w *Writer
+	if conn != nil {
+		queueCap := DefaultWriteQueueCapacity
+		if cfg != nil && cfg.Session.DownlinkOpusQueueCapacity > 0 {
+			queueCap = cfg.Session.DownlinkOpusQueueCapacity
+		}
+		w = NewWriter(ctx, conn, queueCap, l)
+	}
+	return NewSessionWithWriter(ctx, conn, w, info, cfg, l)
+}
+
+// NewSessionWithWriter 创建指定串行写流程的 WebSocket 会话对象。
+func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Writer, info *ClientHeaderInfo, cfg *config.Config, l *slog.Logger) *Session {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if l == nil {
+		l = slog.Default()
+	}
+
+	sessionCtx, cancel := context.WithCancel(ctx)
+	eventCap := DefaultEventChannelCapacity
+	if cfg != nil && cfg.Session.ASRPCMQueueCapacity > 0 {
+		eventCap = cfg.Session.ASRPCMQueueCapacity
+	}
+
+	return &Session{
+		conn:        conn,
+		clientInfo:  info,
+		cfg:         cfg,
+		logger:      l,
+		diagLimiter: logger.NewDiagRateLimiter(),
+		writer:      writer,
+		events:      make(chan event, eventCap),
+		ctx:         sessionCtx,
+		cancel:      cancel,
+		done:        make(chan struct{}),
+		state:       StateConnected,
+		mode:        ListenModeAuto,
+	}
+}
+
+// State 返回当前会话的状态。
+func (s *Session) State() State {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state
+}
+
+// Generation 返回当前问答代次。
+func (s *Session) Generation() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.generation
+}
+
+// Mode 返回当前收音监听模式（auto 或 manual）。
+func (s *Session) Mode() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mode
+}
+
+// SessionID 返回协商成功的会话标识。
+func (s *Session) SessionID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sessionID
+}
+
+// Writer 返回当前关联的串行写流程对象。
+func (s *Session) Writer() *Writer {
+	return s.writer
+}
+
+// TurnContext 返回当前轮次上下文（随 abort 或轮次结束取消）。
+func (s *Session) TurnContext() context.Context {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.turnCtx != nil {
+		return s.turnCtx
+	}
+	return s.ctx
+}
+
+// Done 返回会话完全关闭后的信号通道。
+func (s *Session) Done() <-chan struct{} {
+	return s.done
+}
+
+// PostClientText 投递客户端文本消息事件。
+func (s *Session) PostClientText(msg *ClientMessage) bool {
+	if msg == nil {
+		return false
+	}
+	return s.postEvent(event{
+		kind:      eventKindClientText,
+		clientMsg: msg,
+	})
+}
+
+// PostClientAudio 投递客户端 Opus 音频包事件。
+func (s *Session) PostClientAudio(data []byte) bool {
+	return s.postEvent(event{
+		kind:      eventKindClientAudio,
+		audioData: data,
+		isBinary:  true,
+	})
+}
+
+// PostASRFinal 投递指定代次的 ASR 最终识别文本事件。
+func (s *Session) PostASRFinal(generation uint64, text string) bool {
+	return s.postEvent(event{
+		kind:       eventKindASRFinal,
+		generation: generation,
+		text:       text,
+	})
+}
+
+// PostTTSStarted 投递指定代次的 TTS 首音频就绪/播报开始事件。
+func (s *Session) PostTTSStarted(generation uint64) bool {
+	return s.postEvent(event{
+		kind:       eventKindTTSStarted,
+		generation: generation,
+	})
+}
+
+// PostTurnFinished 投递指定代次的问答轮次结束事件。
+func (s *Session) PostTurnFinished(generation uint64) bool {
+	return s.postEvent(event{
+		kind:       eventKindTurnFinished,
+		generation: generation,
+	})
+}
+
+// PostAbort 投递显式中断请求事件。
+func (s *Session) PostAbort(reason string) bool {
+	return s.postEvent(event{
+		kind: eventKindAbort,
+		text: reason,
+	})
+}
+
+// PostError 投递指定代次的错误事件。
+func (s *Session) PostError(generation uint64, err error, fatal bool) bool {
+	return s.postEvent(event{
+		kind:       eventKindError,
+		generation: generation,
+		err:        err,
+		fatal:      fatal,
+	})
+}
+
+// PostTimeout 投递指定代次的超时事件。
+func (s *Session) PostTimeout(generation uint64, reason string) bool {
+	return s.postEvent(event{
+		kind:       eventKindTimeout,
+		generation: generation,
+		text:       reason,
+	})
+}
+
+// Close 主动关闭会话。
+func (s *Session) Close() {
+	s.closeWithReason(websocket.StatusNormalClosure, "session closed")
+}
+
+// postEvent 向事件通道投递事件，若会话已取消则返回 false。
+func (s *Session) postEvent(ev event) bool {
+	select {
+	case <-s.ctx.Done():
+		return false
+	case s.events <- ev:
+		return true
+	}
+}
+
+// Run 启动会话监督流程与消息读取循环，阻塞直至连接断开或会话终止。
+func (s *Session) Run() error {
+	defer func() {
+		s.closeWithReason(websocket.StatusNormalClosure, "session finished")
+		close(s.done)
+	}()
+
+	// 启动 hello 超时定时器
+	s.startHelloTimer()
+
+	// 若存在底层连接，启动读取循环 goroutine
+	if s.conn != nil {
+		maxWSTextBytes := int64(DefaultMaxWSTextMessageBytes)
+		if s.cfg != nil && s.cfg.Session.MaxWSTextMessageBytes > 0 {
+			maxWSTextBytes = s.cfg.Session.MaxWSTextMessageBytes
+		}
+		s.conn.SetReadLimit(maxWSTextBytes)
+		go s.readLoop()
+	}
+
+	// 主事件监督循环
+	return s.supervisorLoop()
+}
+
+// supervisorLoop 单独主事件循环，按序处理所有事件并驱动状态转换。
+func (s *Session) supervisorLoop() error {
+	for {
+		select {
+		case <-s.ctx.Done():
+			return s.ctx.Err()
+		case ev, ok := <-s.events:
+			if !ok {
+				return nil
+			}
+			s.handleEvent(ev)
+			if s.State() == StateClosed {
+				return nil
+			}
+		}
+	}
+}
+
+// handleEvent 分发处理各类事件。
+func (s *Session) handleEvent(ev event) {
+	if s.State() == StateClosed {
+		return
+	}
+
+	switch ev.kind {
+	case eventKindClientHello:
+		s.handleHelloEvent(ev)
+	case eventKindClientText:
+		s.handleClientTextEvent(ev)
+	case eventKindClientAudio:
+		s.handleClientAudioEvent(ev)
+	case eventKindASRFinal:
+		s.handleASRFinalEvent(ev)
+	case eventKindTTSStarted:
+		s.handleTTSStartedEvent(ev)
+	case eventKindTurnFinished:
+		s.handleTurnFinishedEvent(ev)
+	case eventKindAbort:
+		s.handleAbortEvent(ev.text)
+	case eventKindTimeout:
+		s.handleTimeoutEvent(ev)
+	case eventKindError:
+		s.handleErrorEvent(ev)
+	case eventKindClose:
+		s.handleCloseEvent(ev)
+	}
+}
+
+// handleHelloEvent 处理握手阶段首包 hello 逻辑。
+func (s *Session) handleHelloEvent(ev event) {
+	if s.State() != StateConnected {
+		s.logger.Warn("duplicate hello received after handshake",
+			"session_id", s.SessionID(),
+			"device_id", s.truncatedDeviceID(),
+		)
+		s.closeWithReason(websocket.StatusPolicyViolation, ErrDuplicateHello.Error())
+		return
+	}
+
+	if ev.isBinary {
+		s.logger.Warn("first message is not text hello",
+			"device_id", s.truncatedDeviceID(),
+		)
+		s.closeWithReason(websocket.StatusUnsupportedData, "first message must be text hello")
+		return
+	}
+
+	var clientHello ClientHelloMessage
+	if err := json.Unmarshal(ev.rawBytes, &clientHello); err != nil {
+		s.logger.Warn("invalid json in hello message",
+			"error", err,
+			"device_id", s.truncatedDeviceID(),
+		)
+		s.closeWithReason(websocket.StatusPolicyViolation, "invalid json in hello message")
+		return
+	}
+
+	if err := ValidateClientHello(&clientHello); err != nil {
+		s.logger.Warn("invalid hello message fields",
+			"error", err,
+			"device_id", s.truncatedDeviceID(),
+		)
+		s.closeWithReason(websocket.StatusPolicyViolation, err.Error())
+		return
+	}
+
+	s.stopHelloTimer()
+
+	sessionID, err := GenerateSessionID()
+	if err != nil {
+		s.logger.Error("failed to generate session id",
+			"error", err,
+			"device_id", s.truncatedDeviceID(),
+		)
+		s.closeWithReason(websocket.StatusInternalError, "internal server error")
+		return
+	}
+
+	respBytes, err := EncodeServerHelloMessage(sessionID)
+	if err != nil {
+		s.logger.Error("failed to encode server hello",
+			"error", err,
+			"session_id", sessionID,
+		)
+		s.closeWithReason(websocket.StatusInternalError, "internal server error")
+		return
+	}
+
+	if err := s.sendTextMessage(respBytes); err != nil {
+		s.logger.Warn("failed to write server hello",
+			"error", err,
+			"session_id", sessionID,
+			"device_id", s.truncatedDeviceID(),
+		)
+		s.closeWithReason(websocket.StatusInternalError, "failed to write server hello")
+		return
+	}
+
+	s.mu.Lock()
+	s.sessionID = sessionID
+	s.state = StateReady
+	s.mu.Unlock()
+
+	s.logger.Info("websocket hello handshake succeeded",
+		"session_id", sessionID,
+		"device_id", s.truncatedDeviceID(),
+		"client_id", s.truncatedClientID(),
+		"serial_number", s.truncatedSerialNumber(),
+	)
+}
+
+// handleClientTextEvent 处理客户端文本消息事件。
+func (s *Session) handleClientTextEvent(ev event) {
+	if ev.clientMsg == nil {
+		return
+	}
+
+	currentState := s.State()
+
+	switch ev.clientMsg.Kind {
+	case KindHello:
+		s.logger.Warn("duplicate hello received after handshake",
+			"session_id", s.SessionID(),
+			"device_id", s.truncatedDeviceID(),
+		)
+		s.closeWithReason(websocket.StatusPolicyViolation, ErrDuplicateHello.Error())
+
+	case KindListenStart:
+		switch currentState {
+		case StateReady:
+			mode := ev.clientMsg.Mode
+			if mode == "" {
+				mode = ListenModeAuto
+			}
+			s.mu.Lock()
+			s.state = StateListening
+			s.mode = mode
+			s.generation++
+			gen := s.generation
+			s.turnCtx, s.turnCancel = context.WithCancel(s.ctx)
+			s.mu.Unlock()
+
+			s.startListeningTimer(gen)
+			s.logger.Info("session entered listening state",
+				"session_id", s.SessionID(),
+				"generation", gen,
+				"mode", mode,
+			)
+
+		case StateListening:
+			s.logDiag("duplicate listen.start ignored in listening state",
+				"generation", s.Generation(),
+			)
+
+		default:
+			s.logDiag("listen.start ignored in active state",
+				"state", currentState.String(),
+				"generation", s.Generation(),
+			)
+		}
+
+	case KindListenStop:
+		switch currentState {
+		case StateListening:
+			if s.Mode() == ListenModeAuto {
+				s.logDiag("listen.stop ignored in auto mode",
+					"generation", s.Generation(),
+				)
+			} else {
+				s.logger.Info("manual listen.stop received",
+					"session_id", s.SessionID(),
+					"generation", s.Generation(),
+				)
+			}
+		default:
+			s.logDiag("listen.stop ignored in non-listening state",
+				"state", currentState.String(),
+			)
+		}
+
+	case KindListenDetect:
+		s.logDiag("listen.detect received",
+			"text", logger.TruncateString(ev.clientMsg.DetectText),
+		)
+
+	case KindAbort:
+		s.handleAbortEvent(ev.clientMsg.AbortReason)
+
+	case KindUnknownExtension:
+		s.logDiag("unknown extension message received",
+			"raw_type", logger.TruncateString(ev.clientMsg.RawType),
+		)
+	}
+}
+
+// handleClientAudioEvent 处理客户端 Opus 音频包事件。
+func (s *Session) handleClientAudioEvent(ev event) {
+	currentState := s.State()
+
+	if currentState == StateConnected {
+		s.logger.Warn("binary audio message received before hello",
+			"device_id", s.truncatedDeviceID(),
+		)
+		s.closeWithReason(websocket.StatusUnsupportedData, "binary message not allowed before hello")
+		return
+	}
+
+	maxOpusBytes := DefaultMaxOpusPacketBytes
+	if s.cfg != nil && s.cfg.Session.MaxOpusPacketBytes > 0 {
+		maxOpusBytes = s.cfg.Session.MaxOpusPacketBytes
+	}
+
+	packetLen := len(ev.audioData)
+	if packetLen == 0 || packetLen > maxOpusBytes {
+		s.logger.Warn("invalid opus packet size",
+			"size", packetLen,
+			"max", maxOpusBytes,
+			"session_id", s.SessionID(),
+		)
+		s.closeWithReason(websocket.StatusPolicyViolation, "invalid opus packet size")
+		return
+	}
+
+	switch currentState {
+	case StateReady:
+		// READY 状态收到客户端 Opus 音频直接丢弃（如唤醒词残留音频），不触发 ASR，不缓存
+		return
+	case StateListening:
+		// LISTENING 状态音频为正常收音音频
+		return
+	case StateProcessing:
+		// PROCESSING 状态下首个 tts.start 前残留音频直接丢弃
+		return
+	case StateSpeaking:
+		// SPEAKING 状态下播报音频时直接丢弃上行音频（非全双工）
+		return
+	}
+}
+
+// handleASRFinalEvent 处理 ASR 最终识别文本事件。
+func (s *Session) handleASRFinalEvent(ev event) {
+	currentGen := s.Generation()
+	if ev.generation != currentGen {
+		s.logger.Debug("stale asr final event discarded",
+			"event_gen", ev.generation,
+			"current_gen", currentGen,
+		)
+		return
+	}
+
+	if s.State() != StateListening {
+		s.logger.Debug("asr final event ignored in non-listening state",
+			"state", s.State().String(),
+			"generation", ev.generation,
+		)
+		return
+	}
+
+	s.stopListeningTimer()
+
+	sttBytes, err := EncodeSTTMessage(s.SessionID(), ev.text)
+	if err != nil {
+		s.logger.Error("failed to encode stt message",
+			"error", err,
+			"session_id", s.SessionID(),
+		)
+	} else {
+		_ = s.sendTextMessage(sttBytes)
+	}
+
+	s.mu.Lock()
+	s.state = StateProcessing
+	s.mu.Unlock()
+
+	s.logger.Info("session entered processing state",
+		"session_id", s.SessionID(),
+		"generation", ev.generation,
+	)
+}
+
+// handleTTSStartedEvent 处理 TTS 首音频就绪下发 tts.start 事件。
+func (s *Session) handleTTSStartedEvent(ev event) {
+	currentGen := s.Generation()
+	if ev.generation != currentGen {
+		s.logger.Debug("stale tts started event discarded",
+			"event_gen", ev.generation,
+			"current_gen", currentGen,
+		)
+		return
+	}
+
+	if s.State() != StateProcessing {
+		s.logger.Debug("tts started event ignored in non-processing state",
+			"state", s.State().String(),
+			"generation", ev.generation,
+		)
+		return
+	}
+
+	startBytes, err := EncodeTTSStartMessage(s.SessionID())
+	if err != nil {
+		s.logger.Error("failed to encode tts start message",
+			"error", err,
+			"session_id", s.SessionID(),
+		)
+	} else {
+		_ = s.sendTextMessage(startBytes)
+	}
+
+	s.mu.Lock()
+	s.state = StateSpeaking
+	s.mu.Unlock()
+
+	s.logger.Info("session entered speaking state",
+		"session_id", s.SessionID(),
+		"generation", ev.generation,
+	)
+}
+
+// handleTurnFinishedEvent 处理问答轮次结束事件。
+func (s *Session) handleTurnFinishedEvent(ev event) {
+	currentGen := s.Generation()
+	if ev.generation != currentGen {
+		s.logger.Debug("stale turn finished event discarded",
+			"event_gen", ev.generation,
+			"current_gen", currentGen,
+		)
+		return
+	}
+
+	currentState := s.State()
+	if currentState != StateSpeaking && currentState != StateProcessing {
+		return
+	}
+
+	if currentState == StateSpeaking {
+		stopBytes, err := EncodeTTSStopMessage(s.SessionID())
+		if err != nil {
+			s.logger.Error("failed to encode tts stop message",
+				"error", err,
+				"session_id", s.SessionID(),
+			)
+		} else {
+			_ = s.sendTextMessage(stopBytes)
+		}
+	}
+
+	s.mu.Lock()
+	if s.turnCancel != nil {
+		s.turnCancel()
+		s.turnCancel = nil
+	}
+	s.state = StateReady
+	s.mu.Unlock()
+
+	s.logger.Info("session returned to ready state",
+		"session_id", s.SessionID(),
+		"generation", ev.generation,
+	)
+}
+
+// handleAbortEvent 处理显式中断事件。
+func (s *Session) handleAbortEvent(reason string) {
+	currentState := s.State()
+	if currentState == StateConnected || currentState == StateClosed {
+		return
+	}
+
+	s.stopListeningTimer()
+
+	s.mu.Lock()
+	s.generation++
+	newGen := s.generation
+	if s.turnCancel != nil {
+		s.turnCancel()
+		s.turnCancel = nil
+	}
+	wasSpeaking := (s.state == StateSpeaking)
+	s.state = StateReady
+	s.mu.Unlock()
+
+	if wasSpeaking {
+		stopBytes, err := EncodeTTSStopMessage(s.SessionID())
+		if err != nil {
+			s.logger.Error("failed to encode tts stop message on abort",
+				"error", err,
+				"session_id", s.SessionID(),
+			)
+		} else {
+			_ = s.sendTextMessage(stopBytes)
+		}
+	}
+
+	s.logger.Info("session aborted and reset to ready",
+		"session_id", s.SessionID(),
+		"new_generation", newGen,
+		"reason", logger.TruncateString(reason),
+		"was_speaking", wasSpeaking,
+	)
+}
+
+// handleTimeoutEvent 处理超时事件。
+func (s *Session) handleTimeoutEvent(ev event) {
+	if ev.text == "hello handshake timeout" {
+		if s.State() == StateConnected {
+			s.logger.Warn("hello handshake timeout",
+				"device_id", s.truncatedDeviceID(),
+				"client_id", s.truncatedClientID(),
+				"serial_number", s.truncatedSerialNumber(),
+			)
+			s.closeWithReason(websocket.StatusPolicyViolation, "hello handshake timeout")
+		}
+		return
+	}
+
+	if ev.text == "max listening duration exceeded" {
+		if ev.generation == s.Generation() && s.State() == StateListening {
+			s.logger.Warn("max listening duration exceeded",
+				"session_id", s.SessionID(),
+				"generation", ev.generation,
+			)
+			s.closeWithReason(websocket.StatusPolicyViolation, "max listening duration exceeded")
+		}
+		return
+	}
+}
+
+// handleErrorEvent 处理错误事件。
+func (s *Session) handleErrorEvent(ev event) {
+	if ev.generation != 0 && ev.generation != s.Generation() {
+		s.logger.Debug("stale error event discarded",
+			"event_gen", ev.generation,
+			"current_gen", s.Generation(),
+		)
+		return
+	}
+
+	if ev.fatal {
+		if s.State() == StateSpeaking {
+			stopBytes, _ := EncodeTTSStopMessage(s.SessionID())
+			if len(stopBytes) > 0 {
+				_ = s.sendTextMessage(stopBytes)
+			}
+		}
+		closeCode := ev.closeCode
+		if closeCode == 0 {
+			closeCode = websocket.StatusInternalError
+		}
+		reason := "internal error"
+		if ev.err != nil {
+			reason = ev.err.Error()
+		}
+		s.closeWithReason(closeCode, reason)
+	}
+}
+
+// handleCloseEvent 处理连接关闭事件。
+func (s *Session) handleCloseEvent(ev event) {
+	closeCode := ev.closeCode
+	if closeCode == 0 {
+		closeCode = websocket.StatusNormalClosure
+	}
+	s.closeWithReason(closeCode, ev.text)
+}
+
+// closeWithReason 执行会话资源清理并安全关闭底层连接。
+func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.state = StateClosed
+
+		if s.helloTimer != nil {
+			s.helloTimer.Stop()
+			s.helloTimer = nil
+		}
+		if s.listeningTimer != nil {
+			s.listeningTimer.Stop()
+			s.listeningTimer = nil
+		}
+
+		if s.turnCancel != nil {
+			s.turnCancel()
+			s.turnCancel = nil
+		}
+		s.mu.Unlock()
+
+		if s.writer != nil {
+			_ = s.writer.Close()
+		}
+
+		if s.conn != nil {
+			if code == 0 {
+				code = websocket.StatusNormalClosure
+			}
+			_ = s.conn.Close(code, reason)
+		}
+
+		if s.cancel != nil {
+			s.cancel()
+		}
+	})
+}
+
+// readLoop 单专属 goroutine 循环读取客户端文本与二进制消息。
+func (s *Session) readLoop() {
+	defer func() {
+		s.postEvent(event{
+			kind:      eventKindClose,
+			closeCode: websocket.StatusNormalClosure,
+			text:      "client disconnected",
+		})
+	}()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+
+		msgType, data, err := s.conn.Read(s.ctx)
+		if err != nil {
+			var closeErr websocket.CloseError
+			if errors.As(err, &closeErr) {
+				s.logger.Info("websocket session disconnected by client",
+					"session_id", s.SessionID(),
+					"status_code", closeErr.Code,
+					"reason", closeErr.Reason,
+				)
+			} else if !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
+				s.logger.Warn("websocket read error",
+					"session_id", s.SessionID(),
+					"error", err,
+				)
+			}
+			return
+		}
+
+		currentState := s.State()
+		if currentState == StateConnected {
+			if msgType == websocket.MessageBinary {
+				s.postEvent(event{
+					kind:     eventKindClientHello,
+					isBinary: true,
+				})
+			} else {
+				s.postEvent(event{
+					kind:     eventKindClientHello,
+					rawBytes: data,
+					isBinary: false,
+				})
+			}
+			continue
+		}
+
+		if msgType == websocket.MessageBinary {
+			s.postEvent(event{
+				kind:      eventKindClientAudio,
+				audioData: data,
+				isBinary:  true,
+			})
+			continue
+		}
+
+		clientMsg, err := ParseClientMessage(data)
+		if err != nil {
+			s.logger.Warn("failed to parse client text message",
+				"error", err,
+				"session_id", s.SessionID(),
+			)
+			s.postEvent(event{
+				kind:      eventKindError,
+				err:       err,
+				fatal:     true,
+				closeCode: websocket.StatusPolicyViolation,
+			})
+			return
+		}
+
+		s.postEvent(event{
+			kind:      eventKindClientText,
+			clientMsg: clientMsg,
+		})
+	}
+}
+
+// startHelloTimer 启动 hello 握手超时定时器。
+func (s *Session) startHelloTimer() {
+	dur := DefaultHelloTimeout
+	if s.cfg != nil && s.cfg.Session.HelloTimeout > 0 {
+		dur = s.cfg.Session.HelloTimeout
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == StateClosed {
+		return
+	}
+	s.helloTimer = time.AfterFunc(dur, func() {
+		s.postEvent(event{
+			kind: eventKindTimeout,
+			text: "hello handshake timeout",
+		})
+	})
+}
+
+// stopHelloTimer 停止 hello 握手超时定时器。
+func (s *Session) stopHelloTimer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.helloTimer != nil {
+		s.helloTimer.Stop()
+		s.helloTimer = nil
+	}
+}
+
+// startListeningTimer 启动单次收音最大时限定时器。
+func (s *Session) startListeningTimer(gen uint64) {
+	dur := DefaultMaxListeningDuration
+	if s.cfg != nil && s.cfg.Session.MaxListeningDuration > 0 {
+		dur = s.cfg.Session.MaxListeningDuration
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == StateClosed {
+		return
+	}
+	if s.listeningTimer != nil {
+		s.listeningTimer.Stop()
+	}
+	s.listeningTimer = time.AfterFunc(dur, func() {
+		s.postEvent(event{
+			kind:       eventKindTimeout,
+			generation: gen,
+			text:       "max listening duration exceeded",
+		})
+	})
+}
+
+// stopListeningTimer 停止单次收音最大时限定时器。
+func (s *Session) stopListeningTimer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listeningTimer != nil {
+		s.listeningTimer.Stop()
+		s.listeningTimer = nil
+	}
+}
+
+// sendTextMessage 向写队列发送文本消息。
+func (s *Session) sendTextMessage(payload []byte) error {
+	if s.writer == nil {
+		return nil
+	}
+	return s.writer.SendText(s.ctx, payload)
+}
+
+// truncatedDeviceID 获取截断后的设备标识用于日志记录。
+func (s *Session) truncatedDeviceID() string {
+	if s.clientInfo == nil {
+		return ""
+	}
+	return logger.TruncateString(s.clientInfo.DeviceID)
+}
+
+// truncatedClientID 获取截断后的客户端标识用于日志记录。
+func (s *Session) truncatedClientID() string {
+	if s.clientInfo == nil {
+		return ""
+	}
+	return logger.TruncateString(s.clientInfo.ClientID)
+}
+
+// truncatedSerialNumber 获取截断后的序列号用于日志记录。
+func (s *Session) truncatedSerialNumber() string {
+	if s.clientInfo == nil {
+		return ""
+	}
+	return logger.TruncateString(s.clientInfo.SerialNumber)
+}
+
+// logDiag 限频记录诊断日志。
+func (s *Session) logDiag(msg string, args ...any) {
+	if s.diagLimiter != nil && !s.diagLimiter.Allow() {
+		return
+	}
+	allArgs := append([]any{"session_id", s.SessionID(), "device_id", s.truncatedDeviceID()}, args...)
+	s.logger.Warn(msg, allArgs...)
+}

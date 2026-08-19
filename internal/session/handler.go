@@ -2,11 +2,8 @@ package session
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/coder/websocket"
 
@@ -109,7 +106,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"active_sessions", h.limiter.ActiveCount(),
 	)
 
-	// 5. 保持连接并处理消息生命周期，直至客户端断开或上下文取消
+	// 5. 移交会话监督流程处理状态机生命周期，直至客户端断开或上下文取消
 	h.serveConn(r.Context(), conn, clientInfo)
 
 	h.logger.Info("websocket session closed",
@@ -119,179 +116,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-// serveConn 处理已建立连接的 hello 握手与消息循环生命周期。
+// serveConn 创建并运行会话状态机。
 func (h *Handler) serveConn(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInfo) {
-	helloTimeout := DefaultHelloTimeout
-	maxWSTextBytes := int64(DefaultMaxWSTextMessageBytes)
-	if h.cfg != nil {
-		if h.cfg.Session.HelloTimeout > 0 {
-			helloTimeout = h.cfg.Session.HelloTimeout
-		}
-		if h.cfg.Session.MaxWSTextMessageBytes > 0 {
-			maxWSTextBytes = h.cfg.Session.MaxWSTextMessageBytes
-		}
-	}
-	conn.SetReadLimit(maxWSTextBytes)
-
-	sessionID, err := h.handleHelloHandshake(ctx, conn, info, helloTimeout)
-	if err != nil {
-		return
-	}
-
-	// 握手成功后进入正常会话消息循环
-	for {
-		msgType, data, err := conn.Read(ctx)
-		if err != nil {
-			var closeErr websocket.CloseError
-			if errors.As(err, &closeErr) {
-				h.logger.Info("websocket session disconnected by client",
-					"session_id", sessionID,
-					"status_code", closeErr.Code,
-					"reason", closeErr.Reason,
-				)
-				return
-			}
-			if !errors.Is(err, context.Canceled) {
-				h.logger.Warn("websocket read error",
-					"session_id", sessionID,
-					"error", err,
-				)
-			}
-			return
-		}
-
-		if msgType == websocket.MessageText {
-			var header genericMessageHeader
-			if err := json.Unmarshal(data, &header); err == nil {
-				if header.Type == MessageTypeHello {
-					h.logger.Warn("duplicate hello received after handshake",
-						"session_id", sessionID,
-						"device_id", logger.TruncateString(info.DeviceID),
-					)
-					_ = conn.Close(websocket.StatusPolicyViolation, ErrDuplicateHello.Error())
-					return
-				}
-			}
-		}
-	}
-}
-
-// handleHelloHandshake 执行客户端 hello 首包读取、严格字段校验与服务端 hello 响应下发。
-func (h *Handler) handleHelloHandshake(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInfo, timeout time.Duration) (string, error) {
-	// 启动 hello 超时定时器，超时未收到首包则以 StatusPolicyViolation 主动关闭连接
-	timer := time.AfterFunc(timeout, func() {
-		h.logger.Warn("hello handshake timeout",
-			"device_id", logger.TruncateString(info.DeviceID),
-			"client_id", logger.TruncateString(info.ClientID),
-			"serial_number", logger.TruncateString(info.SerialNumber),
-			"timeout", timeout,
-		)
-		_ = conn.Close(websocket.StatusPolicyViolation, "hello handshake timeout")
-	})
-	defer timer.Stop()
-
-	msgType, data, err := conn.Read(ctx)
-	if err != nil {
-		var closeErr websocket.CloseError
-		if errors.As(err, &closeErr) {
-			h.logger.Warn("websocket closed during hello handshake",
-				"status_code", closeErr.Code,
-				"reason", closeErr.Reason,
-				"device_id", logger.TruncateString(info.DeviceID),
-				"client_id", logger.TruncateString(info.ClientID),
-				"serial_number", logger.TruncateString(info.SerialNumber),
-			)
-			return "", err
-		}
-
-		h.logger.Warn("failed to read hello message",
-			"error", err,
-			"device_id", logger.TruncateString(info.DeviceID),
-			"client_id", logger.TruncateString(info.ClientID),
-			"serial_number", logger.TruncateString(info.SerialNumber),
-		)
-		_ = conn.Close(websocket.StatusPolicyViolation, "failed to read hello")
-		return "", err
-	}
-
-	// 1. 首包必须为文本消息
-	if msgType != websocket.MessageText {
-		h.logger.Warn("first message is not text hello",
-			"message_type", msgType.String(),
-			"device_id", logger.TruncateString(info.DeviceID),
-			"client_id", logger.TruncateString(info.ClientID),
-			"serial_number", logger.TruncateString(info.SerialNumber),
-		)
-		_ = conn.Close(websocket.StatusUnsupportedData, "first message must be text hello")
-		return "", ErrBinaryFirstMessage
-	}
-
-	// 2. 解析 JSON
-	var clientHello ClientHelloMessage
-	if err := json.Unmarshal(data, &clientHello); err != nil {
-		h.logger.Warn("invalid json in hello message",
-			"error", err,
-			"device_id", logger.TruncateString(info.DeviceID),
-			"client_id", logger.TruncateString(info.ClientID),
-			"serial_number", logger.TruncateString(info.SerialNumber),
-		)
-		_ = conn.Close(websocket.StatusPolicyViolation, "invalid json in hello message")
-		return "", err
-	}
-
-	// 3. 严格校验客户端 hello 各字段
-	if err := ValidateClientHello(&clientHello); err != nil {
-		h.logger.Warn("invalid hello message fields",
-			"error", err,
-			"device_id", logger.TruncateString(info.DeviceID),
-			"client_id", logger.TruncateString(info.ClientID),
-			"serial_number", logger.TruncateString(info.SerialNumber),
-		)
-		_ = conn.Close(websocket.StatusPolicyViolation, err.Error())
-		return "", err
-	}
-
-	// 4. 生成加密安全的会话 ID
-	sessionID, err := GenerateSessionID()
-	if err != nil {
-		h.logger.Error("failed to generate session id",
-			"error", err,
-			"device_id", logger.TruncateString(info.DeviceID),
-			"client_id", logger.TruncateString(info.ClientID),
-			"serial_number", logger.TruncateString(info.SerialNumber),
-		)
-		_ = conn.Close(websocket.StatusInternalError, "internal server error")
-		return "", err
-	}
-
-	// 5. 下发服务端 hello 响应
-	respBytes, err := EncodeServerHelloMessage(sessionID)
-	if err != nil {
-		h.logger.Error("failed to encode server hello",
-			"error", err,
-			"session_id", sessionID,
-		)
-		_ = conn.Close(websocket.StatusInternalError, "internal server error")
-		return "", err
-	}
-
-	if err := conn.Write(ctx, websocket.MessageText, respBytes); err != nil {
-		h.logger.Warn("failed to write server hello",
-			"error", err,
-			"session_id", sessionID,
-			"device_id", logger.TruncateString(info.DeviceID),
-			"client_id", logger.TruncateString(info.ClientID),
-			"serial_number", logger.TruncateString(info.SerialNumber),
-		)
-		return "", err
-	}
-
-	h.logger.Info("websocket hello handshake succeeded",
-		"session_id", sessionID,
-		"device_id", logger.TruncateString(info.DeviceID),
-		"client_id", logger.TruncateString(info.ClientID),
-		"serial_number", logger.TruncateString(info.SerialNumber),
-	)
-
-	return sessionID, nil
+	sess := NewSession(ctx, conn, info, h.cfg, h.logger)
+	_ = sess.Run()
 }
