@@ -53,7 +53,59 @@ proxy:
   url: ""
 `
 
+func newValidConfig() config.Config {
+	return config.Config{
+		Server: config.ServerConfig{
+			ListenAddr:            ":8080",
+			WebSocketURL:          "wss://example.com/xiaozhi/v1/",
+			MaxConcurrentSessions: 10,
+			ShutdownTimeout:       10 * time.Second,
+			HTTPReadTimeout:       15 * time.Second,
+			HTTPWriteTimeout:      30 * time.Second,
+			HTTPIdleTimeout:       60 * time.Second,
+			MaxHTTPBodyBytes:      65536,
+			MaxHTTPHeaderBytes:    1024,
+		},
+		Session: config.SessionConfig{
+			HelloTimeout:              10 * time.Second,
+			MaxWSTextMessageBytes:     32768,
+			MaxOpusPacketBytes:        1024,
+			MaxListeningDuration:      30 * time.Second,
+			ASRPCMQueueCapacity:       100,
+			TTSPCMQueueCapacity:       100,
+			DownlinkOpusQueueCapacity: 100,
+			MaxHistoryTurns:           6,
+			SystemPrompt:              "你是小智，一个智能语音助手。请用简明、友好的中文回答，回答适合直接语音朗读。",
+		},
+		AI: config.AIConfig{
+			Bailian: config.BailianConfig{
+				WSEndpoint:           "wss://llm-hi9nns9y8jekpmpt.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+				LLMEndpoint:          "https://llm-hi9nns9y8jekpmpt.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+				ASRModel:             "qwen-audio-3.0-asr-flash-streaming",
+				LLMModel:             "qwen3.7-flash",
+				TTSModel:             "qwen-audio-3.0-tts-flash",
+				TTSVoice:             "longanlingxi",
+				ASRConnectTimeout:    10 * time.Second,
+				TTSConnectTimeout:    10 * time.Second,
+				LLMFirstTokenTimeout: 15 * time.Second,
+				LLMOverallTimeout:    60 * time.Second,
+				TTSFirstAudioTimeout: 10 * time.Second,
+				TTSSentenceTimeout:   15 * time.Second,
+			},
+		},
+		Proxy: config.ProxyConfig{
+			Enabled: false,
+			URL:     "",
+		},
+		DashScopeAPIKey:   "test-dashscope-api-key",
+		DeviceSharedToken: "test-device-shared-token",
+	}
+}
+
 func TestLoadFromReader_Valid(t *testing.T) {
+	t.Setenv(config.EnvDashScopeAPIKey, "test-dashscope-api-key")
+	t.Setenv(config.EnvDeviceSharedToken, "test-device-shared-token")
+
 	cfg, err := config.LoadFromReader(strings.NewReader(validYAML))
 	if err != nil {
 		t.Fatalf("unexpected error loading valid yaml: %v", err)
@@ -158,9 +210,18 @@ func TestLoadFromReader_Valid(t *testing.T) {
 	if cfg.Proxy.URL != "" {
 		t.Errorf("expected Proxy.URL to be empty, got %s", cfg.Proxy.URL)
 	}
+	if cfg.DashScopeAPIKey != "test-dashscope-api-key" {
+		t.Errorf("expected DashScopeAPIKey match, got %s", cfg.DashScopeAPIKey)
+	}
+	if cfg.DeviceSharedToken != "test-device-shared-token" {
+		t.Errorf("expected DeviceSharedToken match, got %s", cfg.DeviceSharedToken)
+	}
 }
 
 func TestLoad_ExampleConfigFile(t *testing.T) {
+	t.Setenv(config.EnvDashScopeAPIKey, "test-dashscope-api-key")
+	t.Setenv(config.EnvDeviceSharedToken, "test-device-shared-token")
+
 	examplePath := filepath.Join("..", "..", "config.example.yaml")
 	cfg, err := config.Load(examplePath)
 	if err != nil {
@@ -190,25 +251,16 @@ server:
 	}
 }
 
-func TestLoadFromReader_EnvironmentVariables(t *testing.T) {
-	const (
-		mockAPIKey = "mock-dashscope-key-12345"
-		mockToken  = "mock-device-token-67890"
-	)
+func TestLoadFromReader_MissingCredentials(t *testing.T) {
+	t.Setenv(config.EnvDashScopeAPIKey, "")
+	t.Setenv(config.EnvDeviceSharedToken, "")
 
-	t.Setenv(config.EnvDashScopeAPIKey, mockAPIKey)
-	t.Setenv(config.EnvDeviceSharedToken, mockToken)
-
-	cfg, err := config.LoadFromReader(strings.NewReader(validYAML))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	_, err := config.LoadFromReader(strings.NewReader(validYAML))
+	if err == nil {
+		t.Fatalf("expected error when credentials missing, got nil")
 	}
-
-	if cfg.DashScopeAPIKey != mockAPIKey {
-		t.Errorf("expected DashScopeAPIKey %s, got %s", mockAPIKey, cfg.DashScopeAPIKey)
-	}
-	if cfg.DeviceSharedToken != mockToken {
-		t.Errorf("expected DeviceSharedToken %s, got %s", mockToken, cfg.DeviceSharedToken)
+	if !strings.Contains(err.Error(), "dashscope api key is required") {
+		t.Errorf("expected error message to mention missing dashscope api key, got %v", err)
 	}
 }
 
@@ -217,5 +269,601 @@ func TestLoad_FileNotFound(t *testing.T) {
 	_, err := config.Load(nonExistentPath)
 	if err == nil {
 		t.Fatalf("expected error loading non existent file, got nil")
+	}
+}
+
+func TestConfig_Validate_TableDriven(t *testing.T) {
+	tests := []struct {
+		name        string
+		modify      func(c *config.Config)
+		expectError string
+	}{
+		// 标准成功路径
+		{
+			name:        "valid configuration",
+			modify:      func(c *config.Config) {},
+			expectError: "",
+		},
+		{
+			name: "proxy enabled with valid http url",
+			modify: func(c *config.Config) {
+				c.Proxy.Enabled = true
+				c.Proxy.URL = "http://127.0.0.1:1080"
+			},
+			expectError: "",
+		},
+		{
+			name: "proxy enabled with valid socks5 url",
+			modify: func(c *config.Config) {
+				c.Proxy.Enabled = true
+				c.Proxy.URL = "socks5://127.0.0.1:1080"
+			},
+			expectError: "",
+		},
+		{
+			name: "proxy enabled with valid socks5h url",
+			modify: func(c *config.Config) {
+				c.Proxy.Enabled = true
+				c.Proxy.URL = "socks5h://127.0.0.1:1080"
+			},
+			expectError: "",
+		},
+		{
+			name: "proxy disabled with valid url",
+			modify: func(c *config.Config) {
+				c.Proxy.Enabled = false
+				c.Proxy.URL = "http://127.0.0.1:1080"
+			},
+			expectError: "",
+		},
+
+		// 1. 必填项缺失
+		{
+			name: "server listen_addr empty",
+			modify: func(c *config.Config) {
+				c.Server.ListenAddr = ""
+			},
+			expectError: "listen_addr is required",
+		},
+		{
+			name: "server listen_addr whitespace only",
+			modify: func(c *config.Config) {
+				c.Server.ListenAddr = "   "
+			},
+			expectError: "listen_addr is required",
+		},
+		{
+			name: "server websocket_url empty",
+			modify: func(c *config.Config) {
+				c.Server.WebSocketURL = ""
+			},
+			expectError: "url is required",
+		},
+		{
+			name: "session system_prompt empty",
+			modify: func(c *config.Config) {
+				c.Session.SystemPrompt = ""
+			},
+			expectError: "system_prompt is required",
+		},
+		{
+			name: "bailian ws_endpoint empty",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.WSEndpoint = ""
+			},
+			expectError: "url is required",
+		},
+		{
+			name: "bailian llm_endpoint empty",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.LLMEndpoint = ""
+			},
+			expectError: "url is required",
+		},
+		{
+			name: "bailian asr_model empty",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.ASRModel = ""
+			},
+			expectError: "asr_model is required",
+		},
+		{
+			name: "bailian llm_model empty",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.LLMModel = ""
+			},
+			expectError: "llm_model is required",
+		},
+		{
+			name: "bailian tts_model empty",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.TTSModel = ""
+			},
+			expectError: "tts_model is required",
+		},
+		{
+			name: "bailian tts_voice empty",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.TTSVoice = ""
+			},
+			expectError: "tts_voice is required",
+		},
+		{
+			name: "proxy enabled but url empty",
+			modify: func(c *config.Config) {
+				c.Proxy.Enabled = true
+				c.Proxy.URL = ""
+			},
+			expectError: "url is required when proxy is enabled",
+		},
+		{
+			name: "credentials dashscope api key empty",
+			modify: func(c *config.Config) {
+				c.DashScopeAPIKey = ""
+			},
+			expectError: "dashscope api key is required",
+		},
+		{
+			name: "credentials dashscope api key whitespace only",
+			modify: func(c *config.Config) {
+				c.DashScopeAPIKey = "   "
+			},
+			expectError: "dashscope api key is required",
+		},
+		{
+			name: "credentials device shared token empty",
+			modify: func(c *config.Config) {
+				c.DeviceSharedToken = ""
+			},
+			expectError: "device shared token is required",
+		},
+		{
+			name: "credentials device shared token whitespace only",
+			modify: func(c *config.Config) {
+				c.DeviceSharedToken = "   "
+			},
+			expectError: "device shared token is required",
+		},
+
+		// 2. 非法 URL 格式与 Scheme 校验
+		{
+			name: "server websocket_url invalid scheme http",
+			modify: func(c *config.Config) {
+				c.Server.WebSocketURL = "http://example.com/xiaozhi/v1/"
+			},
+			expectError: "scheme must be ws or wss",
+		},
+		{
+			name: "server websocket_url missing host",
+			modify: func(c *config.Config) {
+				c.Server.WebSocketURL = "wss://"
+			},
+			expectError: "url host is required",
+		},
+		{
+			name: "bailian ws_endpoint invalid scheme https",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.WSEndpoint = "https://llm.aliyun.com/ws"
+			},
+			expectError: "scheme must be ws or wss",
+		},
+		{
+			name: "bailian ws_endpoint missing host",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.WSEndpoint = "ws://"
+			},
+			expectError: "url host is required",
+		},
+		{
+			name: "bailian llm_endpoint invalid scheme wss",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.LLMEndpoint = "wss://llm.aliyun.com/compatible-mode/v1"
+			},
+			expectError: "scheme must be http or https",
+		},
+		{
+			name: "bailian llm_endpoint missing host",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.LLMEndpoint = "https://"
+			},
+			expectError: "url host is required",
+		},
+		{
+			name: "proxy enabled with invalid scheme ftp",
+			modify: func(c *config.Config) {
+				c.Proxy.Enabled = true
+				c.Proxy.URL = "ftp://127.0.0.1:21"
+			},
+			expectError: "scheme must be http, https, socks5, or socks5h",
+		},
+		{
+			name: "proxy enabled with missing host",
+			modify: func(c *config.Config) {
+				c.Proxy.Enabled = true
+				c.Proxy.URL = "http://"
+			},
+			expectError: "url host is required",
+		},
+		{
+			name: "proxy disabled with invalid scheme",
+			modify: func(c *config.Config) {
+				c.Proxy.Enabled = false
+				c.Proxy.URL = "ftp://127.0.0.1:21"
+			},
+			expectError: "scheme must be http, https, socks5, or socks5h",
+		},
+
+		// 3. 非正数与合法区间边界校验
+		// ServerConfig
+		{
+			name: "server max_concurrent_sessions zero",
+			modify: func(c *config.Config) {
+				c.Server.MaxConcurrentSessions = 0
+			},
+			expectError: "max_concurrent_sessions must be between 1 and 10000",
+		},
+		{
+			name: "server max_concurrent_sessions negative",
+			modify: func(c *config.Config) {
+				c.Server.MaxConcurrentSessions = -5
+			},
+			expectError: "max_concurrent_sessions must be between 1 and 10000",
+		},
+		{
+			name: "server max_concurrent_sessions above max",
+			modify: func(c *config.Config) {
+				c.Server.MaxConcurrentSessions = 10001
+			},
+			expectError: "max_concurrent_sessions must be between 1 and 10000",
+		},
+		{
+			name: "server shutdown_timeout below min",
+			modify: func(c *config.Config) {
+				c.Server.ShutdownTimeout = 500 * time.Millisecond
+			},
+			expectError: "shutdown_timeout must be between 1s and 1m0s",
+		},
+		{
+			name: "server shutdown_timeout above max",
+			modify: func(c *config.Config) {
+				c.Server.ShutdownTimeout = 61 * time.Second
+			},
+			expectError: "shutdown_timeout must be between 1s and 1m0s",
+		},
+		{
+			name: "server http_read_timeout below min",
+			modify: func(c *config.Config) {
+				c.Server.HTTPReadTimeout = 4 * time.Second
+			},
+			expectError: "http_read_timeout must be between 5s and 1m0s",
+		},
+		{
+			name: "server http_read_timeout above max",
+			modify: func(c *config.Config) {
+				c.Server.HTTPReadTimeout = 61 * time.Second
+			},
+			expectError: "http_read_timeout must be between 5s and 1m0s",
+		},
+		{
+			name: "server http_write_timeout below min",
+			modify: func(c *config.Config) {
+				c.Server.HTTPWriteTimeout = 4 * time.Second
+			},
+			expectError: "http_write_timeout must be between 5s and 1m0s",
+		},
+		{
+			name: "server http_write_timeout above max",
+			modify: func(c *config.Config) {
+				c.Server.HTTPWriteTimeout = 61 * time.Second
+			},
+			expectError: "http_write_timeout must be between 5s and 1m0s",
+		},
+		{
+			name: "server http_idle_timeout below min",
+			modify: func(c *config.Config) {
+				c.Server.HTTPIdleTimeout = 9 * time.Second
+			},
+			expectError: "http_idle_timeout must be between 10s and 5m0s",
+		},
+		{
+			name: "server http_idle_timeout above max",
+			modify: func(c *config.Config) {
+				c.Server.HTTPIdleTimeout = 301 * time.Second
+			},
+			expectError: "http_idle_timeout must be between 10s and 5m0s",
+		},
+		{
+			name: "server max_http_body_bytes below min",
+			modify: func(c *config.Config) {
+				c.Server.MaxHTTPBodyBytes = 1023
+			},
+			expectError: "max_http_body_bytes must be between 1024 and 10485760",
+		},
+		{
+			name: "server max_http_body_bytes above max",
+			modify: func(c *config.Config) {
+				c.Server.MaxHTTPBodyBytes = 10485761
+			},
+			expectError: "max_http_body_bytes must be between 1024 and 10485760",
+		},
+		{
+			name: "server max_http_header_bytes below min",
+			modify: func(c *config.Config) {
+				c.Server.MaxHTTPHeaderBytes = 127
+			},
+			expectError: "max_http_header_bytes must be between 128 and 8192",
+		},
+		{
+			name: "server max_http_header_bytes above max",
+			modify: func(c *config.Config) {
+				c.Server.MaxHTTPHeaderBytes = 8193
+			},
+			expectError: "max_http_header_bytes must be between 128 and 8192",
+		},
+
+		// SessionConfig
+		{
+			name: "session hello_timeout below min",
+			modify: func(c *config.Config) {
+				c.Session.HelloTimeout = 2 * time.Second
+			},
+			expectError: "hello_timeout must be between 3s and 30s",
+		},
+		{
+			name: "session hello_timeout above max",
+			modify: func(c *config.Config) {
+				c.Session.HelloTimeout = 31 * time.Second
+			},
+			expectError: "hello_timeout must be between 3s and 30s",
+		},
+		{
+			name: "session max_ws_text_message_bytes below min",
+			modify: func(c *config.Config) {
+				c.Session.MaxWSTextMessageBytes = 4095
+			},
+			expectError: "max_ws_text_message_bytes must be between 4096 and 524288",
+		},
+		{
+			name: "session max_ws_text_message_bytes above max",
+			modify: func(c *config.Config) {
+				c.Session.MaxWSTextMessageBytes = 524289
+			},
+			expectError: "max_ws_text_message_bytes must be between 4096 and 524288",
+		},
+		{
+			name: "session max_opus_packet_bytes below min",
+			modify: func(c *config.Config) {
+				c.Session.MaxOpusPacketBytes = 127
+			},
+			expectError: "max_opus_packet_bytes must be between 128 and 4096",
+		},
+		{
+			name: "session max_opus_packet_bytes above max",
+			modify: func(c *config.Config) {
+				c.Session.MaxOpusPacketBytes = 4097
+			},
+			expectError: "max_opus_packet_bytes must be between 128 and 4096",
+		},
+		{
+			name: "session max_listening_duration below min",
+			modify: func(c *config.Config) {
+				c.Session.MaxListeningDuration = 4 * time.Second
+			},
+			expectError: "max_listening_duration must be between 5s and 2m0s",
+		},
+		{
+			name: "session max_listening_duration above max",
+			modify: func(c *config.Config) {
+				c.Session.MaxListeningDuration = 121 * time.Second
+			},
+			expectError: "max_listening_duration must be between 5s and 2m0s",
+		},
+		{
+			name: "session asr_pcm_queue_capacity below min",
+			modify: func(c *config.Config) {
+				c.Session.ASRPCMQueueCapacity = 19
+			},
+			expectError: "asr_pcm_queue_capacity must be between 20 and 500",
+		},
+		{
+			name: "session asr_pcm_queue_capacity above max",
+			modify: func(c *config.Config) {
+				c.Session.ASRPCMQueueCapacity = 501
+			},
+			expectError: "asr_pcm_queue_capacity must be between 20 and 500",
+		},
+		{
+			name: "session tts_pcm_queue_capacity below min",
+			modify: func(c *config.Config) {
+				c.Session.TTSPCMQueueCapacity = 19
+			},
+			expectError: "tts_pcm_queue_capacity must be between 20 and 500",
+		},
+		{
+			name: "session tts_pcm_queue_capacity above max",
+			modify: func(c *config.Config) {
+				c.Session.TTSPCMQueueCapacity = 501
+			},
+			expectError: "tts_pcm_queue_capacity must be between 20 and 500",
+		},
+		{
+			name: "session downlink_opus_queue_capacity below min",
+			modify: func(c *config.Config) {
+				c.Session.DownlinkOpusQueueCapacity = 19
+			},
+			expectError: "downlink_opus_queue_capacity must be between 20 and 500",
+		},
+		{
+			name: "session downlink_opus_queue_capacity above max",
+			modify: func(c *config.Config) {
+				c.Session.DownlinkOpusQueueCapacity = 501
+			},
+			expectError: "downlink_opus_queue_capacity must be between 20 and 500",
+		},
+		{
+			name: "session max_history_turns below min",
+			modify: func(c *config.Config) {
+				c.Session.MaxHistoryTurns = 0
+			},
+			expectError: "max_history_turns must be between 1 and 50",
+		},
+		{
+			name: "session max_history_turns above max",
+			modify: func(c *config.Config) {
+				c.Session.MaxHistoryTurns = 51
+			},
+			expectError: "max_history_turns must be between 1 and 50",
+		},
+
+		// BailianConfig
+		{
+			name: "bailian asr_connect_timeout below min",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.ASRConnectTimeout = 2 * time.Second
+			},
+			expectError: "asr_connect_timeout must be between 3s and 30s",
+		},
+		{
+			name: "bailian asr_connect_timeout above max",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.ASRConnectTimeout = 31 * time.Second
+			},
+			expectError: "asr_connect_timeout must be between 3s and 30s",
+		},
+		{
+			name: "bailian tts_connect_timeout below min",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.TTSConnectTimeout = 2 * time.Second
+			},
+			expectError: "tts_connect_timeout must be between 3s and 30s",
+		},
+		{
+			name: "bailian tts_connect_timeout above max",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.TTSConnectTimeout = 31 * time.Second
+			},
+			expectError: "tts_connect_timeout must be between 3s and 30s",
+		},
+		{
+			name: "bailian llm_first_token_timeout below min",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.LLMFirstTokenTimeout = 2 * time.Second
+			},
+			expectError: "llm_first_token_timeout must be between 3s and 30s",
+		},
+		{
+			name: "bailian llm_first_token_timeout above max",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.LLMFirstTokenTimeout = 31 * time.Second
+			},
+			expectError: "llm_first_token_timeout must be between 3s and 30s",
+		},
+		{
+			name: "bailian llm_overall_timeout below min",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.LLMOverallTimeout = 9 * time.Second
+			},
+			expectError: "llm_overall_timeout must be between 10s and 3m0s",
+		},
+		{
+			name: "bailian llm_overall_timeout above max",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.LLMOverallTimeout = 181 * time.Second
+			},
+			expectError: "llm_overall_timeout must be between 10s and 3m0s",
+		},
+		{
+			name: "bailian tts_first_audio_timeout below min",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.TTSFirstAudioTimeout = 2 * time.Second
+			},
+			expectError: "tts_first_audio_timeout must be between 3s and 30s",
+		},
+		{
+			name: "bailian tts_first_audio_timeout above max",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.TTSFirstAudioTimeout = 31 * time.Second
+			},
+			expectError: "tts_first_audio_timeout must be between 3s and 30s",
+		},
+		{
+			name: "bailian tts_sentence_timeout below min",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.TTSSentenceTimeout = 4 * time.Second
+			},
+			expectError: "tts_sentence_timeout must be between 5s and 1m0s",
+		},
+		{
+			name: "bailian tts_sentence_timeout above max",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.TTSSentenceTimeout = 61 * time.Second
+			},
+			expectError: "tts_sentence_timeout must be between 5s and 1m0s",
+		},
+
+		// 4. 矛盾超时校验
+		{
+			name: "bailian conflicting timeout overall equals first token",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.LLMFirstTokenTimeout = 15 * time.Second
+				c.AI.Bailian.LLMOverallTimeout = 15 * time.Second
+			},
+			expectError: "llm_overall_timeout (15s) must be greater than llm_first_token_timeout (15s)",
+		},
+		{
+			name: "bailian conflicting timeout overall less than first token",
+			modify: func(c *config.Config) {
+				c.AI.Bailian.LLMFirstTokenTimeout = 20 * time.Second
+				c.AI.Bailian.LLMOverallTimeout = 15 * time.Second
+			},
+			expectError: "llm_overall_timeout (15s) must be greater than llm_first_token_timeout (20s)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := newValidConfig()
+			tt.modify(&cfg)
+
+			err := cfg.Validate()
+			if tt.expectError == "" {
+				if err != nil {
+					t.Fatalf("expected valid config, got error: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.expectError)
+				}
+				if !strings.Contains(err.Error(), tt.expectError) {
+					t.Fatalf("expected error containing %q, got %q", tt.expectError, err.Error())
+				}
+			}
+		})
+	}
+}
+
+func TestConfig_Validate_CredentialLeakSafety(t *testing.T) {
+	const (
+		sensitiveAPIKey = "super-secret-api-key-value-987654321"
+		sensitiveToken  = "super-secret-device-token-123456789"
+	)
+
+	cfg := newValidConfig()
+	cfg.DashScopeAPIKey = sensitiveAPIKey
+	cfg.DeviceSharedToken = sensitiveToken
+	// 触发某种校验失败
+	cfg.Server.ListenAddr = ""
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	errMsg := err.Error()
+	if strings.Contains(errMsg, sensitiveAPIKey) {
+		t.Fatalf("error message leaked sensitive api key: %s", errMsg)
+	}
+	if strings.Contains(errMsg, sensitiveToken) {
+		t.Fatalf("error message leaked sensitive token: %s", errMsg)
 	}
 }
