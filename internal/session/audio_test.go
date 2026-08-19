@@ -233,10 +233,7 @@ func TestSession_AudioInListening_DecodedAndEnqueued(t *testing.T) {
 	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
 	waitState(t, sess, StateListening, 2*time.Second)
 
-	stream := asrClient.LastStream()
-	if stream == nil {
-		t.Fatal("expected ASR stream to be created upon entering LISTENING")
-	}
+	stream := waitForStream(t, asrClient, 2*time.Second)
 
 	// 发送 3 帧合成的正弦波 Opus 数据
 	const frameCount = 3
@@ -341,10 +338,7 @@ func TestSession_AudioInListening_QueueFullBackpressure(t *testing.T) {
 	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
 	waitState(t, sess, StateListening, 2*time.Second)
 
-	stream := asrClient.LastStream()
-	if stream == nil {
-		t.Fatal("expected ASR stream to be created")
-	}
+	stream := waitForStream(t, asrClient, 2*time.Second)
 
 	// 阻塞 mock ASR 写入
 	stream.writeBlocked = make(chan struct{})
@@ -388,10 +382,7 @@ func TestSession_Abort_CleansUpASRStream(t *testing.T) {
 	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
 	waitState(t, sess, StateListening, 2*time.Second)
 
-	stream := asrClient.LastStream()
-	if stream == nil {
-		t.Fatal("expected ASR stream")
-	}
+	stream := waitForStream(t, asrClient, 2*time.Second)
 
 	// 触发 abort
 	sess.PostAbort("user aborted")
