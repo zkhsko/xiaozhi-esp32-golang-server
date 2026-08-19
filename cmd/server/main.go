@@ -9,10 +9,13 @@ import (
 	"syscall"
 
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/logger"
 	"xiaozhi-esp32-golang-server/internal/server"
 )
 
 func main() {
+	logger.InitDefault(os.Stdout, slog.LevelInfo)
+
 	configPath := flag.String("config", "config.yaml", "Path to YAML configuration file")
 	flag.Parse()
 
