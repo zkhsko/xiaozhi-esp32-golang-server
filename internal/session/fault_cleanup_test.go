@@ -296,6 +296,18 @@ func (c *faultASRClient) LastStream() *faultASRStream {
 }
 
 // waitASRStream 辅助函数：等待 ASR 流创建完成并安全返回。
+func waitTTSStart(t *testing.T, conn *faultWSConn, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if conn.HasTTSStart() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("expected tts.start to have been sent within %v", timeout)
+}
+
 func waitASRStream(t *testing.T, client *faultASRClient, timeout time.Duration) *faultASRStream {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -856,10 +868,7 @@ func TestFaultCleanup_TTSSynthesisErrorAfterStart(t *testing.T) {
 
 	// 等待会话先确定性地进入 SPEAKING 状态（已发送 tts.start）
 	waitState(t, sess, StateSpeaking, 2*time.Second)
-
-	if !conn.HasTTSStart() {
-		t.Fatalf("expected tts.start to have been sent before injecting next PCM error")
-	}
+	waitTTSStart(t, conn, 2*time.Second)
 
 	// 释放暂停，让 TTS 触发合成错误
 	close(pauseChan)
@@ -1071,10 +1080,7 @@ func TestFaultCleanup_ClientDisconnectInSpeakingState(t *testing.T) {
 
 	asrStream.resultChan <- "你好"
 	waitState(t, sess, StateSpeaking, 2*time.Second)
-
-	if !conn.HasTTSStart() {
-		t.Fatalf("expected tts.start to have been sent")
-	}
+	waitTTSStart(t, conn, 2*time.Second)
 
 	msgCountBeforeDisconnect := len(conn.Messages())
 
