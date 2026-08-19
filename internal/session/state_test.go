@@ -448,6 +448,7 @@ func TestStateMachine_AbortHandling(t *testing.T) {
 	tests := []struct {
 		name              string
 		setupState        func(s *Session)
+		targetState       State
 		initialGen        uint64
 		expectedFinalGen  uint64
 		expectTTSStopSent bool
@@ -466,6 +467,7 @@ func TestStateMachine_AbortHandling(t *testing.T) {
 			setupState: func(s *Session) {
 				s.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
 			},
+			targetState:       StateListening,
 			initialGen:        1,
 			expectedFinalGen:  2,
 			expectTTSStopSent: false,
@@ -476,6 +478,7 @@ func TestStateMachine_AbortHandling(t *testing.T) {
 				s.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
 				s.PostASRFinal(1, "test text")
 			},
+			targetState:       StateProcessing,
 			initialGen:        1,
 			expectedFinalGen:  2,
 			expectTTSStopSent: false,
@@ -487,6 +490,7 @@ func TestStateMachine_AbortHandling(t *testing.T) {
 				s.PostASRFinal(1, "test text")
 				s.PostTTSStarted(1)
 			},
+			targetState:       StateSpeaking,
 			initialGen:        1,
 			expectedFinalGen:  2,
 			expectTTSStopSent: true,
@@ -508,6 +512,9 @@ func TestStateMachine_AbortHandling(t *testing.T) {
 			waitState(t, sess, StateReady, 2*time.Second)
 
 			tt.setupState(sess)
+			if tt.targetState != 0 {
+				waitState(t, sess, tt.targetState, 2*time.Second)
+			}
 			waitGeneration(t, sess, tt.initialGen, 2*time.Second)
 
 			// 记录发送前消息数

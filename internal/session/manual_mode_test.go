@@ -492,7 +492,15 @@ func TestManualMode_MultiTurnLifeCycle(t *testing.T) {
 		sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeManual})
 		waitState(t, sess, StateListening, 2*time.Second)
 
-		stream := asrClient.LastStream()
+		var stream *mockSessionASRStream
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if asrClient.StreamCount() >= turn {
+				stream = asrClient.LastStream()
+				break
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
 		if stream == nil {
 			t.Fatalf("turn %d: expected ASR stream", turn)
 		}

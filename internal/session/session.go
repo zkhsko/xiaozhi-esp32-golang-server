@@ -397,6 +397,15 @@ func (s *Session) PostTimeout(generation uint64, reason string) bool {
 	})
 }
 
+// PostClose 投递连接关闭事件。
+func (s *Session) PostClose(code websocket.StatusCode, reason string) bool {
+	return s.postEvent(event{
+		kind:      eventKindClose,
+		closeCode: code,
+		text:      reason,
+	})
+}
+
 // Close 主动关闭会话。
 func (s *Session) Close() {
 	s.closeWithReason(websocket.StatusNormalClosure, "session closed")
@@ -993,6 +1002,15 @@ func (s *Session) handleTimeoutEvent(ev event) {
 			s.closeWithReason(websocket.StatusPolicyViolation, "max listening duration exceeded")
 		}
 		return
+	}
+
+	if ev.generation == s.Generation() || ev.generation == 0 {
+		s.logger.Warn("session timeout exceeded",
+			"session_id", s.SessionID(),
+			"generation", ev.generation,
+			"reason", logger.TruncateString(ev.text),
+		)
+		s.closeWithReason(websocket.StatusPolicyViolation, ev.text)
 	}
 }
 
