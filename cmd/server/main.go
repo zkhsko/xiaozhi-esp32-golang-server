@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"xiaozhi-esp32-golang-server/internal/ai/bailian"
 	"xiaozhi-esp32-golang-server/internal/bootstrap"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/logger"
@@ -46,11 +47,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	asrClient, err := bailian.NewASRClient(cfg)
+	if err != nil {
+		slog.Error("failed to initialize bailian asr client", "error", err)
+		os.Exit(1)
+	}
+
 	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 
 	mux := http.NewServeMux()
 	mux.Handle(bootstrap.OTAPath, bootstrap.NewHandler(cfg, slog.Default()))
-	mux.Handle(session.WebSocketPath, session.NewHandler(cfg, sessionLimiter, slog.Default()))
+	mux.Handle(session.WebSocketPath, session.NewHandler(cfg, sessionLimiter, asrClient, slog.Default()))
 
 	srv := server.New(cfg.Server, mux)
 

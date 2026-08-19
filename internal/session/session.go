@@ -11,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/logger"
 )
@@ -63,6 +64,7 @@ type Session struct {
 	conn        *websocket.Conn
 	clientInfo  *ClientHeaderInfo
 	cfg         *config.Config
+	asrClient   ai.ASRClient
 	logger      *slog.Logger
 	diagLimiter *logger.RateLimiter
 
@@ -88,7 +90,7 @@ type Session struct {
 }
 
 // NewSession 创建配置就绪的 WebSocket 会话对象。
-func NewSession(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInfo, cfg *config.Config, l *slog.Logger) *Session {
+func NewSession(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInfo, cfg *config.Config, asrClient ai.ASRClient, l *slog.Logger) *Session {
 	var w *Writer
 	if conn != nil {
 		queueCap := DefaultWriteQueueCapacity
@@ -97,11 +99,11 @@ func NewSession(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInf
 		}
 		w = NewWriter(ctx, conn, queueCap, l)
 	}
-	return NewSessionWithWriter(ctx, conn, w, info, cfg, l)
+	return NewSessionWithWriter(ctx, conn, w, info, cfg, asrClient, l)
 }
 
 // NewSessionWithWriter 创建指定串行写流程的 WebSocket 会话对象。
-func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Writer, info *ClientHeaderInfo, cfg *config.Config, l *slog.Logger) *Session {
+func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Writer, info *ClientHeaderInfo, cfg *config.Config, asrClient ai.ASRClient, l *slog.Logger) *Session {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -119,6 +121,7 @@ func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Wri
 		conn:        conn,
 		clientInfo:  info,
 		cfg:         cfg,
+		asrClient:   asrClient,
 		logger:      l,
 		diagLimiter: logger.NewDiagRateLimiter(),
 		writer:      writer,
@@ -129,6 +132,11 @@ func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Wri
 		state:       StateConnected,
 		mode:        ListenModeAuto,
 	}
+}
+
+// ASRClient 返回当前关联的 ASR 客户端。
+func (s *Session) ASRClient() ai.ASRClient {
+	return s.asrClient
 }
 
 // State 返回当前会话的状态。

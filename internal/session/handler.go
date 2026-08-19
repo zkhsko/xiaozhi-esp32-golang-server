@@ -7,19 +7,21 @@ import (
 
 	"github.com/coder/websocket"
 
+	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 // Handler 处理 WebSocket 协议升级、会话准入控制与连接生命周期。
 type Handler struct {
-	cfg     *config.Config
-	limiter *SessionLimiter
-	logger  *slog.Logger
+	cfg       *config.Config
+	limiter   *SessionLimiter
+	asrClient ai.ASRClient
+	logger    *slog.Logger
 }
 
 // NewHandler 创建配置就绪的 WebSocket HTTP 升级处理器。
-func NewHandler(cfg *config.Config, limiter *SessionLimiter, l *slog.Logger) *Handler {
+func NewHandler(cfg *config.Config, limiter *SessionLimiter, asrClient ai.ASRClient, l *slog.Logger) *Handler {
 	if l == nil {
 		l = slog.Default()
 	}
@@ -31,15 +33,21 @@ func NewHandler(cfg *config.Config, limiter *SessionLimiter, l *slog.Logger) *Ha
 		limiter = NewSessionLimiter(maxSessions)
 	}
 	return &Handler{
-		cfg:     cfg,
-		limiter: limiter,
-		logger:  l,
+		cfg:       cfg,
+		limiter:   limiter,
+		asrClient: asrClient,
+		logger:    l,
 	}
 }
 
 // Limiter 返回当前关联的会话准入控制器。
 func (h *Handler) Limiter() *SessionLimiter {
 	return h.limiter
+}
+
+// ASRClient 返回当前关联的 ASR 客户端。
+func (h *Handler) ASRClient() ai.ASRClient {
+	return h.asrClient
 }
 
 // ServeHTTP 校验 HTTP 认证并执行会话准入控制与 WebSocket 升级。
@@ -118,6 +126,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // serveConn 创建并运行会话状态机。
 func (h *Handler) serveConn(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInfo) {
-	sess := NewSession(ctx, conn, info, h.cfg, h.logger)
+	sess := NewSession(ctx, conn, info, h.cfg, h.asrClient, h.logger)
 	_ = sess.Run()
 }
