@@ -22,13 +22,17 @@ type mockSessionASRStream struct {
 	writeErr     error
 	writeBlocked chan struct{}
 	blockStarted chan struct{}
+	resultText   string
+	resultErr    error
+	resultReady  chan struct{}
 	finished     bool
 	closed       bool
 }
 
 func newMockSessionASRStream() *mockSessionASRStream {
 	return &mockSessionASRStream{
-		pcmFrames: make([][]byte, 0),
+		pcmFrames:   make([][]byte, 0),
+		resultReady: make(chan struct{}),
 	}
 }
 
@@ -71,14 +75,38 @@ func (m *mockSessionASRStream) Finish(ctx context.Context) error {
 	return nil
 }
 
+func (m *mockSessionASRStream) SetResult(text string, err error) {
+	m.mu.Lock()
+	m.resultText = text
+	m.resultErr = err
+	m.mu.Unlock()
+	select {
+	case <-m.resultReady:
+	default:
+		close(m.resultReady)
+	}
+}
+
 func (m *mockSessionASRStream) Result(ctx context.Context) (string, error) {
-	return "mock result", nil
+	select {
+	case <-m.resultReady:
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.resultText, m.resultErr
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
 }
 
 func (m *mockSessionASRStream) Close() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.closed = true
+	m.mu.Unlock()
+	select {
+	case <-m.resultReady:
+	default:
+		close(m.resultReady)
+	}
 	return nil
 }
 
@@ -100,6 +128,7 @@ type mockSessionASRClient struct {
 	createErr   error
 	lastStream  *mockSessionASRStream
 	streamCount int
+	streamHook  func(stream *mockSessionASRStream)
 }
 
 func newMockSessionASRClient() *mockSessionASRClient {
@@ -115,6 +144,9 @@ func (c *mockSessionASRClient) CreateStream(ctx context.Context) (ai.ASRStream, 
 	stream := newMockSessionASRStream()
 	c.lastStream = stream
 	c.streamCount++
+	if c.streamHook != nil {
+		c.streamHook(stream)
+	}
 	return stream, nil
 }
 
@@ -122,6 +154,12 @@ func (c *mockSessionASRClient) LastStream() *mockSessionASRStream {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lastStream
+}
+
+func (c *mockSessionASRClient) StreamCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.streamCount
 }
 
 // encodeSineOpusPacket 在内存中生成 16 kHz 60 ms 正弦波并编码为 Opus 包。

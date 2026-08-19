@@ -638,15 +638,39 @@ func (s *Session) handleASRFinalEvent(ev event) {
 	}
 
 	s.stopListeningTimer()
+	s.stopASR()
+
+	if ev.text == "" {
+		s.mu.Lock()
+		if s.turnCancel != nil {
+			s.turnCancel()
+			s.turnCancel = nil
+		}
+		s.state = StateReady
+		s.mu.Unlock()
+
+		s.logger.Info("empty asr result, session returned to ready state",
+			"session_id", s.SessionID(),
+			"generation", ev.generation,
+		)
+		return
+	}
 
 	sttBytes, err := EncodeSTTMessage(s.SessionID(), ev.text)
 	if err != nil {
 		s.logger.Error("failed to encode stt message",
 			"error", err,
 			"session_id", s.SessionID(),
+			"generation", ev.generation,
 		)
 	} else {
-		_ = s.sendTextMessage(sttBytes)
+		if err := s.sendTextMessage(sttBytes); err != nil {
+			s.logger.Warn("failed to send stt message",
+				"error", err,
+				"session_id", s.SessionID(),
+				"generation", ev.generation,
+			)
+		}
 	}
 
 	s.mu.Lock()
@@ -1096,6 +1120,36 @@ func (s *Session) startASRStream(gen uint64) {
 	s.asrStream = stream
 	s.asrQueue = audio.NewASRAudioQueue(turnCtx, stream, queueCap, s.logger)
 	s.mu.Unlock()
+
+	go s.readASRResult(turnCtx, stream, gen)
+}
+
+// readASRResult 在后台协程中等待 ASR 流式识别结果并投递至事件通道。
+func (s *Session) readASRResult(ctx context.Context, stream ai.ASRStream, gen uint64) {
+	text, err := stream.Result(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return
+		}
+		s.logger.Warn("asr recognition failed",
+			"error", err,
+			"session_id", s.SessionID(),
+			"generation", gen,
+		)
+		s.postEvent(event{
+			kind:       eventKindError,
+			generation: gen,
+			err:        err,
+			fatal:      true,
+		})
+		return
+	}
+
+	s.postEvent(event{
+		kind:       eventKindASRFinal,
+		generation: gen,
+		text:       text,
+	})
 }
 
 // stopASR 停止并清理当前轮次的 ASR 流与音频队列。
