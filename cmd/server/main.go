@@ -60,6 +60,13 @@ func main() {
 	}
 	_ = llmClient
 
+	ttsClient, err := bailian.NewTTSClient(cfg)
+	if err != nil {
+		slog.Error("failed to initialize bailian tts client", "error", err)
+		os.Exit(1)
+	}
+	_ = ttsClient
+
 	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 
 	mux := http.NewServeMux()
