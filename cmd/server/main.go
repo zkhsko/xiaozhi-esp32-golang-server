@@ -13,6 +13,7 @@ import (
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/logger"
 	"xiaozhi-esp32-golang-server/internal/server"
+	"xiaozhi-esp32-golang-server/internal/session"
 )
 
 func main() {
@@ -45,8 +46,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
+
 	mux := http.NewServeMux()
 	mux.Handle(bootstrap.OTAPath, bootstrap.NewHandler(cfg, slog.Default()))
+	mux.Handle(session.WebSocketPath, session.NewHandler(cfg, sessionLimiter, slog.Default()))
 
 	srv := server.New(cfg.Server, mux)
 
