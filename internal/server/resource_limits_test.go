@@ -168,6 +168,7 @@ func TestResourceLimits_MaxConcurrentSessions_503AndReuse(t *testing.T) {
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"limit-dev-3"},
 			"Client-Id":        []string{"client-limit-dev-3"},
+			"Serial-Number":    []string{"sn-limit-dev-3"},
 		},
 	}
 	_, resp, err := websocket.Dial(dialCtx, wsURL, dialOpts)
@@ -504,6 +505,7 @@ func TestResourceLimits_HighConcurrency_Stress_ZeroLeak(t *testing.T) {
 					"Protocol-Version": []string{"1"},
 					"Device-Id":        []string{devID},
 					"Client-Id":        []string{"client-" + devID},
+					"Serial-Number":    []string{"sn-" + devID},
 				},
 			}
 
@@ -666,6 +668,7 @@ func TestResourceLimits_HighConcurrency_InterleavedStressAndGracefulShutdown(t *
 					"Protocol-Version": []string{"1"},
 					"Device-Id":        []string{devID},
 					"Client-Id":        []string{"client-" + devID},
+					"Serial-Number":    []string{"sn-" + devID},
 				},
 			}
 

@@ -264,6 +264,7 @@ func TestE2E_MultiTurn_Dialogue_Success(t *testing.T) {
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"multiturn-device-001"},
 			"Client-Id":        []string{"client-001"},
+			"Serial-Number":    []string{"SN-multiturn-001"},
 		},
 	}
 
@@ -548,6 +549,7 @@ func TestE2E_ManualMode_FullLoop_Success(t *testing.T) {
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"manual-device-001"},
 			"Client-Id":        []string{"client-001"},
+			"Serial-Number":    []string{"SN-manual-001"},
 		},
 	}
 
@@ -775,6 +777,7 @@ func TestE2E_AudioDiscard_ReadyAndPostASR_Success(t *testing.T) {
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"discard-device-001"},
 			"Client-Id":        []string{"client-001"},
+			"Serial-Number":    []string{"SN-discard-001"},
 		},
 	}
 
@@ -1086,6 +1089,7 @@ func TestE2E_RealtimeMode_Rejected(t *testing.T) {
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"realtime-device-001"},
 			"Client-Id":        []string{"client-001"},
+			"Serial-Number":    []string{"SN-realtime-001"},
 		},
 	}
 

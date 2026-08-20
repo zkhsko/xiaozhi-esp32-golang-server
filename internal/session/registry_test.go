@@ -44,7 +44,7 @@ func TestRegistry_BasicLifecycle(t *testing.T) {
 
 	// 2. 会话注册
 	mockConn := &faultWSConn{}
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-1"}, nil, nil, nil, nil, nil)
+	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-1", SerialNumber: "sn-1"}, nil, nil, nil, nil, nil)
 	sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 	defer sess.writer.Close()
 
@@ -63,6 +63,9 @@ func TestRegistry_BasicLifecycle(t *testing.T) {
 	if len(sessions) != 1 || sessions[0] != sess {
 		t.Fatalf("expected sessions list to contain registered session")
 	}
+	if reg.GetBySerial("sn-1") != sess {
+		t.Fatalf("expected GetBySerial to return registered session")
+	}
 
 	// 3. 注销与释放
 	unregister()
@@ -71,6 +74,9 @@ func TestRegistry_BasicLifecycle(t *testing.T) {
 	}
 	if reg.Limiter().ActiveCount() != 0 {
 		t.Fatalf("expected limiter active count 0 after cleanup, got %d", reg.Limiter().ActiveCount())
+	}
+	if reg.GetBySerial("sn-1") != nil {
+		t.Fatalf("expected GetBySerial to return nil after unregister")
 	}
 
 	// 4. 幂等性验证（重复调用 unregister 与 release 不引发 panic 或负计数）
@@ -81,6 +87,216 @@ func TestRegistry_BasicLifecycle(t *testing.T) {
 	}
 	if reg.Limiter().ActiveCount() != 0 {
 		t.Fatalf("expected limiter active count to remain 0, got %d", reg.Limiter().ActiveCount())
+	}
+}
+
+// TestRegistry_DuplicateSerialNumber_EvictsOldSession 验证相同序列号新会话注册时优雅踢出旧会话。
+func TestRegistry_DuplicateSerialNumber_EvictsOldSession(t *testing.T) {
+	limiter := NewSessionLimiter(5)
+	reg := NewRegistry(limiter, nil)
+
+	sn := "SN-SAME-DEVICE-001"
+
+	// 1. 建立第 1 个会话并注册
+	rel1, ok := reg.Acquire()
+	if !ok {
+		t.Fatal("failed to acquire for session 1")
+	}
+	mockConn1 := &faultWSConn{}
+	sess1 := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-001", SerialNumber: sn}, nil, nil, nil, nil, nil)
+	sess1.writer = NewWriter(context.Background(), mockConn1, 10, nil)
+
+	unreg1, reg1Ok := reg.Register(sess1, rel1)
+	if !reg1Ok {
+		t.Fatal("failed to register session 1")
+	}
+
+	sess1Done := make(chan struct{})
+	go func() {
+		_ = sess1.Run()
+		unreg1()
+		close(sess1Done)
+	}()
+
+	// sess1 完成握手进入 Ready
+	sess1.postEvent(event{kind: eventKindClientHello, rawBytes: validHelloPayload})
+	waitState(t, sess1, StateReady, 2*time.Second)
+
+	if reg.ActiveCount() != 1 {
+		t.Fatalf("expected active count 1, got %d", reg.ActiveCount())
+	}
+	if reg.GetBySerial(sn) != sess1 {
+		t.Fatalf("expected GetBySerial to return sess1")
+	}
+
+	// 2. 相同序列号建立第 2 个会话并注册（模拟重连/新连接互踢）
+	rel2, ok := reg.Acquire()
+	if !ok {
+		t.Fatal("failed to acquire for session 2")
+	}
+	mockConn2 := &faultWSConn{}
+	sess2 := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-001-reconnect", SerialNumber: sn}, nil, nil, nil, nil, nil)
+	sess2.writer = NewWriter(context.Background(), mockConn2, 10, nil)
+
+	unreg2, reg2Ok := reg.Register(sess2, rel2)
+	if !reg2Ok {
+		t.Fatal("failed to register session 2")
+	}
+
+	sess2Done := make(chan struct{})
+	go func() {
+		_ = sess2.Run()
+		unreg2()
+		close(sess2Done)
+	}()
+
+	// sess2 完成握手进入 Ready
+	sess2.postEvent(event{kind: eventKindClientHello, rawBytes: validHelloPayload})
+	waitState(t, sess2, StateReady, 2*time.Second)
+
+	// 断言 sess1 被踢下线并正常退出
+	select {
+	case <-sess1Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected session 1 to exit after being evicted")
+	}
+	if sess1.State() != StateClosed {
+		t.Fatalf("expected session 1 state Closed, got %v", sess1.State())
+	}
+
+	// 断言 Registry 中该序列号当前指向 sess2，且活跃计数为 1
+	if reg.GetBySerial(sn) != sess2 {
+		t.Fatalf("expected GetBySerial to return sess2 after eviction")
+	}
+	if reg.ActiveCount() != 1 {
+		t.Fatalf("expected active count 1, got %d", reg.ActiveCount())
+	}
+	if reg.Limiter().ActiveCount() != 1 {
+		t.Fatalf("expected limiter active count 1, got %d", reg.Limiter().ActiveCount())
+	}
+
+	// 3. 关闭 sess2，断言注册表完全清理
+	sess2.Close()
+	select {
+	case <-sess2Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected session 2 to exit after Close")
+	}
+
+	if reg.ActiveCount() != 0 {
+		t.Fatalf("expected active count 0 after session 2 cleanup, got %d", reg.ActiveCount())
+	}
+	if reg.Limiter().ActiveCount() != 0 {
+		t.Fatalf("expected limiter active count 0, got %d", reg.Limiter().ActiveCount())
+	}
+	if reg.GetBySerial(sn) != nil {
+		t.Fatalf("expected GetBySerial to be nil after full cleanup")
+	}
+}
+
+// TestRegistry_ConcurrentDuplicateConnectRace 验证同一序列号高频并发建连时的互踢正确性与无数据竞争。
+func TestRegistry_ConcurrentDuplicateConnectRace(t *testing.T) {
+	limiter := NewSessionLimiter(20)
+	reg := NewRegistry(limiter, nil)
+
+	sn := "SN-CONCURRENT-RACE-001"
+	concurrency := 15
+	var wg sync.WaitGroup
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+
+			rel, ok := reg.Acquire()
+			if !ok {
+				return
+			}
+
+			mockConn := &faultWSConn{}
+			sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: fmt.Sprintf("dev-race-%d", idx), SerialNumber: sn}, nil, nil, nil, nil, nil)
+			sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
+
+			unreg, registered := reg.Register(sess, rel)
+			if !registered {
+				rel()
+				return
+			}
+
+			go func() {
+				_ = sess.Run()
+				unreg()
+			}()
+
+			sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHelloPayload})
+			time.Sleep(5 * time.Millisecond)
+			sess.Close()
+		}(i)
+	}
+
+	wg.Wait()
+
+	// 等待所有退出与清理完成
+	deadline := time.Now().Add(3 * time.Second)
+	for (reg.ActiveCount() > 0 || reg.Limiter().ActiveCount() > 0) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if reg.ActiveCount() != 0 {
+		t.Fatalf("expected registry active count 0, got %d", reg.ActiveCount())
+	}
+	if reg.Limiter().ActiveCount() != 0 {
+		t.Fatalf("expected limiter active count 0, got %d", reg.Limiter().ActiveCount())
+	}
+	if reg.GetBySerial(sn) != nil {
+		t.Fatalf("expected GetBySerial to return nil, got %v", reg.GetBySerial(sn))
+	}
+}
+
+// TestRegistry_MultiDeviceIsolationAndIndependentUnregister 验证多个不同设备序列号之间互不影响且独立注销。
+func TestRegistry_MultiDeviceIsolationAndIndependentUnregister(t *testing.T) {
+	limiter := NewSessionLimiter(10)
+	reg := NewRegistry(limiter, nil)
+
+	snA := "SN-DEVICE-AAA"
+	snB := "SN-DEVICE-BBB"
+
+	relA, _ := reg.Acquire()
+	sessA := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-A", SerialNumber: snA}, nil, nil, nil, nil, nil)
+	sessA.writer = NewWriter(context.Background(), &faultWSConn{}, 10, nil)
+	unregA, _ := reg.Register(sessA, relA)
+
+	relB, _ := reg.Acquire()
+	sessB := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-B", SerialNumber: snB}, nil, nil, nil, nil, nil)
+	sessB.writer = NewWriter(context.Background(), &faultWSConn{}, 10, nil)
+	unregB, _ := reg.Register(sessB, relB)
+
+	if reg.ActiveCount() != 2 {
+		t.Fatalf("expected active count 2, got %d", reg.ActiveCount())
+	}
+	if reg.GetBySerial(snA) != sessA || reg.GetBySerial(snB) != sessB {
+		t.Fatalf("expected both sessions in registry")
+	}
+
+	// 注销 A，B 保持
+	unregA()
+	if reg.ActiveCount() != 1 {
+		t.Fatalf("expected active count 1 after A unregister, got %d", reg.ActiveCount())
+	}
+	if reg.GetBySerial(snA) != nil {
+		t.Fatalf("expected A to be nil in registry")
+	}
+	if reg.GetBySerial(snB) != sessB {
+		t.Fatalf("expected B to remain in registry")
+	}
+
+	// 注销 B
+	unregB()
+	if reg.ActiveCount() != 0 {
+		t.Fatalf("expected active count 0, got %d", reg.ActiveCount())
+	}
+	if reg.GetBySerial(snB) != nil {
+		t.Fatalf("expected B to be nil in registry")
 	}
 }
 
@@ -117,7 +333,7 @@ func TestRegistry_ConcurrentAcquireAndRegister(t *testing.T) {
 			}
 
 			mockConn := &faultWSConn{}
-			sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: fmt.Sprintf("dev-%d", idx)}, nil, nil, nil, nil, nil)
+			sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: fmt.Sprintf("dev-%d", idx), SerialNumber: fmt.Sprintf("sn-%d", idx)}, nil, nil, nil, nil, nil)
 			sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 			defer sess.writer.Close()
 
@@ -218,7 +434,7 @@ func TestRegistry_Shutdown_RejectsNewAdmissions(t *testing.T) {
 
 	// 会话登记应直接失败
 	mockConn := &faultWSConn{}
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-shut"}, nil, nil, nil, nil, nil)
+	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-shut", SerialNumber: "sn-shut"}, nil, nil, nil, nil, nil)
 	sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 	defer sess.writer.Close()
 
@@ -244,7 +460,7 @@ func TestRegistry_Shutdown_CancelsAllActiveSessions(t *testing.T) {
 		}
 
 		mockConn := &faultWSConn{}
-		sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: fmt.Sprintf("dev-%d", i)}, nil, nil, nil, nil, nil)
+		sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: fmt.Sprintf("dev-%d", i), SerialNumber: fmt.Sprintf("sn-%d", i)}, nil, nil, nil, nil, nil)
 		sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 		sessions = append(sessions, sess)
 
@@ -302,7 +518,7 @@ func TestRegistry_Shutdown_TimeoutBranch(t *testing.T) {
 	}
 
 	mockConn := &faultWSConn{}
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-blocked"}, nil, nil, nil, nil, nil)
+	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-blocked", SerialNumber: "sn-blocked"}, nil, nil, nil, nil, nil)
 	sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 
 	blockCh := make(chan struct{})
@@ -358,7 +574,7 @@ func TestRegistry_Shutdown_DuringListeningState(t *testing.T) {
 		t.Fatal("failed to acquire")
 	}
 
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-listen"}, nil, asrClient, nil, nil, nil)
+	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-listen", SerialNumber: "sn-listen"}, nil, asrClient, nil, nil, nil)
 	sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 
 	unreg, registered := reg.Register(sess, release)
@@ -428,7 +644,7 @@ func TestRegistry_Shutdown_DuringProcessingState(t *testing.T) {
 		t.Fatal("failed to acquire")
 	}
 
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-proc"}, nil, asrClient, llmClient, ttsClient, nil)
+	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-proc", SerialNumber: "sn-proc"}, nil, asrClient, llmClient, ttsClient, nil)
 	sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 
 	unreg, registered := reg.Register(sess, release)
@@ -517,7 +733,7 @@ func TestRegistry_Shutdown_DuringSpeakingState(t *testing.T) {
 		t.Fatal("failed to acquire")
 	}
 
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-speak"}, cfg, asrClient, llmClient, ttsClient, nil)
+	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-speak", SerialNumber: "sn-speak"}, cfg, asrClient, llmClient, ttsClient, nil)
 	sess.writer = NewWriter(context.Background(), mockConn, 50, nil)
 
 	unreg, registered := reg.Register(sess, release)

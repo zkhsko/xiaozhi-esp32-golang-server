@@ -265,6 +265,30 @@ func (s *Session) SessionID() string {
 	return s.sessionID
 }
 
+// SerialNumber 返回会话绑定的设备序列号。
+func (s *Session) SerialNumber() string {
+	if s == nil || s.clientInfo == nil {
+		return ""
+	}
+	return s.clientInfo.SerialNumber
+}
+
+// DeviceID 返回会话关联的设备辅助标识。
+func (s *Session) DeviceID() string {
+	if s == nil || s.clientInfo == nil {
+		return ""
+	}
+	return s.clientInfo.DeviceID
+}
+
+// ClientInfo 返回会话关联的客户端头信息快照。
+func (s *Session) ClientInfo() *ClientHeaderInfo {
+	if s == nil {
+		return nil
+	}
+	return s.clientInfo
+}
+
 // Writer 返回当前关联的串行写流程对象。
 func (s *Session) Writer() *Writer {
 	return s.writer

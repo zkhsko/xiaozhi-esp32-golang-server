@@ -67,6 +67,7 @@ func dialWebSocketHelper(t *testing.T, ctx context.Context, serverURL, token str
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"test-device-id"},
 			"Client-Id":        []string{"test-client-id"},
+			"Serial-Number":    []string{"test-serial-number"},
 		},
 	}
 	conn, resp, err := websocket.Dial(ctx, wsURL, dialOpts)
@@ -116,24 +117,35 @@ func TestHandler_AuthRejectionBeforeLimiter(t *testing.T) {
 		name           string
 		token          string
 		protoVer       string
+		serialNum      string
 		expectedStatus int
 	}{
 		{
 			name:           "缺失 Token",
 			token:          "",
 			protoVer:       "1",
+			serialNum:      "test-sn",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
 			name:           "错误 Token",
 			token:          "Bearer wrong-token",
 			protoVer:       "1",
+			serialNum:      "test-sn",
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
 			name:           "协议版本错误",
 			token:          "Bearer correct-token",
 			protoVer:       "2",
+			serialNum:      "test-sn",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "缺失 Serial-Number",
+			token:          "Bearer correct-token",
+			protoVer:       "1",
+			serialNum:      "",
 			expectedStatus: http.StatusBadRequest,
 		},
 	}
@@ -146,6 +158,9 @@ func TestHandler_AuthRejectionBeforeLimiter(t *testing.T) {
 			}
 			if tt.protoVer != "" {
 				req.Header.Set("Protocol-Version", tt.protoVer)
+			}
+			if tt.serialNum != "" {
+				req.Header.Set("Serial-Number", tt.serialNum)
 			}
 			w := httptest.NewRecorder()
 
@@ -184,6 +199,7 @@ func TestHandler_MaxCapacityRejection_503(t *testing.T) {
 			"Authorization":    []string{"Bearer " + token},
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"device-client-1"},
+			"Serial-Number":    []string{"sn-client-1"},
 		},
 	}
 
@@ -207,6 +223,7 @@ func TestHandler_MaxCapacityRejection_503(t *testing.T) {
 			"Authorization":    []string{"Bearer " + token},
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"device-client-2"},
+			"Serial-Number":    []string{"sn-client-2"},
 		},
 	}
 	conn2, _, err := websocket.Dial(ctx, wsURL, dialOpts2)
@@ -225,6 +242,7 @@ func TestHandler_MaxCapacityRejection_503(t *testing.T) {
 			"Authorization":    []string{"Bearer " + token},
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"device-client-3"},
+			"Serial-Number":    []string{"sn-client-3"},
 		},
 	}
 	_, resp3, err3 := websocket.Dial(ctx, wsURL, dialOpts3)
@@ -285,6 +303,7 @@ func TestHandler_NonWebSocketRequestReleaseQuota(t *testing.T) {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Protocol-Version", "1")
+	req.Header.Set("Serial-Number", "test-sn")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -321,6 +340,7 @@ func TestHandler_CompressionDisabled(t *testing.T) {
 			"Authorization":            []string{"Bearer " + token},
 			"Protocol-Version":         []string{"1"},
 			"Device-Id":                []string{"device-comp-check"},
+			"Serial-Number":            []string{"sn-comp-check"},
 			"Sec-WebSocket-Extensions": []string{"permessage-deflate"},
 		},
 		CompressionMode: websocket.CompressionNoContextTakeover,
@@ -374,6 +394,7 @@ func TestHandler_ConcurrentSessionsWithRace(t *testing.T) {
 					"Authorization":    []string{"Bearer " + token},
 					"Protocol-Version": []string{"1"},
 					"Device-Id":        []string{id},
+					"Serial-Number":    []string{"sn-" + id},
 				},
 			}
 
@@ -1052,5 +1073,152 @@ func TestHandler_AIClientsInjection(t *testing.T) {
 	}
 	if sess.TTSClient() != fakeTTS {
 		t.Errorf("expected Session.TTSClient to match injected client")
+	}
+}
+
+// TestHandler_DuplicateSerialNumber_EvictsOldConnectionE2E 验证同一设备序列号通过 HTTP WebSocket 快速重连时旧连接被服务端主动踢除。
+func TestHandler_DuplicateSerialNumber_EvictsOldConnectionE2E(t *testing.T) {
+	const token = "e2e-evict-token"
+	const serialNum = "SN-E2E-EVICT-001"
+
+	cfg := createTestConfig(token, 5)
+	limiter := NewSessionLimiter(5)
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
+
+	mux := http.NewServeMux()
+	mux.Handle(WebSocketPath, handler)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + WebSocketPath
+
+	// 1. 发起第 1 个连接并完成 Hello 握手
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel1()
+
+	dialOpts1 := &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization":    []string{"Bearer " + token},
+			"Protocol-Version": []string{"1"},
+			"Device-Id":        []string{"dev-1"},
+			"Serial-Number":    []string{serialNum},
+		},
+	}
+	conn1, _, err := websocket.Dial(ctx1, wsURL, dialOpts1)
+	if err != nil {
+		t.Fatalf("failed to dial conn1: %v", err)
+	}
+	defer conn1.Close(websocket.StatusNormalClosure, "")
+
+	helloJSON := `{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`
+	if err := conn1.Write(ctx1, websocket.MessageText, []byte(helloJSON)); err != nil {
+		t.Fatalf("failed to write hello for conn1: %v", err)
+	}
+	_, _, err = conn1.Read(ctx1)
+	if err != nil {
+		t.Fatalf("failed to read server hello for conn1: %v", err)
+	}
+
+	if handler.Registry().ActiveCount() != 1 {
+		t.Fatalf("expected registry active count 1, got %d", handler.Registry().ActiveCount())
+	}
+
+	// 启动 conn1 持续读取协程，监听被踢下线事件并响应 Close 帧
+	conn1Closed := make(chan error, 1)
+	go func() {
+		for {
+			_, _, rErr := conn1.Read(context.Background())
+			if rErr != nil {
+				conn1Closed <- rErr
+				return
+			}
+		}
+	}()
+
+	// 2. 发起相同 Serial-Number 的第 2 个连接并完成 Hello 握手
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+
+	dialOpts2 := &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization":    []string{"Bearer " + token},
+			"Protocol-Version": []string{"1"},
+			"Device-Id":        []string{"dev-2"},
+			"Serial-Number":    []string{serialNum},
+		},
+	}
+	conn2, _, err := websocket.Dial(ctx2, wsURL, dialOpts2)
+	if err != nil {
+		t.Fatalf("failed to dial conn2: %v", err)
+	}
+	defer conn2.Close(websocket.StatusNormalClosure, "")
+
+	if err := conn2.Write(ctx2, websocket.MessageText, []byte(helloJSON)); err != nil {
+		t.Fatalf("failed to write hello for conn2: %v", err)
+	}
+	_, _, err = conn2.Read(ctx2)
+	if err != nil {
+		t.Fatalf("failed to read server hello for conn2: %v", err)
+	}
+
+	// 3. 断言 conn1 被服务端主动关闭
+	select {
+	case readErr := <-conn1Closed:
+		if readErr == nil {
+			t.Fatal("expected conn1 closed with error, got nil")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected conn1 to be closed by server eviction, but timed out")
+	}
+
+	// 4. 断言 Registry 当前只维护最新的 conn2 会话，活跃计数为 1
+	if handler.Registry().ActiveCount() != 1 {
+		t.Fatalf("expected registry active count 1, got %d", handler.Registry().ActiveCount())
+	}
+
+	// 5. 关闭 conn2，断言完全清理
+	_ = conn2.Close(websocket.StatusNormalClosure, "done")
+	waitQuotaReleased(t, limiter, 2*time.Second)
+	if handler.Registry().ActiveCount() != 0 {
+		t.Fatalf("expected registry active count 0 after conn2 close, got %d", handler.Registry().ActiveCount())
+	}
+}
+
+// TestHandler_MissingSerialNumber_RejectedWith400 验证未提供 Serial-Number 时握手在升级前直接返回 400 拒绝。
+func TestHandler_MissingSerialNumber_RejectedWith400(t *testing.T) {
+	const token = "no-sn-token"
+
+	cfg := createTestConfig(token, 2)
+	limiter := NewSessionLimiter(2)
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
+
+	mux := http.NewServeMux()
+	mux.Handle(WebSocketPath, handler)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + WebSocketPath
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	dialOpts := &websocket.DialOptions{
+		HTTPHeader: http.Header{
+			"Authorization":    []string{"Bearer " + token},
+			"Protocol-Version": []string{"1"},
+			"Device-Id":        []string{"device-without-sn"},
+		},
+	}
+	_, resp, err := websocket.Dial(ctx, wsURL, dialOpts)
+	if err == nil {
+		t.Fatal("expected dial to fail for missing Serial-Number, but succeeded")
+	}
+	if resp == nil || resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected HTTP 400 Bad Request, got: %v", resp)
+	}
+
+	// 断言未占用 limiter 名额
+	if limiter.ActiveCount() != 0 {
+		t.Fatalf("expected limiter active count 0, got %d", limiter.ActiveCount())
 	}
 }

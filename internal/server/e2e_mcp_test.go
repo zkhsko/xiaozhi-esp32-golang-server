@@ -163,6 +163,7 @@ func TestE2E_MCP_ToolCallFullCycle(t *testing.T) {
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"10:52:1c:7a:5e:30"},
 			"Client-Id":        []string{"test-mcp-client"},
+			"Serial-Number":    []string{"SN-10-52-1C-7A-5E-30"},
 		},
 	}
 

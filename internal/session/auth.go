@@ -36,6 +36,7 @@ var (
 	ErrInvalidTokenFormat     = errors.New("invalid authorization header format")
 	ErrInvalidToken           = errors.New("invalid authorization token")
 	ErrInvalidProtocolVersion = errors.New("invalid or missing protocol version")
+	ErrMissingSerialNumber    = errors.New("missing or empty serial-number header")
 )
 
 // ClientHeaderInfo 包含握手请求中提取并脱敏的客户端设备诊断信息。
@@ -77,7 +78,7 @@ func HTTPStatus(err error) int {
 	if errors.Is(err, ErrMissingToken) || errors.Is(err, ErrInvalidTokenFormat) || errors.Is(err, ErrInvalidToken) {
 		return http.StatusUnauthorized
 	}
-	if errors.Is(err, ErrHeaderTooLarge) || errors.Is(err, ErrInvalidProtocolVersion) {
+	if errors.Is(err, ErrHeaderTooLarge) || errors.Is(err, ErrInvalidProtocolVersion) || errors.Is(err, ErrMissingSerialNumber) {
 		return http.StatusBadRequest
 	}
 	return http.StatusBadRequest
@@ -183,11 +184,20 @@ func AuthenticateUpgrade(r *http.Request, sharedToken string, maxHeaderBytes int
 		}
 	}
 
-	// 4. 提取客户端设备诊断信息（Serial-Number 为可选，无序列号设备亦可正常接入）
+	// 提取并校验 Serial-Number 设备唯一身份（必填项）
+	serialNum := strings.TrimSpace(r.Header.Get("Serial-Number"))
+	if serialNum == "" {
+		return nil, &AuthError{
+			StatusCode: http.StatusBadRequest,
+			Err:        ErrMissingSerialNumber,
+		}
+	}
+
+	// 提取客户端设备诊断信息（Device-Id 与 Client-Id 作为辅助校验与记录）
 	info := &ClientHeaderInfo{
-		DeviceID:     r.Header.Get("Device-Id"),
-		ClientID:     r.Header.Get("Client-Id"),
-		SerialNumber: r.Header.Get("Serial-Number"),
+		DeviceID:     strings.TrimSpace(r.Header.Get("Device-Id")),
+		ClientID:     strings.TrimSpace(r.Header.Get("Client-Id")),
+		SerialNumber: serialNum,
 		UserAgent:    r.UserAgent(),
 	}
 

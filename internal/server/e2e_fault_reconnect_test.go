@@ -151,6 +151,7 @@ func dialAndHandshakeClient(t *testing.T, addr, token, deviceID string) (*websoc
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{deviceID},
 			"Client-Id":        []string{"client-" + deviceID},
+			"Serial-Number":    []string{"sn-" + deviceID},
 		},
 	}
 

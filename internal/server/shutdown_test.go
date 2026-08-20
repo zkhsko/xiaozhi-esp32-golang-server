@@ -53,6 +53,7 @@ func dialTestWebSocket(t *testing.T, ctx context.Context, addr, token, deviceID 
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{deviceID},
 			"Client-Id":        []string{"client-" + deviceID},
+			"Serial-Number":    []string{"sn-" + deviceID},
 		},
 	}
 	conn, _, err := websocket.Dial(ctx, wsURL, dialOpts)
@@ -337,6 +338,7 @@ func TestServer_UpgradeFailure_QuotaReleased(t *testing.T) {
 		HTTPHeader: http.Header{
 			"Authorization":    []string{"Bearer invalid-token"},
 			"Protocol-Version": []string{"1"},
+			"Serial-Number":    []string{"sn-invalid-token"},
 		},
 	}
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -422,6 +424,7 @@ func TestServer_HighConcurrency_RegistrationAndShutdown(t *testing.T) {
 					"Authorization":    []string{"Bearer " + cfg.DeviceSharedToken},
 					"Protocol-Version": []string{"1"},
 					"Device-Id":        []string{fmt.Sprintf("dev-conc-%d", idx)},
+					"Serial-Number":    []string{fmt.Sprintf("sn-conc-%d", idx)},
 				},
 			}
 			conn, _, err := websocket.Dial(dialCtx, wsURL, dialOpts)

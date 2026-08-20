@@ -4,13 +4,16 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+
+	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
-// Registry 负责进程内活跃 WebSocket 会话的所有权注册、生命周期跟踪与优雅停机协调。
+// Registry 负责进程内活跃 WebSocket 会话的所有权注册、单设备连接互斥、生命周期跟踪与优雅停机协调。
 type Registry struct {
 	mu       sync.Mutex
 	limiter  *SessionLimiter
 	sessions map[*Session]struct{}
+	bySerial map[string]*Session
 	wg       sync.WaitGroup
 	closed   bool
 	logger   *slog.Logger
@@ -27,6 +30,7 @@ func NewRegistry(limiter *SessionLimiter, l *slog.Logger) *Registry {
 	return &Registry{
 		limiter:  limiter,
 		sessions: make(map[*Session]struct{}),
+		bySerial: make(map[string]*Session),
 		logger:   l,
 	}
 }
@@ -41,6 +45,13 @@ func (r *Registry) ActiveCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.sessions)
+}
+
+// GetBySerial 查询指定序列号当前关联的活跃会话，若不存在则返回 nil。
+func (r *Registry) GetBySerial(serialNumber string) *Session {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.bySerial[serialNumber]
 }
 
 // IsClosed 返回会话注册表是否已进入关闭状态。
@@ -64,7 +75,8 @@ func (r *Registry) Acquire() (func(), bool) {
 	return r.limiter.TryAcquire()
 }
 
-// Register 将活跃会话登记到注册表中并跟踪其协程生命周期。
+// Register 将活跃会话登记到注册表中并维护按设备序列号的单设备连接互斥。
+// 若相同序列号已有活跃旧会话，将自动断开旧会话以确保同一设备全局唯一连接。
 // 可选传入准入释放函数，将在会话注销且名额释放后触发等待组完成。
 // 若注册表已关闭，返回 (nil, false)；
 // 成功时返回注销函数与 true。注销函数保证幂等执行。
@@ -78,15 +90,38 @@ func (r *Registry) Register(s *Session, release ...func()) (func(), bool) {
 		r.mu.Unlock()
 		return nil, false
 	}
+
+	serial := s.SerialNumber()
+	var oldSession *Session
+	if serial != "" {
+		if old, exists := r.bySerial[serial]; exists && old != s {
+			oldSession = old
+			r.logger.Info("evicting duplicate session for serial number",
+				"serial_number", logger.TruncateString(serial),
+				"old_session_id", old.SessionID(),
+				"new_session_id", s.SessionID(),
+			)
+		}
+		r.bySerial[serial] = s
+	}
+
 	r.sessions[s] = struct{}{}
 	r.wg.Add(1)
 	r.mu.Unlock()
+
+	// 在锁外优雅断开旧会话，避免持锁调用造成潜在阻塞或死锁
+	if oldSession != nil {
+		oldSession.Close()
+	}
 
 	var once sync.Once
 	cleanup := func() {
 		once.Do(func() {
 			r.mu.Lock()
 			delete(r.sessions, s)
+			if serial != "" && r.bySerial[serial] == s {
+				delete(r.bySerial, serial)
+			}
 			r.mu.Unlock()
 			for _, rel := range release {
 				if rel != nil {

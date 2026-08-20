@@ -742,6 +742,7 @@ func TestE2E_AutoMode_SingleTurn_Success(t *testing.T) {
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"e2e-device-001"},
 			"Client-Id":        []string{"client-001"},
+			"Serial-Number":    []string{"SN-e2e-001"},
 		},
 	}
 
