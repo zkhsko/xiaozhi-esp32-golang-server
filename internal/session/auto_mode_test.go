@@ -14,15 +14,20 @@ import (
 
 // waitForStream 等待 mock ASR Client 创建出最新的流。
 func waitForStream(t *testing.T, client *mockSessionASRClient, timeout time.Duration) *mockSessionASRStream {
+	return waitForStreamCount(t, client, 1, timeout)
+}
+
+// waitForStreamCount 等待 mock ASR Client 创建出至少 minCount 个流并返回最新流。
+func waitForStreamCount(t *testing.T, client *mockSessionASRClient, minCount int, timeout time.Duration) *mockSessionASRStream {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if s := client.LastStream(); s != nil {
-			return s
+		if client.StreamCount() >= minCount {
+			return client.LastStream()
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	t.Fatal("timed out waiting for ASR stream creation")
+	t.Fatalf("timed out waiting for ASR stream count >= %d", minCount)
 	return nil
 }
 
@@ -461,7 +466,7 @@ func TestAutoMode_MultiTurnLifeCycle(t *testing.T) {
 		sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
 		waitState(t, sess, StateListening, 2*time.Second)
 
-		stream := asrClient.LastStream()
+		stream := waitForStreamCount(t, asrClient, turn, 2*time.Second)
 		if stream == nil {
 			t.Fatalf("turn %d: expected ASR stream", turn)
 		}

@@ -12,10 +12,11 @@ import (
 
 // 常量定义：截断长度、限频参数与脱敏占位符。
 const (
-	DefaultTruncateLimit = 64
-	DefaultDiagRate      = 1.0 // 1 msg/s
-	DefaultDiagBurst     = 3   // burst 3 msgs
-	RedactedValue        = "[REDACTED]"
+	DefaultTruncateLimit  = 64
+	DefaultMaxStringLimit = 1024
+	DefaultDiagRate       = 1.0 // 1 msg/s
+	DefaultDiagBurst      = 3   // burst 3 msgs
+	RedactedValue         = "[REDACTED]"
 )
 
 // NewHandler 创建内置敏感字段脱敏与超长截断过滤的 slog.Handler。
@@ -133,36 +134,74 @@ func SafeHeaderAttr(h http.Header) slog.Attr {
 
 // SafeReplaceAttr 是 slog.HandlerOptions 的属性替换过滤函数，执行敏感键脱敏、二进制数据屏蔽及字段截断。
 func SafeReplaceAttr(groups []string, a slog.Attr) slog.Attr {
-	if isSensitiveKey(a.Key) {
-		return slog.String(a.Key, RedactedValue)
-	}
-
 	switch a.Value.Kind() {
 	case slog.KindAny:
 		val := a.Value.Any()
 		if val == nil {
+			if isSensitiveKey(a.Key) {
+				return slog.String(a.Key, RedactedValue)
+			}
 			return a
 		}
 		if b, ok := val.([]byte); ok {
 			return slog.String(a.Key, fmt.Sprintf("<binary %d bytes>", len(b)))
 		}
+		if samples, ok := val.([]int16); ok {
+			return slog.String(a.Key, fmt.Sprintf("<pcm %d samples>", len(samples)))
+		}
+		if h, ok := val.(http.Header); ok {
+			return slog.Any(a.Key, SanitizeHeaders(h))
+		}
+		if isSensitiveKey(a.Key) {
+			return slog.String(a.Key, RedactedValue)
+		}
 		if err, ok := val.(error); ok {
 			if err == nil {
 				return slog.Attr{}
 			}
-			return slog.String(a.Key, err.Error())
+			errStr := err.Error()
+			if isSensitiveString(errStr) {
+				return slog.String(a.Key, RedactedValue)
+			}
+			if isAutoTruncateKey(a.Key) {
+				return slog.String(a.Key, TruncateString(errStr))
+			}
+			return slog.String(a.Key, Truncate(errStr, DefaultMaxStringLimit))
 		}
 	case slog.KindString:
+		if isSensitiveKey(a.Key) {
+			return slog.String(a.Key, RedactedValue)
+		}
 		s := a.Value.String()
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "bearer ") {
-			return slog.String(a.Key, "Bearer "+RedactedValue)
+		if isSensitiveString(s) {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), "bearer ") {
+				return slog.String(a.Key, "Bearer "+RedactedValue)
+			}
+			return slog.String(a.Key, RedactedValue)
 		}
 		if isAutoTruncateKey(a.Key) {
 			return slog.String(a.Key, TruncateString(s))
 		}
+		if len([]rune(s)) > DefaultMaxStringLimit {
+			return slog.String(a.Key, Truncate(s, DefaultMaxStringLimit))
+		}
+	default:
+		if isSensitiveKey(a.Key) {
+			return slog.String(a.Key, RedactedValue)
+		}
 	}
 
 	return a
+}
+
+// isSensitiveString 判断字符串内容是否包含明显的 Bearer Token 或密钥特征。
+func isSensitiveString(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	lower := strings.ToLower(trimmed)
+	if strings.HasPrefix(lower, "bearer ") {
+		return true
+	}
+	return false
 }
 
 // isSensitiveKey 判断给定的属性键是否属于敏感字段。
@@ -172,31 +211,52 @@ func isSensitiveKey(key string) bool {
 	k = strings.ReplaceAll(k, " ", "_")
 
 	switch k {
-	case "authorization", "proxy_authorization", "cookie", "set_cookie",
+	case "authorization", "proxy_authorization", "auth", "cookie", "set_cookie",
 		"dashscope_api_key", "device_shared_token",
-		"api_key", "apikey", "x_api_key",
-		"token", "access_token", "refresh_token", "id_token",
-		"secret", "client_secret",
-		"password", "passwd", "private_key",
-		"prompt", "system_prompt", "full_prompt",
-		"conversation", "dialogue", "messages", "history":
+		"api_key", "apikey", "x_api_key", "key",
+		"token", "access_token", "refresh_token", "id_token", "bearer_token", "shared_token", "session_token",
+		"secret", "client_secret", "app_secret",
+		"password", "passwd", "pass", "private_key",
+		"credential", "credentials",
+		"prompt", "system_prompt", "full_prompt", "user_prompt",
+		"conversation", "dialogue", "dialog", "messages", "history", "chat_history",
+		"user_text", "assistant_text", "user_message", "assistant_message", "full_text", "conversation_text",
+		"pcm", "raw_pcm", "opus", "raw_opus", "audio_pcm", "audio_opus", "pcm_data", "opus_data", "audio_data", "audio_bytes", "pcm_bytes", "opus_bytes":
 		return true
 	}
 
-	if strings.HasSuffix(k, "_token") || strings.HasSuffix(k, "_secret") ||
-		strings.HasSuffix(k, "_password") || strings.HasSuffix(k, "_api_key") ||
-		strings.HasSuffix(k, "_apikey") || (strings.HasSuffix(k, "_key") && strings.Contains(k, "api")) {
+	if strings.HasSuffix(k, "_token") ||
+		strings.HasSuffix(k, "_secret") ||
+		strings.HasSuffix(k, "_password") ||
+		strings.HasSuffix(k, "_passwd") ||
+		strings.HasSuffix(k, "_api_key") ||
+		strings.HasSuffix(k, "_apikey") ||
+		strings.HasSuffix(k, "_key") ||
+		strings.HasSuffix(k, "_prompt") ||
+		strings.HasSuffix(k, "_history") ||
+		strings.HasSuffix(k, "_conversation") ||
+		strings.HasSuffix(k, "_dialog") ||
+		strings.HasSuffix(k, "_dialogue") ||
+		strings.HasSuffix(k, "_credentials") ||
+		strings.HasSuffix(k, "_credential") ||
+		strings.HasSuffix(k, "_pcm") ||
+		strings.HasSuffix(k, "_opus") {
 		return true
 	}
 	return false
 }
 
-// isAutoTruncateKey 判断是否为需要自动截断长度的字段。
+// isAutoTruncateKey 判断是否为需要自动按 64 字符截断长度的字段。
 func isAutoTruncateKey(key string) bool {
 	k := strings.ToLower(strings.TrimSpace(key))
 	k = strings.ReplaceAll(k, "-", "_")
 	switch k {
-	case "device_id", "client_id", "serial_number", "session_id", "reason", "error_summary", "payload_summary", "user_agent":
+	case "device_id", "client_id", "serial_number", "session_id", "reason",
+		"error_summary", "payload_summary", "user_agent", "activation_version",
+		"raw_type", "text", "msg", "error", "err", "path", "remote_addr", "addr", "url":
+		return true
+	}
+	if strings.HasSuffix(k, "_id") || strings.HasSuffix(k, "_summary") || strings.HasSuffix(k, "_name") || strings.HasSuffix(k, "_version") {
 		return true
 	}
 	return false
