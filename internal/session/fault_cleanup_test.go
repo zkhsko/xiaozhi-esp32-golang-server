@@ -353,6 +353,10 @@ func (s *faultLLMStream) Recv() (string, error) {
 	return c, nil
 }
 
+func (s *faultLLMStream) ToolCalls() []ai.ToolCall {
+	return nil
+}
+
 func (s *faultLLMStream) Close() error {
 	s.closed.Store(true)
 	return nil
@@ -372,7 +376,7 @@ func newFaultLLMClient() *faultLLMClient {
 	return &faultLLMClient{}
 }
 
-func (c *faultLLMClient) CreateStream(ctx context.Context, messages []ai.Message) (ai.LLMStream, error) {
+func (c *faultLLMClient) CreateStream(ctx context.Context, messages []ai.Message, tools []ai.Tool) (ai.LLMStream, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.createErr != nil {

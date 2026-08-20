@@ -96,6 +96,10 @@ func (s *historyMockLLMStream) Recv() (string, error) {
 	return "", io.EOF
 }
 
+func (s *historyMockLLMStream) ToolCalls() []ai.ToolCall {
+	return nil
+}
+
 func (s *historyMockLLMStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -117,7 +121,7 @@ func newHistoryMockLLMClient(responder func(messages []ai.Message) (ai.LLMStream
 	}
 }
 
-func (c *historyMockLLMClient) CreateStream(ctx context.Context, messages []ai.Message) (ai.LLMStream, error) {
+func (c *historyMockLLMClient) CreateStream(ctx context.Context, messages []ai.Message, tools []ai.Tool) (ai.LLMStream, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -655,6 +659,10 @@ func (s *blockingHistoryLLMStream) Recv() (string, error) {
 		return "", errors.New("stream closed")
 	}
 	return "", context.Canceled
+}
+
+func (s *blockingHistoryLLMStream) ToolCalls() []ai.ToolCall {
+	return nil
 }
 
 func (s *blockingHistoryLLMStream) Close() error {

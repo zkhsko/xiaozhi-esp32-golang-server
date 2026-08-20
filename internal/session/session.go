@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -107,6 +108,11 @@ type Session struct {
 
 	helloTimer     *time.Timer
 	listeningTimer *time.Timer
+
+	mcpMu      sync.Mutex
+	mcpSeq     atomic.Int64
+	pendingMCP map[int64]chan *mcpResponse
+	mcpTools   []ai.Tool
 }
 
 // NewSession 创建配置就绪的 WebSocket 会话对象。
@@ -168,6 +174,7 @@ func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Wri
 		ctx:           sessionCtx,
 		cancel:        cancel,
 		done:          make(chan struct{}),
+		pendingMCP:    make(map[int64]chan *mcpResponse),
 		state:         StateConnected,
 		mode:          ListenModeAuto,
 		decoder:       dec,
@@ -568,6 +575,10 @@ func (s *Session) handleHelloEvent(ev event) {
 	s.state = StateReady
 	s.mu.Unlock()
 
+	if clientHello.Features != nil && clientHello.Features.MCP {
+		go s.discoverMCPTools(s.ctx)
+	}
+
 	s.logger.Info("websocket hello handshake succeeded",
 		"session_id", sessionID,
 		"device_id", s.truncatedDeviceID(),
@@ -667,6 +678,9 @@ func (s *Session) handleClientTextEvent(ev event) {
 
 	case KindAbort:
 		s.handleAbortEvent(ev.clientMsg.AbortReason)
+
+	case KindMCP:
+		s.handleIncomingMCP(ev.clientMsg)
 
 	case KindUnknownExtension:
 		s.logDiag("unknown extension message received",
@@ -1103,6 +1117,15 @@ func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 		if s.cancel != nil {
 			s.cancel()
 		}
+
+		s.mcpMu.Lock()
+		for id, ch := range s.pendingMCP {
+			if ch != nil {
+				close(ch)
+			}
+			delete(s.pendingMCP, id)
+		}
+		s.mcpMu.Unlock()
 	})
 }
 

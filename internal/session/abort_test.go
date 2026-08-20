@@ -133,6 +133,10 @@ func (s *abortMockLLMStream) Recv() (string, error) {
 	return "", io.EOF
 }
 
+func (s *abortMockLLMStream) ToolCalls() []ai.ToolCall {
+	return nil
+}
+
 func (s *abortMockLLMStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -153,7 +157,7 @@ func newAbortMockLLMClient(streamFunc func() ai.LLMStream) *abortMockLLMClient {
 	}
 }
 
-func (c *abortMockLLMClient) CreateStream(ctx context.Context, messages []ai.Message) (ai.LLMStream, error) {
+func (c *abortMockLLMClient) CreateStream(ctx context.Context, messages []ai.Message, tools []ai.Tool) (ai.LLMStream, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.createCalls++

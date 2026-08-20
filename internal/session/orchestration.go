@@ -178,7 +178,8 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 
 	// 3. 构造上下文消息并创建 LLM 流式输出会话
 	messages := s.buildLLMMessages(userText)
-	llmStream, err := s.llmClient.CreateStream(ctx, messages)
+	tools := s.getMCPTools()
+	llmStream, err := s.llmClient.CreateStream(ctx, messages, tools)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			return
@@ -280,6 +281,133 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 					fatal:      true,
 				})
 				return
+			}
+		}
+	}
+
+	if ctx.Err() != nil || s.Generation() > gen {
+		return
+	}
+
+	// 检查是否有大模型工具调用 (MCP Tool Calls)
+	toolCalls := llmStream.ToolCalls()
+	if len(toolCalls) > 0 {
+		s.logger.Info("llm returned tool calls",
+			"session_id", sessionID,
+			"generation", gen,
+			"tool_count", len(toolCalls),
+		)
+
+		// 将助手的 ToolCalls 追加至上下文
+		messages = append(messages, ai.Message{
+			Role:      ai.RoleAssistant,
+			Content:   assistantText.String(),
+			ToolCalls: toolCalls,
+		})
+
+		// 逐一执行 MCP Tool 并将结果注入上下文
+		for _, tc := range toolCalls {
+			if ctx.Err() != nil || s.Generation() > gen {
+				return
+			}
+			resultText, err := s.callMCPTool(ctx, tc.Name, tc.Arguments)
+			if err != nil {
+				s.logger.Warn("mcp tool call failed during turn",
+					"tool_name", tc.Name,
+					"error", err,
+					"session_id", sessionID,
+					"generation", gen,
+				)
+				resultText = fmt.Sprintf("Error: %v", err)
+			}
+			messages = append(messages, ai.Message{
+				Role:       ai.RoleTool,
+				Content:    resultText,
+				ToolCallID: tc.ID,
+			})
+		}
+
+		if ctx.Err() != nil || s.Generation() > gen {
+			return
+		}
+
+		// 携带工具执行结果再次调用 LLM 生成对用户的最终回答
+		llmStream2, err := s.llmClient.CreateStream(ctx, messages, nil)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				return
+			}
+			s.logger.Warn("failed to create second llm stream after tool call",
+				"error", err,
+				"session_id", sessionID,
+				"generation", gen,
+			)
+			s.postEvent(event{
+				kind:       eventKindError,
+				generation: gen,
+				err:        err,
+				fatal:      true,
+			})
+			return
+		}
+		defer func() {
+			_ = llmStream2.Close()
+		}()
+
+		// 重置当前回答文本以接收最终自然语言回复
+		assistantText.Reset()
+
+		for {
+			chunk, err := llmStream2.Recv()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
+					return
+				}
+				s.logger.Warn("second llm stream read failed",
+					"error", err,
+					"session_id", sessionID,
+					"generation", gen,
+				)
+				s.postEvent(event{
+					kind:       eventKindError,
+					generation: gen,
+					err:        err,
+					fatal:      true,
+				})
+				return
+			}
+
+			if ctx.Err() != nil || s.Generation() > gen {
+				return
+			}
+
+			if chunk == "" {
+				continue
+			}
+
+			assistantText.WriteString(chunk)
+			sentences := splitter.Feed(chunk)
+			for _, sentence := range sentences {
+				if err := sendSentence(sentence); err != nil {
+					if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
+						return
+					}
+					s.logger.Warn("failed to deliver sentence to tts",
+						"error", err,
+						"session_id", sessionID,
+						"generation", gen,
+					)
+					s.postEvent(event{
+						kind:       eventKindError,
+						generation: gen,
+						err:        err,
+						fatal:      true,
+					})
+					return
+				}
 			}
 		}
 	}

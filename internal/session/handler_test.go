@@ -440,9 +440,6 @@ func TestHandler_HelloHandshake_Success(t *testing.T) {
 			"sample_rate": 16000,
 			"channels": 1,
 			"frame_duration": 60
-		},
-		"features": {
-			"mcp": true
 		}
 	}`
 
@@ -510,6 +507,110 @@ func TestHandler_HelloHandshake_Success(t *testing.T) {
 	}
 
 	// 5. 关闭连接并验证名额正常释放
+	conn.Close(websocket.StatusNormalClosure, "normal done")
+	waitQuotaReleased(t, limiter, 2*time.Second)
+}
+
+// TestHandler_HelloHandshake_WithMCPDiscovery 验证客户端带有 features.mcp=true 时服务端发起 MCP 初始化与工具发现。
+func TestHandler_HelloHandshake_WithMCPDiscovery(t *testing.T) {
+	const token = "hello-mcp-test-token"
+	cfg := createTestConfig(token, 2)
+	limiter := NewSessionLimiter(2)
+	handler := NewHandler(cfg, limiter, nil, nil, nil, slog.Default())
+
+	mux := http.NewServeMux()
+	mux.Handle(WebSocketPath, handler)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _ := dialWebSocketHelper(t, ctx, server.URL, token)
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	// 1. 发送带有 features.mcp 的 hello
+	clientHelloJSON := `{
+		"type": "hello",
+		"version": 1,
+		"transport": "websocket",
+		"audio_params": {
+			"format": "opus",
+			"sample_rate": 16000,
+			"channels": 1,
+			"frame_duration": 60
+		},
+		"features": {
+			"mcp": true
+		}
+	}`
+	if err := conn.Write(ctx, websocket.MessageText, []byte(clientHelloJSON)); err != nil {
+		t.Fatalf("failed to write client hello: %v", err)
+	}
+
+	// 2. 接收服务端 hello
+	_, respData, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("failed to read server hello response: %v", err)
+	}
+	var serverHello ServerHelloMessage
+	if err := json.Unmarshal(respData, &serverHello); err != nil {
+		t.Fatalf("failed to unmarshal server hello: %v", err)
+	}
+
+	// 3. 接收服务端发起的 MCP initialize 请求
+	_, mcpInitData, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("failed to read mcp initialize request: %v", err)
+	}
+
+	var initWrapper struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Method string `json:"method"`
+			ID     int64  `json:"id"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(mcpInitData, &initWrapper); err != nil {
+		t.Fatalf("failed to parse mcp init request: %v", err)
+	}
+	if initWrapper.Type != "mcp" || initWrapper.Payload.Method != "initialize" {
+		t.Fatalf("expected mcp initialize request, got %s", string(mcpInitData))
+	}
+
+	// 4. 回复 initialize 响应
+	initResp := fmt.Sprintf(`{"type":"mcp","payload":{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":"2024-11-05","serverInfo":{"name":"test-board","version":"1.0"}}}}`, initWrapper.Payload.ID)
+	if err := conn.Write(ctx, websocket.MessageText, []byte(initResp)); err != nil {
+		t.Fatalf("failed to write mcp initialize response: %v", err)
+	}
+
+	// 5. 接收服务端发起的 tools/list 请求
+	_, toolsListData, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("failed to read mcp tools/list request: %v", err)
+	}
+
+	var listWrapper struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Method string `json:"method"`
+			ID     int64  `json:"id"`
+		} `json:"payload"`
+	}
+	if err := json.Unmarshal(toolsListData, &listWrapper); err != nil {
+		t.Fatalf("failed to parse mcp tools/list request: %v", err)
+	}
+	if listWrapper.Type != "mcp" || listWrapper.Payload.Method != "tools/list" {
+		t.Fatalf("expected mcp tools/list request, got %s", string(toolsListData))
+	}
+
+	// 6. 回复 tools/list 响应
+	listResp := fmt.Sprintf(`{"type":"mcp","payload":{"jsonrpc":"2.0","id":%d,"result":{"tools":[{"name":"self.audio_speaker.set_volume","description":"Set volume","inputSchema":{"type":"object"}}]}}}`, listWrapper.Payload.ID)
+	if err := conn.Write(ctx, websocket.MessageText, []byte(listResp)); err != nil {
+		t.Fatalf("failed to write mcp tools/list response: %v", err)
+	}
+
+	// 7. 关闭连接并验证名额正常释放
 	conn.Close(websocket.StatusNormalClosure, "normal done")
 	waitQuotaReleased(t, limiter, 2*time.Second)
 }
@@ -913,7 +1014,7 @@ func (f *fakeASRClientForTest) CreateStream(ctx context.Context) (ai.ASRStream, 
 
 type fakeLLMClientForTest struct{}
 
-func (f *fakeLLMClientForTest) CreateStream(ctx context.Context, messages []ai.Message) (ai.LLMStream, error) {
+func (f *fakeLLMClientForTest) CreateStream(ctx context.Context, messages []ai.Message, tools []ai.Tool) (ai.LLMStream, error) {
 	return nil, nil
 }
 

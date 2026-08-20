@@ -129,6 +129,10 @@ func (s *mockLLMStream) Recv() (string, error) {
 	return "", io.EOF
 }
 
+func (s *mockLLMStream) ToolCalls() []ai.ToolCall {
+	return nil
+}
+
 func (s *mockLLMStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -152,7 +156,7 @@ func newMockLLMClient(stream *mockLLMStream, createErr error) *mockLLMClient {
 	}
 }
 
-func (c *mockLLMClient) CreateStream(ctx context.Context, messages []ai.Message) (ai.LLMStream, error) {
+func (c *mockLLMClient) CreateStream(ctx context.Context, messages []ai.Message, tools []ai.Tool) (ai.LLMStream, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -696,6 +700,10 @@ func (s *blockingLLMStream) Recv() (string, error) {
 	return "", s.ctx.Err()
 }
 
+func (s *blockingLLMStream) ToolCalls() []ai.ToolCall {
+	return nil
+}
+
 func (s *blockingLLMStream) Close() error {
 	return nil
 }
@@ -704,7 +712,7 @@ type customLLMClient struct {
 	stream ai.LLMStream
 }
 
-func (c *customLLMClient) CreateStream(ctx context.Context, messages []ai.Message) (ai.LLMStream, error) {
+func (c *customLLMClient) CreateStream(ctx context.Context, messages []ai.Message, tools []ai.Tool) (ai.LLMStream, error) {
 	return c.stream, nil
 }
 

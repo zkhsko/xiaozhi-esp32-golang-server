@@ -175,11 +175,6 @@ func TestParseClientMessage_UnknownExtensions(t *testing.T) {
 		wantSessID  string
 	}{
 		{
-			name:        "mcp extension message",
-			input:       `{"type":"mcp","payload":{"method":"tools/call","params":{"name":"weather"}}}`,
-			wantRawType: "mcp",
-		},
-		{
 			name:        "custom extension message with session_id",
 			input:       `{"session_id":"ext-sess-1","type":"custom","action":"ping","extra":123}`,
 			wantRawType: "custom",
@@ -224,6 +219,23 @@ func TestParseClientMessage_UnknownExtensions(t *testing.T) {
 				t.Errorf("RawPayload is empty, expected raw message bytes")
 			}
 		})
+	}
+}
+
+func TestParseClientMessage_MCP(t *testing.T) {
+	input := `{"session_id":"mcp-sess-1","type":"mcp","payload":{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}}`
+	msg, err := ParseClientMessage([]byte(input))
+	if err != nil {
+		t.Fatalf("unexpected error parsing mcp message: %v", err)
+	}
+	if msg.Kind != KindMCP {
+		t.Errorf("Kind = %q, want %q", msg.Kind, KindMCP)
+	}
+	if msg.SessionID != "mcp-sess-1" {
+		t.Errorf("SessionID = %q, want mcp-sess-1", msg.SessionID)
+	}
+	if len(msg.MCPPayload) == 0 {
+		t.Errorf("MCPPayload is empty")
 	}
 }
 

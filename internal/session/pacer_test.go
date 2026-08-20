@@ -72,6 +72,10 @@ func (s *channelLLMStream) Finish() {
 	}
 }
 
+func (s *channelLLMStream) ToolCalls() []ai.ToolCall {
+	return nil
+}
+
 func (s *channelLLMStream) Close() error {
 	s.Finish()
 	return nil
@@ -395,7 +399,7 @@ type pacerDynamicLLMClient struct {
 	stream ai.LLMStream
 }
 
-func (c *pacerDynamicLLMClient) CreateStream(ctx context.Context, messages []ai.Message) (ai.LLMStream, error) {
+func (c *pacerDynamicLLMClient) CreateStream(ctx context.Context, messages []ai.Message, tools []ai.Tool) (ai.LLMStream, error) {
 	return c.stream, nil
 }
 

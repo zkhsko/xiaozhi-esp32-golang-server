@@ -188,7 +188,7 @@ func TestLLMClient_NormalFlow(t *testing.T) {
 		{Role: ai.RoleUser, Content: "你好！"},
 	}
 
-	stream, err := client.CreateStream(context.Background(), messages)
+	stream, err := client.CreateStream(context.Background(), messages, nil)
 	if err != nil {
 		t.Fatalf("CreateStream returned error: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestLLMClient_EmptyDeltasSkipped(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}})
+	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("CreateStream failed: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestLLMClient_HTTPErrorOnConnect(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}})
+	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}}, nil)
 	if err == nil {
 		if stream != nil {
 			_, recvErr := stream.Recv()
@@ -389,7 +389,7 @@ func TestLLMClient_SSEErrorInStream(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}})
+	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("CreateStream failed: %v", err)
 	}
@@ -446,7 +446,7 @@ func TestLLMClient_MalformedJSONInStream(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}})
+	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("CreateStream failed: %v", err)
 	}
@@ -496,7 +496,7 @@ func TestLLMClient_FirstTokenTimeout(t *testing.T) {
 	}
 
 	start := time.Now()
-	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}})
+	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("CreateStream failed: %v", err)
 	}
@@ -551,7 +551,7 @@ func TestLLMClient_OverallTimeout(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}})
+	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("CreateStream failed: %v", err)
 	}
@@ -616,7 +616,7 @@ func TestLLMClient_ContextCancellation(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	stream, err := client.CreateStream(ctx, []ai.Message{{Role: ai.RoleUser, Content: "hi"}})
+	stream, err := client.CreateStream(ctx, []ai.Message{{Role: ai.RoleUser, Content: "hi"}}, nil)
 	if err != nil {
 		cancel()
 		t.Fatalf("CreateStream failed: %v", err)
@@ -664,7 +664,7 @@ func TestLLMClient_NoRetriesOnFailure(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}})
+	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}}, nil)
 	if err == nil && stream != nil {
 		_, _ = stream.Recv()
 		stream.Close()
@@ -718,7 +718,7 @@ func TestLLMClient_ConcurrentSafety(t *testing.T) {
 
 			stream, sErr := client.CreateStream(context.Background(), []ai.Message{
 				{Role: ai.RoleUser, Content: fmt.Sprintf("message from %d", id)},
-			})
+			}, nil)
 			if sErr != nil {
 				t.Errorf("goroutine %d CreateStream failed: %v", id, sErr)
 				return
@@ -779,7 +779,7 @@ func TestLLMClient_ConcurrentRecvAndClose(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}})
+	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("CreateStream failed: %v", err)
 	}
@@ -806,4 +806,79 @@ func TestLLMClient_ConcurrentRecvAndClose(t *testing.T) {
 	}()
 
 	wg.Wait()
+}
+
+func TestLLMClient_WithToolsAndToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+
+		chunks := []string{
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"self.audio_speaker.set_volume","arguments":"{\"volume\":"}}]}}]}` + "\n\n",
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"80}"}}]}}]}` + "\n\n",
+			`data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n",
+			"data: [DONE]\n\n",
+		}
+
+		for _, chunk := range chunks {
+			_, _ = w.Write([]byte(chunk))
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{
+		DashScopeAPIKey: "test-key",
+		AI: config.AIConfig{
+			Bailian: config.BailianConfig{
+				LLMEndpoint:          server.URL,
+				LLMModel:             "qwen3.7-flash",
+				LLMFirstTokenTimeout: 5 * time.Second,
+				LLMOverallTimeout:    10 * time.Second,
+			},
+		},
+	}
+
+	client, err := NewLLMClient(cfg)
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	tools := []ai.Tool{
+		{
+			Name:        "self.audio_speaker.set_volume",
+			Description: "Set volume",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+
+	stream, err := client.CreateStream(context.Background(), []ai.Message{{Role: ai.RoleUser, Content: "把音量调到80"}}, tools)
+	if err != nil {
+		t.Fatalf("CreateStream failed: %v", err)
+	}
+	defer stream.Close()
+
+	for {
+		_, rErr := stream.Recv()
+		if errors.Is(rErr, io.EOF) {
+			break
+		}
+		if rErr != nil {
+			t.Fatalf("Recv failed: %v", rErr)
+		}
+	}
+
+	toolCalls := stream.ToolCalls()
+	if len(toolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(toolCalls))
+	}
+	if toolCalls[0].ID != "call_123" {
+		t.Errorf("expected ID call_123, got %q", toolCalls[0].ID)
+	}
+	if toolCalls[0].Name != "self.audio_speaker.set_volume" {
+		t.Errorf("expected name self.audio_speaker.set_volume, got %q", toolCalls[0].Name)
+	}
+	if toolCalls[0].Arguments != `{"volume":80}` {
+		t.Errorf("expected arguments `{\"volume\":80}`, got %q", toolCalls[0].Arguments)
+	}
 }

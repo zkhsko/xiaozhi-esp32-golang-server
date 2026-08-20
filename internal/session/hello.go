@@ -65,6 +65,12 @@ var (
 	ErrBinaryFirstMessage   = errors.New("first message must be text hello, binary received")
 )
 
+// ClientFeatures 定义客户端声明的可选特性开关。
+type ClientFeatures struct {
+	MCP bool `json:"mcp"`
+	AEC bool `json:"aec"`
+}
+
 // ClientAudioParams 定义客户端声明的上行音频参数。
 type ClientAudioParams struct {
 	Format        string `json:"format"`
@@ -78,6 +84,7 @@ type ClientHelloMessage struct {
 	Type        string            `json:"type"`
 	Version     int               `json:"version"`
 	Transport   string            `json:"transport"`
+	Features    *ClientFeatures   `json:"features,omitempty"`
 	AudioParams ClientAudioParams `json:"audio_params"`
 }
 

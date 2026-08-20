@@ -13,7 +13,9 @@ import (
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/packages/ssestream"
+	"github.com/openai/openai-go/shared"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/config"
@@ -94,7 +96,7 @@ func NewLLMClient(cfg *config.Config, opts ...option.RequestOption) (*LLMClient,
 }
 
 // CreateStream 创建一条新的流式回答会话。
-func (c *LLMClient) CreateStream(ctx context.Context, messages []ai.Message) (ai.LLMStream, error) {
+func (c *LLMClient) CreateStream(ctx context.Context, messages []ai.Message, tools []ai.Tool) (ai.LLMStream, error) {
 	if ctx == nil {
 		return nil, errors.New("context cannot be nil")
 	}
@@ -110,7 +112,33 @@ func (c *LLMClient) CreateStream(ctx context.Context, messages []ai.Message) (ai
 		case ai.RoleUser:
 			openAIMessages = append(openAIMessages, openai.UserMessage(msg.Content))
 		case ai.RoleAssistant:
-			openAIMessages = append(openAIMessages, openai.AssistantMessage(msg.Content))
+			if len(msg.ToolCalls) > 0 {
+				toolCallsParam := make([]openai.ChatCompletionMessageToolCallParam, 0, len(msg.ToolCalls))
+				for _, tc := range msg.ToolCalls {
+					toolCallsParam = append(toolCallsParam, openai.ChatCompletionMessageToolCallParam{
+						ID: tc.ID,
+						Function: openai.ChatCompletionMessageToolCallFunctionParam{
+							Name:      tc.Name,
+							Arguments: tc.Arguments,
+						},
+					})
+				}
+				assistantParam := openai.ChatCompletionAssistantMessageParam{
+					ToolCalls: toolCallsParam,
+				}
+				if msg.Content != "" {
+					assistantParam.Content = openai.ChatCompletionAssistantMessageParamContentUnion{
+						OfString: param.NewOpt(msg.Content),
+					}
+				}
+				openAIMessages = append(openAIMessages, openai.ChatCompletionMessageParamUnion{
+					OfAssistant: &assistantParam,
+				})
+			} else {
+				openAIMessages = append(openAIMessages, openai.AssistantMessage(msg.Content))
+			}
+		case ai.RoleTool:
+			openAIMessages = append(openAIMessages, openai.ToolMessage(msg.Content, msg.ToolCallID))
 		default:
 			openAIMessages = append(openAIMessages, openai.UserMessage(msg.Content))
 		}
@@ -119,6 +147,24 @@ func (c *LLMClient) CreateStream(ctx context.Context, messages []ai.Message) (ai
 	params := openai.ChatCompletionNewParams{
 		Model:    openai.ChatModel(c.model),
 		Messages: openAIMessages,
+	}
+
+	if len(tools) > 0 {
+		openAITools := make([]openai.ChatCompletionToolParam, 0, len(tools))
+		for _, t := range tools {
+			var desc param.Opt[string]
+			if t.Description != "" {
+				desc = param.NewOpt(t.Description)
+			}
+			openAITools = append(openAITools, openai.ChatCompletionToolParam{
+				Function: shared.FunctionDefinitionParam{
+					Name:        t.Name,
+					Description: desc,
+					Parameters:  shared.FunctionParameters(t.Parameters),
+				},
+			})
+		}
+		params.Tools = openAITools
 	}
 
 	overallCtx, overallCancel := context.WithTimeout(ctx, c.overallTimeout)
@@ -131,6 +177,7 @@ func (c *LLMClient) CreateStream(ctx context.Context, messages []ai.Message) (ai
 		overallCtx:        overallCtx,
 		overallCancel:     overallCancel,
 		streamCancel:      streamCancel,
+		toolCallsByIndex:  make(map[int64]*ai.ToolCall),
 	}
 
 	streamState.firstTimer = time.AfterFunc(c.firstTokenTimeout, func() {
@@ -168,9 +215,11 @@ type bailianLLMStream struct {
 	firstTokenReceived atomic.Bool
 	firstTokenTimedOut atomic.Bool
 
-	mu     sync.Mutex
-	stream *ssestream.Stream[openai.ChatCompletionChunk]
-	closed bool
+	mu               sync.Mutex
+	stream           *ssestream.Stream[openai.ChatCompletionChunk]
+	toolCallsByIndex map[int64]*ai.ToolCall
+	toolCallsIndices []int64
+	closed           bool
 }
 
 func (s *bailianLLMStream) Recv() (string, error) {
@@ -187,7 +236,33 @@ func (s *bailianLLMStream) Recv() (string, error) {
 			continue
 		}
 
-		deltaContent := chunk.Choices[0].Delta.Content
+		delta := chunk.Choices[0].Delta
+
+		// 检查是否有 tool call 增量片段
+		if len(delta.ToolCalls) > 0 {
+			if s.firstTokenReceived.CompareAndSwap(false, true) {
+				s.firstTimer.Stop()
+			}
+			for _, tc := range delta.ToolCalls {
+				call, exists := s.toolCallsByIndex[tc.Index]
+				if !exists {
+					call = &ai.ToolCall{}
+					s.toolCallsByIndex[tc.Index] = call
+					s.toolCallsIndices = append(s.toolCallsIndices, tc.Index)
+				}
+				if tc.ID != "" {
+					call.ID = tc.ID
+				}
+				if tc.Function.Name != "" {
+					call.Name += tc.Function.Name
+				}
+				if tc.Function.Arguments != "" {
+					call.Arguments += tc.Function.Arguments
+				}
+			}
+		}
+
+		deltaContent := delta.Content
 		if deltaContent == "" {
 			continue
 		}
@@ -215,6 +290,23 @@ func (s *bailianLLMStream) Recv() (string, error) {
 	}
 
 	return "", io.EOF
+}
+
+func (s *bailianLLMStream) ToolCalls() []ai.ToolCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.toolCallsIndices) == 0 {
+		return nil
+	}
+
+	result := make([]ai.ToolCall, 0, len(s.toolCallsIndices))
+	for _, idx := range s.toolCallsIndices {
+		if call, ok := s.toolCallsByIndex[idx]; ok && call != nil {
+			result = append(result, *call)
+		}
+	}
+	return result
 }
 
 func (s *bailianLLMStream) Close() error {
