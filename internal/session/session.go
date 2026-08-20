@@ -265,6 +265,28 @@ func (s *Session) SessionID() string {
 	return s.sessionID
 }
 
+// DeviceKey 返回用于全局唯一标识单设备连接的键（优先 SerialNumber，次选 DeviceID，再次选 ClientID）。
+func (s *Session) DeviceKey() string {
+	if s == nil || s.clientInfo == nil {
+		return ""
+	}
+	if s.clientInfo.SerialNumber != "" {
+		return s.clientInfo.SerialNumber
+	}
+	if s.clientInfo.DeviceID != "" {
+		return s.clientInfo.DeviceID
+	}
+	return s.clientInfo.ClientID
+}
+
+// ProtocolVersion 返回握手协商的协议版本。
+func (s *Session) ProtocolVersion() string {
+	if s == nil || s.clientInfo == nil {
+		return ""
+	}
+	return s.clientInfo.ProtocolVersion
+}
+
 // SerialNumber 返回会话绑定的设备序列号。
 func (s *Session) SerialNumber() string {
 	if s == nil || s.clientInfo == nil {

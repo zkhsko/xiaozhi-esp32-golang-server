@@ -194,6 +194,102 @@ func TestRegistry_DuplicateSerialNumber_EvictsOldSession(t *testing.T) {
 	}
 }
 
+// TestRegistry_DuplicateDeviceID_EvictsOldSession_V1 验证 v1 客户端无 Serial-Number 时按 Device-Id 优雅互踢旧会话。
+func TestRegistry_DuplicateDeviceID_EvictsOldSession_V1(t *testing.T) {
+	limiter := NewSessionLimiter(5)
+	reg := NewRegistry(limiter, nil)
+
+	deviceID := "90:70:69:17:c3:b0"
+
+	// 1. 建立第 1 个 v1 会话（无 SerialNumber）并注册
+	rel1, ok := reg.Acquire()
+	if !ok {
+		t.Fatal("failed to acquire for session 1")
+	}
+	mockConn1 := &faultWSConn{}
+	sess1 := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: deviceID, SerialNumber: "", ProtocolVersion: "1"}, nil, nil, nil, nil, nil)
+	sess1.writer = NewWriter(context.Background(), mockConn1, 10, nil)
+
+	unreg1, reg1Ok := reg.Register(sess1, rel1)
+	if !reg1Ok {
+		t.Fatal("failed to register session 1")
+	}
+
+	sess1Done := make(chan struct{})
+	go func() {
+		_ = sess1.Run()
+		unreg1()
+		close(sess1Done)
+	}()
+
+	sess1.postEvent(event{kind: eventKindClientHello, rawBytes: validHelloPayload})
+	waitState(t, sess1, StateReady, 2*time.Second)
+
+	if reg.ActiveCount() != 1 {
+		t.Fatalf("expected active count 1, got %d", reg.ActiveCount())
+	}
+	if reg.GetByDevice(deviceID) != sess1 {
+		t.Fatalf("expected GetByDevice to return sess1")
+	}
+
+	// 2. 相同 DeviceID 建立第 2 个 v1 会话并注册
+	rel2, ok := reg.Acquire()
+	if !ok {
+		t.Fatal("failed to acquire for session 2")
+	}
+	mockConn2 := &faultWSConn{}
+	sess2 := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: deviceID, SerialNumber: "", ProtocolVersion: "1"}, nil, nil, nil, nil, nil)
+	sess2.writer = NewWriter(context.Background(), mockConn2, 10, nil)
+
+	unreg2, reg2Ok := reg.Register(sess2, rel2)
+	if !reg2Ok {
+		t.Fatal("failed to register session 2")
+	}
+
+	sess2Done := make(chan struct{})
+	go func() {
+		_ = sess2.Run()
+		unreg2()
+		close(sess2Done)
+	}()
+
+	sess2.postEvent(event{kind: eventKindClientHello, rawBytes: validHelloPayload})
+	waitState(t, sess2, StateReady, 2*time.Second)
+
+	// 断言 sess1 被踢下线并正常退出
+	select {
+	case <-sess1Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected session 1 to exit after being evicted")
+	}
+	if sess1.State() != StateClosed {
+		t.Fatalf("expected session 1 state Closed, got %v", sess1.State())
+	}
+
+	// 断言 Registry 中该 deviceID 当前指向 sess2，且活跃计数为 1
+	if reg.GetByDevice(deviceID) != sess2 {
+		t.Fatalf("expected GetByDevice to return sess2 after eviction")
+	}
+	if reg.ActiveCount() != 1 {
+		t.Fatalf("expected active count 1, got %d", reg.ActiveCount())
+	}
+
+	// 3. 关闭 sess2，断言注册表完全清理
+	sess2.Close()
+	select {
+	case <-sess2Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected session 2 to exit after Close")
+	}
+
+	if reg.ActiveCount() != 0 {
+		t.Fatalf("expected active count 0 after session 2 cleanup, got %d", reg.ActiveCount())
+	}
+	if reg.GetByDevice(deviceID) != nil {
+		t.Fatalf("expected GetByDevice to be nil after full cleanup")
+	}
+}
+
 // TestRegistry_ConcurrentDuplicateConnectRace 验证同一序列号高频并发建连时的互踢正确性与无数据竞争。
 func TestRegistry_ConcurrentDuplicateConnectRace(t *testing.T) {
 	limiter := NewSessionLimiter(20)

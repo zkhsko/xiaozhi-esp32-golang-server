@@ -22,8 +22,14 @@ const (
 	// MaxTotalHeaderBytes 所有请求头键值对累计最大长度（8192 字符）。
 	MaxTotalHeaderBytes = 8192
 
-	// ExpectedProtocolVersion 要求的协议版本号字符串。
-	ExpectedProtocolVersion = "1"
+	// ProtocolVersionV1 WebSocket v1 协议版本号。
+	ProtocolVersionV1 = "1"
+
+	// ProtocolVersionV2 WebSocket v2 协议版本号。
+	ProtocolVersionV2 = "2"
+
+	// ExpectedProtocolVersion 要求的默认协议版本号字符串（兼容历史常量）。
+	ExpectedProtocolVersion = ProtocolVersionV1
 
 	// BearerPrefix Authorization 头要求的 Bearer 前缀。
 	BearerPrefix = "Bearer "
@@ -41,10 +47,11 @@ var (
 
 // ClientHeaderInfo 包含握手请求中提取并脱敏的客户端设备诊断信息。
 type ClientHeaderInfo struct {
-	DeviceID     string
-	ClientID     string
-	SerialNumber string
-	UserAgent    string
+	DeviceID        string
+	ClientID        string
+	SerialNumber    string
+	ProtocolVersion string
+	UserAgent       string
 }
 
 // AuthError 包装认证与请求校验错误及其建议返回的 HTTP 状态码。
@@ -134,9 +141,9 @@ func AuthenticateUpgrade(r *http.Request, sharedToken string, maxHeaderBytes int
 		}
 	}
 
-	// 2. 协议版本校验（严格等于 "1"）
-	protocolVer := r.Header.Get("Protocol-Version")
-	if protocolVer != ExpectedProtocolVersion {
+	// 2. 协议版本校验（支持 v1 和 v2 协议）
+	protocolVer := strings.TrimSpace(r.Header.Get("Protocol-Version"))
+	if protocolVer != ProtocolVersionV1 && protocolVer != ProtocolVersionV2 {
 		return nil, &AuthError{
 			StatusCode: http.StatusBadRequest,
 			Err:        ErrInvalidProtocolVersion,
@@ -184,21 +191,27 @@ func AuthenticateUpgrade(r *http.Request, sharedToken string, maxHeaderBytes int
 		}
 	}
 
-	// 提取并校验 Serial-Number 设备唯一身份（必填项）
+	// 4. 提取客户端设备标识
 	serialNum := strings.TrimSpace(r.Header.Get("Serial-Number"))
-	if serialNum == "" {
+	deviceID := strings.TrimSpace(r.Header.Get("Device-Id"))
+	clientID := strings.TrimSpace(r.Header.Get("Client-Id"))
+
+	// 协议版本区分校验：
+	// v2 协议下 Serial-Number 为必填项，用于硬件级设备唯一身份认证；
+	// v1 协议下 Serial-Number 为选填，未提供时不报错（兼容原生 v1 固件以 Device-Id 作为标识接入）。
+	if protocolVer == ProtocolVersionV2 && serialNum == "" {
 		return nil, &AuthError{
 			StatusCode: http.StatusBadRequest,
 			Err:        ErrMissingSerialNumber,
 		}
 	}
 
-	// 提取客户端设备诊断信息（Device-Id 与 Client-Id 作为辅助校验与记录）
 	info := &ClientHeaderInfo{
-		DeviceID:     strings.TrimSpace(r.Header.Get("Device-Id")),
-		ClientID:     strings.TrimSpace(r.Header.Get("Client-Id")),
-		SerialNumber: serialNum,
-		UserAgent:    r.UserAgent(),
+		DeviceID:        deviceID,
+		ClientID:        clientID,
+		SerialNumber:    serialNum,
+		ProtocolVersion: protocolVer,
+		UserAgent:       r.UserAgent(),
 	}
 
 	return info, nil

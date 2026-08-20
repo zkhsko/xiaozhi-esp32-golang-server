@@ -13,7 +13,7 @@ type Registry struct {
 	mu       sync.Mutex
 	limiter  *SessionLimiter
 	sessions map[*Session]struct{}
-	bySerial map[string]*Session
+	byDevice map[string]*Session
 	wg       sync.WaitGroup
 	closed   bool
 	logger   *slog.Logger
@@ -30,7 +30,7 @@ func NewRegistry(limiter *SessionLimiter, l *slog.Logger) *Registry {
 	return &Registry{
 		limiter:  limiter,
 		sessions: make(map[*Session]struct{}),
-		bySerial: make(map[string]*Session),
+		byDevice: make(map[string]*Session),
 		logger:   l,
 	}
 }
@@ -51,7 +51,14 @@ func (r *Registry) ActiveCount() int {
 func (r *Registry) GetBySerial(serialNumber string) *Session {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.bySerial[serialNumber]
+	return r.byDevice[serialNumber]
+}
+
+// GetByDevice 查询指定设备唯一标识（序列号或设备 MAC）当前关联的活跃会话，若不存在则返回 nil。
+func (r *Registry) GetByDevice(deviceKey string) *Session {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.byDevice[deviceKey]
 }
 
 // IsClosed 返回会话注册表是否已进入关闭状态。
@@ -75,8 +82,8 @@ func (r *Registry) Acquire() (func(), bool) {
 	return r.limiter.TryAcquire()
 }
 
-// Register 将活跃会话登记到注册表中并维护按设备序列号的单设备连接互斥。
-// 若相同序列号已有活跃旧会话，将自动断开旧会话以确保同一设备全局唯一连接。
+// Register 将活跃会话登记到注册表中并维护按设备唯一身份（优先 Serial-Number，次选 Device-Id）的单设备连接互斥。
+// 若相同设备已有活跃旧会话，将自动断开旧会话以确保同一设备全局唯一连接。
 // 可选传入准入释放函数，将在会话注销且名额释放后触发等待组完成。
 // 若注册表已关闭，返回 (nil, false)；
 // 成功时返回注销函数与 true。注销函数保证幂等执行。
@@ -91,18 +98,18 @@ func (r *Registry) Register(s *Session, release ...func()) (func(), bool) {
 		return nil, false
 	}
 
-	serial := s.SerialNumber()
+	deviceKey := s.DeviceKey()
 	var oldSession *Session
-	if serial != "" {
-		if old, exists := r.bySerial[serial]; exists && old != s {
+	if deviceKey != "" {
+		if old, exists := r.byDevice[deviceKey]; exists && old != s {
 			oldSession = old
-			r.logger.Info("evicting duplicate session for serial number",
-				"serial_number", logger.TruncateString(serial),
+			r.logger.Info("evicting duplicate session for device",
+				"device_key", logger.TruncateString(deviceKey),
 				"old_session_id", old.SessionID(),
 				"new_session_id", s.SessionID(),
 			)
 		}
-		r.bySerial[serial] = s
+		r.byDevice[deviceKey] = s
 	}
 
 	r.sessions[s] = struct{}{}
@@ -119,8 +126,8 @@ func (r *Registry) Register(s *Session, release ...func()) (func(), bool) {
 		once.Do(func() {
 			r.mu.Lock()
 			delete(r.sessions, s)
-			if serial != "" && r.bySerial[serial] == s {
-				delete(r.bySerial, serial)
+			if deviceKey != "" && r.byDevice[deviceKey] == s {
+				delete(r.byDevice, deviceKey)
 			}
 			r.mu.Unlock()
 			for _, rel := range release {

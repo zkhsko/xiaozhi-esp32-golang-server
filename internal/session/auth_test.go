@@ -180,8 +180,8 @@ func TestAuthenticateUpgrade_ProtocolVersionValidation(t *testing.T) {
 			expectedSuccess: false,
 		},
 		{
-			name:            "Protocol-Version 为 2",
-			versionHeader:   "2",
+			name:            "Protocol-Version 为 3",
+			versionHeader:   "3",
 			setVersion:      true,
 			expectedErr:     ErrInvalidProtocolVersion,
 			expectedStatus:  http.StatusBadRequest,
@@ -212,16 +212,24 @@ func TestAuthenticateUpgrade_ProtocolVersionValidation(t *testing.T) {
 			expectedSuccess: false,
 		},
 		{
-			name:            "Protocol-Version 带前后空格",
-			versionHeader:   " 1 ",
+			name:            "Protocol-Version 为 1 校验成功",
+			versionHeader:   "1",
 			setVersion:      true,
-			expectedErr:     ErrInvalidProtocolVersion,
-			expectedStatus:  http.StatusBadRequest,
-			expectedSuccess: false,
+			expectedErr:     nil,
+			expectedStatus:  http.StatusOK,
+			expectedSuccess: true,
 		},
 		{
-			name:            "Protocol-Version 严格等于 1 校验成功",
-			versionHeader:   "1",
+			name:            "Protocol-Version 为 2 校验成功",
+			versionHeader:   "2",
+			setVersion:      true,
+			expectedErr:     nil,
+			expectedStatus:  http.StatusOK,
+			expectedSuccess: true,
+		},
+		{
+			name:            "Protocol-Version 带前后空格修剪后校验成功",
+			versionHeader:   " 1 ",
 			setVersion:      true,
 			expectedErr:     nil,
 			expectedStatus:  http.StatusOK,
@@ -360,9 +368,9 @@ func TestAuthenticateUpgrade_HeaderSizeLimits(t *testing.T) {
 	}
 }
 
-// TestAuthenticateUpgrade_ClientHeaderExtraction 验证客户端诊断头信息的提取与 Serial-Number 严格校验。
+// TestAuthenticateUpgrade_ClientHeaderExtraction 验证客户端诊断头信息的提取与 v1/v2 协议版本区分校验。
 func TestAuthenticateUpgrade_ClientHeaderExtraction(t *testing.T) {
-	t.Run("缺失 Serial-Number 握手被拒绝", func(t *testing.T) {
+	t.Run("v1 协议缺失 Serial-Number 但携带 Device-Id 握手成功", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 		req.Header.Set("Protocol-Version", "1")
 		req.Header.Set("Authorization", "Bearer "+testSharedToken)
@@ -371,63 +379,59 @@ func TestAuthenticateUpgrade_ClientHeaderExtraction(t *testing.T) {
 		req.Header.Set("User-Agent", testUserAgent)
 
 		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
-		if err == nil {
-			t.Fatal("expected error for missing Serial-Number, got nil")
+		if err != nil {
+			t.Fatalf("unexpected error for v1 client without Serial-Number: %v", err)
 		}
-		if !errors.Is(err, ErrMissingSerialNumber) {
-			t.Fatalf("expected ErrMissingSerialNumber, got %v", err)
+		if info == nil {
+			t.Fatal("expected non-nil ClientHeaderInfo")
 		}
-		if HTTPStatus(err) != http.StatusBadRequest {
-			t.Fatalf("expected status 400, got %d", HTTPStatus(err))
+		if info.DeviceID != testDeviceID {
+			t.Errorf("expected DeviceID %q, got %q", testDeviceID, info.DeviceID)
 		}
-		if info != nil {
-			t.Fatalf("expected nil info on error, got %+v", info)
+		if info.ClientID != testClientID {
+			t.Errorf("expected ClientID %q, got %q", testClientID, info.ClientID)
+		}
+		if info.SerialNumber != "" {
+			t.Errorf("expected empty SerialNumber, got %q", info.SerialNumber)
+		}
+		if info.ProtocolVersion != "1" {
+			t.Errorf("expected ProtocolVersion '1', got %q", info.ProtocolVersion)
 		}
 	})
 
-	t.Run("Serial-Number 为空字符串握手被拒绝", func(t *testing.T) {
+	t.Run("v1 协议 Serial-Number 为空字符串握手成功", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 		req.Header.Set("Protocol-Version", "1")
 		req.Header.Set("Authorization", "Bearer "+testSharedToken)
+		req.Header.Set("Device-Id", testDeviceID)
 		req.Header.Set("Serial-Number", "")
 
 		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
-		if err == nil {
-			t.Fatal("expected error for empty Serial-Number, got nil")
+		if err != nil {
+			t.Fatalf("unexpected error for v1 empty Serial-Number: %v", err)
 		}
-		if !errors.Is(err, ErrMissingSerialNumber) {
-			t.Fatalf("expected ErrMissingSerialNumber, got %v", err)
-		}
-		if HTTPStatus(err) != http.StatusBadRequest {
-			t.Fatalf("expected status 400, got %d", HTTPStatus(err))
-		}
-		if info != nil {
-			t.Fatalf("expected nil info on error, got %+v", info)
+		if info.SerialNumber != "" {
+			t.Errorf("expected empty SerialNumber, got %q", info.SerialNumber)
 		}
 	})
 
-	t.Run("Serial-Number 仅包含空格握手被拒绝", func(t *testing.T) {
+	t.Run("v1 协议 Serial-Number 仅包含空格修剪为空且握手成功", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 		req.Header.Set("Protocol-Version", "1")
 		req.Header.Set("Authorization", "Bearer "+testSharedToken)
+		req.Header.Set("Device-Id", testDeviceID)
 		req.Header.Set("Serial-Number", "   ")
 
 		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
-		if err == nil {
-			t.Fatal("expected error for whitespace Serial-Number, got nil")
+		if err != nil {
+			t.Fatalf("unexpected error for v1 whitespace Serial-Number: %v", err)
 		}
-		if !errors.Is(err, ErrMissingSerialNumber) {
-			t.Fatalf("expected ErrMissingSerialNumber, got %v", err)
-		}
-		if HTTPStatus(err) != http.StatusBadRequest {
-			t.Fatalf("expected status 400, got %d", HTTPStatus(err))
-		}
-		if info != nil {
-			t.Fatalf("expected nil info on error, got %+v", info)
+		if info.SerialNumber != "" {
+			t.Errorf("expected empty SerialNumber, got %q", info.SerialNumber)
 		}
 	})
 
-	t.Run("仅携带合法 Serial-Number 接入成功", func(t *testing.T) {
+	t.Run("v1 协议携带合法 Serial-Number 接入成功", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 		req.Header.Set("Protocol-Version", "1")
 		req.Header.Set("Authorization", "Bearer "+testSharedToken)
@@ -448,7 +452,7 @@ func TestAuthenticateUpgrade_ClientHeaderExtraction(t *testing.T) {
 		}
 	})
 
-	t.Run("携带完整 Device-Id / Client-Id / Serial-Number 接入成功", func(t *testing.T) {
+	t.Run("v1 协议携带完整 Device-Id / Client-Id / Serial-Number 接入成功", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 		req.Header.Set("Protocol-Version", "1")
 		req.Header.Set("Authorization", "Bearer "+testSharedToken)
@@ -470,8 +474,89 @@ func TestAuthenticateUpgrade_ClientHeaderExtraction(t *testing.T) {
 		if info.SerialNumber != testSerialNum {
 			t.Errorf("expected SerialNumber %q, got %q", testSerialNum, info.SerialNumber)
 		}
-		if info.UserAgent != testUserAgent {
-			t.Errorf("expected UserAgent %q, got %q", testUserAgent, info.UserAgent)
+	})
+
+	t.Run("v2 协议缺失 Serial-Number 握手被拒绝", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
+		req.Header.Set("Protocol-Version", "2")
+		req.Header.Set("Authorization", "Bearer "+testSharedToken)
+		req.Header.Set("Device-Id", testDeviceID)
+		req.Header.Set("Client-Id", testClientID)
+		req.Header.Set("User-Agent", testUserAgent)
+
+		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
+		if err == nil {
+			t.Fatal("expected error for missing Serial-Number in v2, got nil")
+		}
+		if !errors.Is(err, ErrMissingSerialNumber) {
+			t.Fatalf("expected ErrMissingSerialNumber, got %v", err)
+		}
+		if HTTPStatus(err) != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d", HTTPStatus(err))
+		}
+		if info != nil {
+			t.Fatalf("expected nil info on error, got %+v", info)
+		}
+	})
+
+	t.Run("v2 协议 Serial-Number 为空字符串握手被拒绝", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
+		req.Header.Set("Protocol-Version", "2")
+		req.Header.Set("Authorization", "Bearer "+testSharedToken)
+		req.Header.Set("Serial-Number", "")
+
+		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
+		if err == nil {
+			t.Fatal("expected error for empty Serial-Number in v2, got nil")
+		}
+		if !errors.Is(err, ErrMissingSerialNumber) {
+			t.Fatalf("expected ErrMissingSerialNumber, got %v", err)
+		}
+		if HTTPStatus(err) != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d", HTTPStatus(err))
+		}
+		if info != nil {
+			t.Fatalf("expected nil info on error, got %+v", info)
+		}
+	})
+
+	t.Run("v2 协议 Serial-Number 仅包含空格握手被拒绝", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
+		req.Header.Set("Protocol-Version", "2")
+		req.Header.Set("Authorization", "Bearer "+testSharedToken)
+		req.Header.Set("Serial-Number", "   ")
+
+		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
+		if err == nil {
+			t.Fatal("expected error for whitespace Serial-Number in v2, got nil")
+		}
+		if !errors.Is(err, ErrMissingSerialNumber) {
+			t.Fatalf("expected ErrMissingSerialNumber, got %v", err)
+		}
+		if HTTPStatus(err) != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d", HTTPStatus(err))
+		}
+		if info != nil {
+			t.Fatalf("expected nil info on error, got %+v", info)
+		}
+	})
+
+	t.Run("v2 协议携带合法 Serial-Number 接入成功", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
+		req.Header.Set("Protocol-Version", "2")
+		req.Header.Set("Authorization", "Bearer "+testSharedToken)
+		req.Header.Set("Device-Id", testDeviceID)
+		req.Header.Set("Serial-Number", testSerialNum)
+
+		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
+		if err != nil {
+			t.Fatalf("unexpected error for v2 client with Serial-Number: %v", err)
+		}
+		if info.SerialNumber != testSerialNum {
+			t.Errorf("expected SerialNumber %q, got %q", testSerialNum, info.SerialNumber)
+		}
+		if info.ProtocolVersion != "2" {
+			t.Errorf("expected ProtocolVersion '2', got %q", info.ProtocolVersion)
 		}
 	})
 }
@@ -582,9 +667,9 @@ func TestRejectUpgrade_PreUpgradeRejection(t *testing.T) {
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
-			name: "协议版本非 1 返回 400 且不执行升级",
+			name: "协议版本非法返回 400 且不执行升级",
 			reqSetup: func(r *http.Request) {
-				r.Header.Set("Protocol-Version", "2")
+				r.Header.Set("Protocol-Version", "99")
 				r.Header.Set("Authorization", "Bearer "+testSharedToken)
 				r.Header.Set("Serial-Number", testSerialNum)
 			},
@@ -603,9 +688,9 @@ func TestRejectUpgrade_PreUpgradeRejection(t *testing.T) {
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
-			name: "缺少 Serial-Number 返回 400 且不执行升级",
+			name: "v2 缺少 Serial-Number 返回 400 且不执行升级",
 			reqSetup: func(r *http.Request) {
-				r.Header.Set("Protocol-Version", "1")
+				r.Header.Set("Protocol-Version", "2")
 				r.Header.Set("Authorization", "Bearer "+testSharedToken)
 			},
 			sharedToken:    testSharedToken,
