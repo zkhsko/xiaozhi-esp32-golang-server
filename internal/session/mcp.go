@@ -128,6 +128,9 @@ func (s *Session) sendMCPRequest(ctx context.Context, method string, params any)
 	}
 
 	timeout := DefaultMCPRequestTimeout
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	select {
 	case resp := <-respCh:
 		if resp == nil {
@@ -137,7 +140,7 @@ func (s *Session) sendMCPRequest(ctx context.Context, method string, params any)
 			return nil, fmt.Errorf("mcp rpc error (code=%d): %s", resp.Error.Code, resp.Error.Message)
 		}
 		return resp, nil
-	case <-time.After(timeout):
+	case <-timer.C:
 		return nil, fmt.Errorf("%w (%s, id=%d, timeout=%v)", ErrMCPTimeout, method, reqID, timeout)
 	case <-ctx.Done():
 		return nil, ctx.Err()

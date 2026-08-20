@@ -13,6 +13,8 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/config"
+
+	"github.com/coder/websocket"
 )
 
 // mockMCPLLMStream 模拟支持 ToolCalls 的 LLMStream。
@@ -366,5 +368,98 @@ func TestMCP_ToolCallErrorResponse(t *testing.T) {
 	}
 	if !foundErrorResponse {
 		t.Errorf("second LLM call missing tool error response message")
+	}
+}
+
+// TestMCP_ConcurrentResponseAndSessionClose 验证在高并发下 MCP 响应分发与会话关闭并发触发时不发生 panic，且请求方安全退出。
+func TestMCP_ConcurrentResponseAndSessionClose(t *testing.T) {
+	for iteration := 0; iteration < 50; iteration++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+
+		conn := newHistoryWSConn()
+		writer := NewWriter(ctx, conn, 200, slog.Default())
+		sess := NewSessionWithWriter(ctx, nil, writer, nil, nil, nil, nil, nil, slog.Default())
+
+		const concurrentRequests = 20
+		var wg sync.WaitGroup
+		wg.Add(concurrentRequests)
+
+		for i := 0; i < concurrentRequests; i++ {
+			go func() {
+				defer wg.Done()
+				_, _ = sess.sendMCPRequest(ctx, "tools/call", map[string]any{"name": "test_tool"})
+			}()
+		}
+
+		// 并发分发模拟设备返回的 MCP 响应
+		go func() {
+			for i := int64(1); i <= concurrentRequests; i++ {
+				respJSON := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"ok"}]}}`, i)
+				sess.handleIncomingMCP(&ClientMessage{
+					Kind:       KindMCP,
+					MCPPayload: json.RawMessage(respJSON),
+				})
+			}
+		}()
+
+		// 并发关闭会话
+		go func() {
+			sess.closeWithReason(websocket.StatusNormalClosure, "concurrent test close")
+		}()
+
+		wg.Wait()
+		sess.Close()
+		cancel()
+	}
+}
+
+// TestMCP_HandleIncomingAndCloseDirectRace 专门验证取出通道与会话关闭清理之间的并发安全性，断言无 send on closed channel panic。
+func TestMCP_HandleIncomingAndCloseDirectRace(t *testing.T) {
+	for iteration := 0; iteration < 100; iteration++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+
+		conn := newHistoryWSConn()
+		writer := NewWriter(ctx, conn, 100, slog.Default())
+		sess := NewSessionWithWriter(ctx, nil, writer, nil, nil, nil, nil, nil, slog.Default())
+
+		respCh := make(chan *mcpResponse, 1)
+		reqID := int64(100 + iteration)
+
+		sess.mcpMu.Lock()
+		sess.pendingMCP[reqID] = respCh
+		sess.mcpMu.Unlock()
+
+		var wg sync.WaitGroup
+		wg.Add(3)
+
+		// 协程 1: handleIncomingMCP 分发响应
+		go func() {
+			defer wg.Done()
+			respJSON := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"done"}]}}`, reqID)
+			sess.handleIncomingMCP(&ClientMessage{
+				Kind:       KindMCP,
+				MCPPayload: json.RawMessage(respJSON),
+			})
+		}()
+
+		// 协程 2: closeWithReason 并发清空 pendingMCP
+		go func() {
+			defer wg.Done()
+			sess.closeWithReason(websocket.StatusNormalClosure, "race test close")
+		}()
+
+		// 协程 3: 请求方安全等待响应或随上下文退出
+		go func() {
+			defer wg.Done()
+			select {
+			case <-respCh:
+			case <-sess.ctx.Done():
+			case <-ctx.Done():
+			}
+		}()
+
+		wg.Wait()
+		sess.Close()
+		cancel()
 	}
 }

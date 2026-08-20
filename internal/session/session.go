@@ -1097,12 +1097,7 @@ func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 		}
 
 		s.mcpMu.Lock()
-		for id, ch := range s.pendingMCP {
-			if ch != nil {
-				close(ch)
-			}
-			delete(s.pendingMCP, id)
-		}
+		clear(s.pendingMCP)
 		s.mcpMu.Unlock()
 	})
 }
