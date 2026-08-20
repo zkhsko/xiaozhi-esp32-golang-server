@@ -17,6 +17,9 @@ import (
 	"xiaozhi-esp32-golang-server/internal/config"
 )
 
+// maxTTSReadMessageBytes 定义百炼 TTS WebSocket 单帧最大读取字节数（4 MiB），满足 24 kHz PCM 块下发需求。
+const maxTTSReadMessageBytes = 4 * 1024 * 1024
+
 // TTSClient 实现基于百炼 WebSocket 流式协议的语音合成客户端。
 type TTSClient struct {
 	endpoint       string
@@ -166,6 +169,7 @@ func (c *TTSClient) CreateStream(ctx context.Context) (ai.TTSStream, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial bailian tts websocket: %w", err)
 	}
+	conn.SetReadLimit(maxTTSReadMessageBytes)
 
 	taskID := newUUID()
 	runMsg := ttsRunTaskMessage{

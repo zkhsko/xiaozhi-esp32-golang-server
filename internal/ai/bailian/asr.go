@@ -17,6 +17,9 @@ import (
 	"xiaozhi-esp32-golang-server/internal/config"
 )
 
+// maxASRReadMessageBytes 定义百炼 ASR WebSocket 单帧最大读取字节数（1 MiB）。
+const maxASRReadMessageBytes = 1 * 1024 * 1024
+
 // ASRClient 实现基于百炼 WebSocket 流式协议的语音识别客户端。
 type ASRClient struct {
 	endpoint       string
@@ -152,6 +155,7 @@ func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial bailian asr websocket: %w", err)
 	}
+	conn.SetReadLimit(maxASRReadMessageBytes)
 
 	taskID := newUUID()
 	runMsg := asrRunTaskMessage{
