@@ -309,12 +309,23 @@ func (s *ASRStream) readLoop() {
 			sentence := resp.Payload.Output.Sentence
 			if sentence != nil {
 				if sentence.SentenceEnd {
+					var text string
 					if resp.Payload.Output.Text != "" {
-						s.updateFinalText(resp.Payload.Output.Text)
+						text = resp.Payload.Output.Text
 					} else if sentence.Text != "" {
-						s.updateFinalText(sentence.Text)
+						text = sentence.Text
 					}
-					s.markVADReady()
+					if text != "" {
+						s.updateFinalText(text)
+						s.markVADReady()
+					} else {
+						s.mu.RLock()
+						hasFinal := (s.finalText != "")
+						s.mu.RUnlock()
+						if hasFinal {
+							s.markVADReady()
+						}
+					}
 				} else {
 					if resp.Payload.Output.Text != "" {
 						s.updatePartialText(resp.Payload.Output.Text)

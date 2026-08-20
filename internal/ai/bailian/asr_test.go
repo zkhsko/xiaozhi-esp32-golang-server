@@ -1548,3 +1548,112 @@ func TestASRStream_ContextCancelAndConcurrentClose(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+// TestASRStream_EmptySentenceEndIgnored 验证开头的静音/底噪空断句 (sentence_end=true 且 text="")
+// 不会误触发 VAD 导致提前返回空识别结果，流继续等待后续的有效语音识别结果。
+func TestASRStream_EmptySentenceEndIgnored(t *testing.T) {
+	const validSpeech = "小智请问今天天气"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusInternalError, "closed")
+
+		// 1. 读取 run-task
+		_, data, err := conn.Read(r.Context())
+		if err != nil {
+			return
+		}
+		var runMsg asrRunTaskMessage
+		_ = json.Unmarshal(data, &runMsg)
+
+		// 2. 发送 task-started
+		startedResp := asrResponseMessage{}
+		startedResp.Header.Action = "task-started"
+		startedResp.Header.TaskID = runMsg.Header.TaskID
+		startedResp.Header.Event = "task-started"
+		startedBytes, _ := json.Marshal(startedResp)
+		_ = conn.Write(r.Context(), websocket.MessageText, startedBytes)
+
+		// 3. 读取一段音频后，模拟百炼服务端发送空的 sentence_end (静音断句)
+		_, _, _ = conn.Read(r.Context())
+		emptyResp := asrResponseMessage{}
+		emptyResp.Header.Action = "result-generated"
+		emptyResp.Header.TaskID = runMsg.Header.TaskID
+		emptyResp.Header.Event = "result-generated"
+		emptyResp.Payload.Output.Sentence = &asrSentenceOutput{
+			SentenceID:    1,
+			SentenceBegin: true,
+			SentenceEnd:   true,
+			Text:          "", // 空文本断句
+		}
+		bEmpty, _ := json.Marshal(emptyResp)
+		_ = conn.Write(r.Context(), websocket.MessageText, bEmpty)
+
+		// 4. 等待 50ms 后，再发送真实的有效识别文本 (sentence_end=true)
+		time.Sleep(50 * time.Millisecond)
+		validResp := asrResponseMessage{}
+		validResp.Header.Action = "result-generated"
+		validResp.Header.TaskID = runMsg.Header.TaskID
+		validResp.Header.Event = "result-generated"
+		validResp.Payload.Output.Sentence = &asrSentenceOutput{
+			SentenceID:    2,
+			SentenceBegin: true,
+			SentenceEnd:   true,
+			Text:          validSpeech,
+		}
+		bValid, _ := json.Marshal(validResp)
+		_ = conn.Write(r.Context(), websocket.MessageText, bValid)
+
+		for {
+			_, _, rErr := conn.Read(r.Context())
+			if rErr != nil {
+				break
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.Config{
+		DashScopeAPIKey: "test-dashscope-key",
+		AI: config.AIConfig{
+			Bailian: config.BailianConfig{
+				WSEndpoint:        wsURL,
+				ASRModel:          "qwen-audio-3.0-asr-flash-streaming",
+				ASRConnectTimeout: 2 * time.Second,
+			},
+		},
+	}
+
+	client, err := NewASRClient(cfg)
+	if err != nil {
+		t.Fatalf("NewASRClient failed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	stream, err := client.CreateStream(ctx)
+	if err != nil {
+		t.Fatalf("CreateStream failed: %v", err)
+	}
+	defer stream.Close()
+
+	// 写入音频帧
+	if err := stream.WritePCM(ctx, []byte{0x01, 0x02}); err != nil {
+		t.Fatalf("WritePCM failed: %v", err)
+	}
+
+	// 读取识别结果：必须成功读到有效文本 validSpeech，而不是被空断句提前返回空字符串
+	resultText, err := stream.Result(ctx)
+	if err != nil {
+		t.Fatalf("Result failed: %v", err)
+	}
+
+	if resultText != validSpeech {
+		t.Errorf("expected result '%s', got '%s'", validSpeech, resultText)
+	}
+}
