@@ -305,20 +305,31 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 			ToolCalls: toolCalls,
 		})
 
-		// 逐一执行 MCP Tool 并将结果注入上下文
+		// 逐一校验并执行 MCP Tool，将结果注入上下文
 		for _, tc := range toolCalls {
 			if ctx.Err() != nil || s.Generation() > gen {
 				return
 			}
-			resultText, err := s.callMCPTool(ctx, tc.Name, tc.Arguments)
-			if err != nil {
-				s.logger.Warn("mcp tool call failed during turn",
+			var resultText string
+			if !s.isMCPToolAllowed(tc.Name) {
+				s.logger.Warn("mcp tool call rejected: tool not authorized in session",
 					"tool_name", tc.Name,
-					"error", err,
 					"session_id", sessionID,
 					"generation", gen,
 				)
-				resultText = fmt.Sprintf("Error: %v", err)
+				resultText = fmt.Sprintf("Error: tool %q is not authorized in current session", tc.Name)
+			} else {
+				var err error
+				resultText, err = s.callMCPTool(ctx, tc.Name, tc.Arguments)
+				if err != nil {
+					s.logger.Warn("mcp tool call failed during turn",
+						"tool_name", tc.Name,
+						"error", err,
+						"session_id", sessionID,
+						"generation", gen,
+					)
+					resultText = fmt.Sprintf("Error: %v", err)
+				}
 			}
 			messages = append(messages, ai.Message{
 				Role:       ai.RoleTool,

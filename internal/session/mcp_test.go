@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -461,5 +462,236 @@ func TestMCP_HandleIncomingAndCloseDirectRace(t *testing.T) {
 		wg.Wait()
 		sess.Close()
 		cancel()
+	}
+}
+
+// TestMCP_ToolCallUnauthorizedRejected 验证大模型返回未在当前会话白名单中的敏感工具时，服务端拒绝下发并向模型上下文注入未授权错误说明。
+func TestMCP_ToolCallUnauthorizedRejected(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn := newHistoryWSConn()
+	writer := NewWriter(ctx, conn, 100, slog.Default())
+
+	// 会话仅声明了音量调节工具，未授权 self.reboot
+	tools := []ai.Tool{
+		{
+			Name:        "self.audio_speaker.set_volume",
+			Description: "Set volume",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+
+	// 第一次调用返回未授权的 self.reboot 工具调用
+	stream1 := newMockMCPLLMStream(nil, []ai.ToolCall{
+		{
+			ID:        "call_reboot_1",
+			Name:      "self.reboot",
+			Arguments: `{"delay":0}`,
+		},
+	})
+	// 第二次调用根据未授权错误返回说明
+	stream2 := newMockMCPLLMStream([]string{"抱歉，我没有权限重启设备。"}, nil)
+
+	llmClient := &mockMCPLLMClient{
+		streams: []ai.LLMStream{stream1, stream2},
+	}
+
+	ttsClient := newMockTTSStream(nil)
+	ttsClientWrapper := newMockTTSClient(ttsClient, nil)
+
+	sess := NewSessionWithWriter(ctx, nil, writer, nil, &config.Config{
+		Session: config.SessionConfig{
+			SystemPrompt: "你是小智助手。",
+		},
+	}, nil, llmClient, ttsClientWrapper, slog.Default())
+	defer sess.Close()
+	go func() { _ = sess.Run() }()
+
+	sess.mu.Lock()
+	sess.sessionID = "test-unauth-session"
+	sess.mcpTools = tools
+	sess.mu.Unlock()
+
+	sess.orchestrateLLMAndTTS(ctx, 1, "请重启设备")
+
+	// 验证 LLM 经历了 2 次调用
+	if len(llmClient.lastMessages) != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", len(llmClient.lastMessages))
+	}
+
+	// 验证未向客户端 WebSocket 下发任何 tools/call 请求
+	for _, rawMsg := range conn.TextMessages() {
+		var req struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Method string `json:"method"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(rawMsg, &req); err == nil && req.Type == MessageTypeMCP && req.Payload.Method == "tools/call" {
+			t.Fatalf("unexpected mcp tools/call sent to device for unauthorized tool")
+		}
+	}
+
+	// 验证第二次 LLM 调用接收到了未授权错误信息
+	secondMsgs := llmClient.lastMessages[1]
+	var foundErrorResponse bool
+	for _, m := range secondMsgs {
+		if m.Role == ai.RoleTool && m.ToolCallID == "call_reboot_1" {
+			foundErrorResponse = true
+			if !strings.Contains(m.Content, "not authorized") {
+				t.Errorf("expected tool response to contain 'not authorized', got %q", m.Content)
+			}
+		}
+	}
+	if !foundErrorResponse {
+		t.Errorf("second LLM call missing unauthorized tool error message")
+	}
+
+	// 验证 TTS 下发了第二轮回复
+	sentSentences := ttsClient.sentSentences
+	if len(sentSentences) == 0 {
+		t.Fatalf("expected TTS sentences after rejection, got none")
+	}
+}
+
+// TestMCP_ToolCallMixedAuthorization 验证在大模型同时返回授权与未授权工具时，服务端仅下发授权工具并正确注入全部结果。
+func TestMCP_ToolCallMixedAuthorization(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn := newHistoryWSConn()
+	writer := NewWriter(ctx, conn, 100, slog.Default())
+
+	// 会话仅授权音量调节工具
+	tools := []ai.Tool{
+		{
+			Name:        "self.audio_speaker.set_volume",
+			Description: "Set volume",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+
+	// 第一次调用返回两个工具：一个未授权(self.reboot)，一个已授权(self.audio_speaker.set_volume)
+	stream1 := newMockMCPLLMStream(nil, []ai.ToolCall{
+		{
+			ID:        "call_reboot_1",
+			Name:      "self.reboot",
+			Arguments: `{}`,
+		},
+		{
+			ID:        "call_vol_1",
+			Name:      "self.audio_speaker.set_volume",
+			Arguments: `{"volume":50}`,
+		},
+	})
+	stream2 := newMockMCPLLMStream([]string{"未能重启设备，但音量已调整为50。"}, nil)
+
+	llmClient := &mockMCPLLMClient{
+		streams: []ai.LLMStream{stream1, stream2},
+	}
+
+	ttsClient := newMockTTSStream(nil)
+	ttsClientWrapper := newMockTTSClient(ttsClient, nil)
+
+	sess := NewSessionWithWriter(ctx, nil, writer, nil, nil, nil, llmClient, ttsClientWrapper, slog.Default())
+	defer sess.Close()
+	go func() { _ = sess.Run() }()
+
+	sess.mu.Lock()
+	sess.sessionID = "test-mixed-session"
+	sess.mcpTools = tools
+	sess.mu.Unlock()
+
+	// 模拟设备仅响应已授权的 tools/call 请求
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			rawMsgs := conn.TextMessages()
+			for _, m := range rawMsgs {
+				var req struct {
+					Type    string `json:"type"`
+					Payload struct {
+						JSONRPC string         `json:"jsonrpc"`
+						ID      int64          `json:"id"`
+						Method  string         `json:"method"`
+						Params  map[string]any `json:"params"`
+					} `json:"payload"`
+				}
+				if err := json.Unmarshal(m, &req); err == nil && req.Type == MessageTypeMCP && req.Payload.Method == "tools/call" {
+					toolName, _ := req.Payload.Params["name"].(string)
+					if toolName == "self.reboot" {
+						t.Errorf("device unexpectedly received tools/call for unauthorized tool self.reboot")
+					}
+					resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"volume set to 50"}],"isError":false}}`, req.Payload.ID)
+					sess.PostClientText(&ClientMessage{
+						Kind:       KindMCP,
+						MCPPayload: json.RawMessage(resp),
+					})
+					return
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	sess.orchestrateLLMAndTTS(ctx, 1, "重启并把音量设为50")
+
+	if len(llmClient.lastMessages) != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", len(llmClient.lastMessages))
+	}
+
+	secondMsgs := llmClient.lastMessages[1]
+	var foundRebootRejection, foundVolumeSuccess bool
+	for _, m := range secondMsgs {
+		if m.Role == ai.RoleTool && m.ToolCallID == "call_reboot_1" && strings.Contains(m.Content, "not authorized") {
+			foundRebootRejection = true
+		}
+		if m.Role == ai.RoleTool && m.ToolCallID == "call_vol_1" && strings.Contains(m.Content, "volume set to 50") {
+			foundVolumeSuccess = true
+		}
+	}
+
+	if !foundRebootRejection {
+		t.Errorf("second LLM call missing reboot rejection message")
+	}
+	if !foundVolumeSuccess {
+		t.Errorf("second LLM call missing volume success message")
+	}
+}
+
+// TestMCP_IsMCPToolAllowedAndDirectCallValidation 验证白名单判定函数及 callMCPTool 防御校验。
+func TestMCP_IsMCPToolAllowedAndDirectCallValidation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	sess := &Session{}
+
+	// 空白名单
+	if sess.isMCPToolAllowed("self.reboot") {
+		t.Errorf("expected isMCPToolAllowed to be false for empty tools")
+	}
+
+	// 注册合法工具
+	sess.mcpTools = []ai.Tool{
+		{Name: "self.audio_speaker.set_volume"},
+	}
+
+	if !sess.isMCPToolAllowed("self.audio_speaker.set_volume") {
+		t.Errorf("expected isMCPToolAllowed to be true for registered tool")
+	}
+	if sess.isMCPToolAllowed("self.reboot") {
+		t.Errorf("expected isMCPToolAllowed to be false for unregistered tool")
+	}
+
+	// 直接调用 callMCPTool 触发白名单拦截
+	_, err := sess.callMCPTool(ctx, "self.reboot", "{}")
+	if !errors.Is(err, ErrMCPToolNotFound) {
+		t.Errorf("expected ErrMCPToolNotFound, got %v", err)
 	}
 }
