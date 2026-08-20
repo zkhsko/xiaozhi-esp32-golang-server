@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -1202,6 +1203,11 @@ func (s *Session) readLoop() {
 					"session_id", s.SessionID(),
 					"status_code", closeErr.Code,
 					"reason", closeErr.Reason,
+				)
+			} else if errors.Is(err, io.EOF) {
+				s.logger.Info("websocket session closed by client",
+					"session_id", s.SessionID(),
+					"reason", "EOF",
 				)
 			} else if !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
 				s.logger.Warn("websocket read error",

@@ -1375,3 +1375,56 @@ func TestHandler_MissingSerialNumber_RejectedWith400(t *testing.T) {
 		t.Fatalf("expected limiter active count 0, got %d", limiter.ActiveCount())
 	}
 }
+
+// TestHandler_ClientEOF_LoggedAsInfo 验证客户端直接断开 TCP 连接（EOF）时被记录为 INFO，而非 WARN 告警。
+func TestHandler_ClientEOF_LoggedAsInfo(t *testing.T) {
+	const token = "eof-test-token"
+
+	var buf safeBuffer
+	testLogger := logger.New(&buf, slog.LevelInfo)
+
+	cfg := createTestConfig(token, 2)
+	limiter := NewSessionLimiter(2)
+	handler := NewHandler(cfg, limiter, nil, nil, nil, testLogger)
+
+	mux := http.NewServeMux()
+	mux.Handle(WebSocketPath, handler)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	conn, _ := dialWebSocketHelper(t, ctx, server.URL, token)
+
+	// 发送 hello 消息完成握手
+	helloJSON := `{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`
+	if err := conn.Write(ctx, websocket.MessageText, []byte(helloJSON)); err != nil {
+		t.Fatalf("failed to write hello: %v", err)
+	}
+	_, _, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("failed to read server hello: %v", err)
+	}
+
+	// 客户端直接硬断开连接（不发送 WebSocket Close 握手帧，直接引发底层 EOF）
+	_ = conn.CloseNow()
+
+	// 等待会话释放
+	waitQuotaReleased(t, limiter, 2*time.Second)
+
+	logOutput := buf.String()
+
+	// 验证日志中包含 EOF 正常断开记录
+	if !strings.Contains(logOutput, "websocket session closed by client") || !strings.Contains(logOutput, "EOF") {
+		t.Fatalf("expected log to contain 'websocket session closed by client' with EOF, got:\n%s", logOutput)
+	}
+
+	// 验证日志中不包含 WARN 级别的 websocket read error
+	if strings.Contains(logOutput, "websocket read error") {
+		t.Fatalf("expected no 'websocket read error' in log, got:\n%s", logOutput)
+	}
+	if strings.Contains(logOutput, `"level":"WARN"`) {
+		t.Fatalf("expected no WARN log on client EOF disconnect, got:\n%s", logOutput)
+	}
+}
