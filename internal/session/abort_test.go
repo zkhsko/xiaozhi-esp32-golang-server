@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -763,4 +764,97 @@ func TestSession_Abort_ConcurrentStressRace(t *testing.T) {
 	// 最后发送一次 abort，确保会话平稳收敛至 READY
 	sess.PostClientText(&ClientMessage{Kind: KindAbort, AbortReason: "最终收敛"})
 	waitState(t, sess, StateReady, 2*time.Second)
+}
+
+// TestSession_Abort_HighFrequencyTTSInterruptionRace 验证在 Opus 音频编码过程中高频打断并立即开启新轮次时，
+// 每轮编排独占独立编码器实例，不存在并发复用导致的数据竞争与 libopus 崩溃。
+func TestSession_Abort_HighFrequencyTTSInterruptionRace(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 构造多帧 PCM 数据（模拟较长音频流，增加与 abort 的重叠概率）
+	frames := make([][]byte, 20)
+	for i := 0; i < 20; i++ {
+		frames[i] = generate24kSinePCMForSession(float64(300+i*20), 12000.0)
+	}
+
+	ttsClient := newAbortMockTTSClient(func() ai.TTSStream {
+		return newAbortMockTTSStream(frames, nil)
+	})
+	llmClient := newAbortMockLLMClient(func() ai.LLMStream {
+		return newAbortMockLLMStream([]string{"高频打断测试回答内容"}, nil)
+	})
+	asrClient := newAbortMockASRClient()
+
+	sess, _ := createAbortTestSession(ctx, asrClient, llmClient, ttsClient)
+	go func() { _ = sess.Run() }()
+	defer sess.Close()
+
+	// 握手 -> READY
+	validHello := []byte(`{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`)
+	sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHello})
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	const rounds = 40
+	for r := 0; r < rounds; r++ {
+		// 开启收音
+		sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
+		gen := sess.Generation()
+
+		// 触发 ASR 完成，启动 LLM 与 TTS PCM 消费编码
+		sess.PostASRFinal(gen, fmt.Sprintf("测试文本轮次 %d", r))
+
+		// 微小间隔后立即在编码中途打断
+		if r%2 == 0 {
+			time.Sleep(time.Duration(r%5+1) * time.Millisecond)
+			sess.PostClientText(&ClientMessage{Kind: KindAbort, AbortReason: "中途打断编码"})
+		} else {
+			// 立即打断
+			sess.PostClientText(&ClientMessage{Kind: KindAbort, AbortReason: "立即打断"})
+		}
+	}
+
+	// 最终发送一次 abort 并等待收敛至 READY
+	sess.PostClientText(&ClientMessage{Kind: KindAbort, AbortReason: "最终收敛"})
+	waitState(t, sess, StateReady, 2*time.Second)
+}
+
+// TestSession_ConsumeTTSPCM_PerTurnEncoderIsolation 验证多个消费协程并发执行不同代次的 TTS PCM 编码时的独立性与数据隔离。
+func TestSession_ConsumeTTSPCM_PerTurnEncoderIsolation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sess, _, _ := createTestSessionForOrchestration(ctx, nil, nil, nil)
+
+	const goroutines = 20
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func(idx int) {
+			defer wg.Done()
+
+			turnCtx, turnCancel := context.WithCancel(ctx)
+			defer turnCancel()
+
+			frame1 := generate24kSinePCMForSession(float64(400+idx*10), 15000.0)
+			frame2 := generate24kSinePCMForSession(float64(500+idx*10), 15000.0)
+			mockTTS := &mockTTSStream{
+				pcmDataToReturn: [][]byte{frame1, frame2},
+			}
+
+			// 部分协程中途中断
+			if idx%3 == 1 {
+				go func() {
+					time.Sleep(1 * time.Millisecond)
+					turnCancel()
+				}()
+			}
+
+			gen := uint64(idx + 1)
+			sess.consumeTTSPCM(turnCtx, gen, mockTTS)
+		}(i)
+	}
+
+	wg.Wait()
 }

@@ -46,23 +46,6 @@ func decode24kOpusForSession(t *testing.T, opusData []byte) []int16 {
 	return pcm
 }
 
-// TestSession_HoldEncoderAndStreamEncoder 验证 Session 初始化后持有独立的 audio.Encoder 与 audio.StreamEncoder 实例。
-func TestSession_HoldEncoderAndStreamEncoder(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	sess, _, _ := createTestSessionForOrchestration(ctx, nil, nil, nil)
-	if sess.Encoder() == nil {
-		t.Fatal("expected session to hold non-nil audio.Encoder")
-	}
-	if sess.StreamEncoder() == nil {
-		t.Fatal("expected session to hold non-nil audio.StreamEncoder")
-	}
-	if sess.StreamEncoder().Encoder() != sess.Encoder() {
-		t.Fatal("expected StreamEncoder to bind with session's Encoder")
-	}
-}
-
 // TestSession_ConsumeTTSPCM_NormalFlow_ExactFrames 验证会话消费 TTS PCM 正常流程：整帧（2 帧 = 5760 字节）被正确分帧并编码为 2 个 Opus 包。
 func TestSession_ConsumeTTSPCM_NormalFlow_ExactFrames(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

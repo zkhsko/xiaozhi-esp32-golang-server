@@ -31,10 +31,13 @@ var (
 
 	// ErrEncodeFailed 表示 Opus 音频编码失败。
 	ErrEncodeFailed = errors.New("failed to encode opus packet")
+
+	// ErrEncoderClosed 表示编码器已关闭，禁止继续编码。
+	ErrEncoderClosed = errors.New("encoder is closed")
 )
 
 // Encoder 负责将 24 kHz 60 ms 单声道 16-bit signed little-endian PCM 帧编码为单个 Opus 包。
-// 每个会话独立创建并持有 Encoder 实例。
+// 每次编排独立创建并持有 Encoder 实例。
 type Encoder struct {
 	enc            *opus.Encoder
 	maxPacketBytes int
@@ -69,6 +72,10 @@ func (e *Encoder) MaxPacketBytes() int {
 // Encode 将单帧 2880 字节 16-bit signed little-endian PCM 编码为单个 Opus 包。
 // 传入数据必须严格为 2880 字节；返回的切片为独立分配的内存，确保跨异步边界安全。
 func (e *Encoder) Encode(pcmFrame []byte) ([]byte, error) {
+	if e == nil || e.enc == nil {
+		return nil, ErrEncoderClosed
+	}
+
 	if len(pcmFrame) != DownlinkBytesPerFrame {
 		return nil, fmt.Errorf("%w: expected %d bytes, got %d", ErrInvalidPCMBytes, DownlinkBytesPerFrame, len(pcmFrame))
 	}
@@ -89,6 +96,10 @@ func (e *Encoder) Encode(pcmFrame []byte) ([]byte, error) {
 
 // EncodeSamples 将 1440 个 int16 采样点直接编码为单个 Opus 包。
 func (e *Encoder) EncodeSamples(samples []int16) ([]byte, error) {
+	if e == nil || e.enc == nil {
+		return nil, ErrEncoderClosed
+	}
+
 	if len(samples) != DownlinkSamplesPerFrame {
 		return nil, fmt.Errorf("%w: expected %d samples, got %d", ErrInvalidSampleCount, DownlinkSamplesPerFrame, len(samples))
 	}
@@ -101,6 +112,17 @@ func (e *Encoder) EncodeSamples(samples []int16) ([]byte, error) {
 	packet := make([]byte, n)
 	copy(packet, e.opusBuf[:n])
 	return packet, nil
+}
+
+// Close 释放编码器内部状态及缓冲区。
+func (e *Encoder) Close() error {
+	if e == nil {
+		return nil
+	}
+	e.enc = nil
+	e.pcmBuf = nil
+	e.opusBuf = nil
+	return nil
 }
 
 // PCMFramer 负责将任意大小分块（包括奇偶字节分块、非 2880 对齐）的 16-bit PCM 字节流组装为 2880 字节的标准帧。
@@ -236,4 +258,15 @@ func (s *StreamEncoder) BufferedBytes() int {
 // Encoder 返回底层持有的 Opus 编码器。
 func (s *StreamEncoder) Encoder() *Encoder {
 	return s.encoder
+}
+
+// Close 释放流式分帧编码器及其底层编码器。
+func (s *StreamEncoder) Close() error {
+	if s == nil {
+		return nil
+	}
+	if s.encoder != nil {
+		return s.encoder.Close()
+	}
+	return nil
 }

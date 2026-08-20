@@ -484,6 +484,71 @@ func TestStreamEncoder_NilEncoder(t *testing.T) {
 	}
 }
 
+// TestEncoder_Close 验证 Encoder 显式关闭后的状态置空与后续调用的错误拦截。
+func TestEncoder_Close(t *testing.T) {
+	enc, err := NewEncoder(DefaultMaxOpusPacketBytes)
+	if err != nil {
+		t.Fatalf("failed to create encoder: %v", err)
+	}
+
+	frame := generate24kSinePCM(440.0, 10000.0)
+	samples := make([]int16, DownlinkSamplesPerFrame)
+
+	if err := enc.Close(); err != nil {
+		t.Fatalf("close returned error: %v", err)
+	}
+
+	// 验证关闭后 Encode 拦截
+	if _, err := enc.Encode(frame); !errors.Is(err, ErrEncoderClosed) {
+		t.Fatalf("expected ErrEncoderClosed after Close in Encode, got %v", err)
+	}
+
+	// 验证关闭后 EncodeSamples 拦截
+	if _, err := enc.EncodeSamples(samples); !errors.Is(err, ErrEncoderClosed) {
+		t.Fatalf("expected ErrEncoderClosed after Close in EncodeSamples, got %v", err)
+	}
+
+	// 验证重复 Close 安全
+	if err := enc.Close(); err != nil {
+		t.Fatalf("subsequent close returned error: %v", err)
+	}
+
+	// 验证 nil 接收者安全
+	var nilEnc *Encoder
+	if _, err := nilEnc.Encode(frame); !errors.Is(err, ErrEncoderClosed) {
+		t.Fatalf("expected ErrEncoderClosed for nil encoder in Encode, got %v", err)
+	}
+	if _, err := nilEnc.EncodeSamples(samples); !errors.Is(err, ErrEncoderClosed) {
+		t.Fatalf("expected ErrEncoderClosed for nil encoder in EncodeSamples, got %v", err)
+	}
+	if err := nilEnc.Close(); err != nil {
+		t.Fatalf("nil encoder Close returned error: %v", err)
+	}
+}
+
+// TestStreamEncoder_Close 验证 StreamEncoder 显式关闭与级联关闭底层 Encoder。
+func TestStreamEncoder_Close(t *testing.T) {
+	enc, err := NewEncoder(DefaultMaxOpusPacketBytes)
+	if err != nil {
+		t.Fatalf("failed to create encoder: %v", err)
+	}
+
+	streamEnc := NewStreamEncoder(enc)
+	if err := streamEnc.Close(); err != nil {
+		t.Fatalf("stream encoder close error: %v", err)
+	}
+
+	frame := generate24kSinePCM(440.0, 10000.0)
+	if _, err := streamEnc.Feed(frame); err == nil {
+		t.Fatal("expected error after stream encoder close in Feed")
+	}
+
+	var nilStreamEnc *StreamEncoder
+	if err := nilStreamEnc.Close(); err != nil {
+		t.Fatalf("nil stream encoder close error: %v", err)
+	}
+}
+
 // TestStreamEncoder_Concurrency 验证 50 个 goroutine 并发独立执行分帧与 Opus 编码的竞态安全与数据隔离。
 func TestStreamEncoder_Concurrency(t *testing.T) {
 	const goroutines = 50

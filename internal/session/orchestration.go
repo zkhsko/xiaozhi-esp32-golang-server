@@ -497,11 +497,33 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 		defer close(doneCh)
 	}
 
-	if stream == nil || s.encoder == nil {
+	if stream == nil {
 		return
 	}
 
-	streamEncoder := audio.NewStreamEncoder(s.encoder)
+	maxOpusBytes := audio.DefaultMaxOpusPacketBytes
+	if s.cfg != nil && s.cfg.Session.MaxOpusPacketBytes > 0 {
+		maxOpusBytes = s.cfg.Session.MaxOpusPacketBytes
+	}
+
+	enc, err := audio.NewEncoder(maxOpusBytes)
+	if err != nil {
+		s.logger.Error("failed to create per-turn opus encoder",
+			"error", err,
+			"session_id", s.SessionID(),
+			"generation", gen,
+		)
+		s.postEvent(event{
+			kind:       eventKindError,
+			generation: gen,
+			err:        err,
+			fatal:      true,
+		})
+		return
+	}
+	defer enc.Close()
+
+	streamEncoder := audio.NewStreamEncoder(enc)
 	sessionID := s.SessionID()
 
 	for {
