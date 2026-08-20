@@ -481,31 +481,6 @@ func TestSentenceSplitter_DecimalNumbers(t *testing.T) {
 	}
 }
 
-// TestSentenceSplitter_Reset 验证 Reset 清空缓冲区与状态重置功能。
-func TestSentenceSplitter_Reset(t *testing.T) {
-	t.Parallel()
-
-	splitter := NewSentenceSplitter()
-	res := splitter.Feed("未完成的前半句")
-	if len(res) != 0 {
-		t.Fatalf("expected 0 sentences, got %v", res)
-	}
-
-	splitter.Reset()
-
-	// Reset 之后 Flush 应该为空
-	fl := splitter.Flush()
-	if len(fl) != 0 {
-		t.Fatalf("expected empty flush after reset, got %v", fl)
-	}
-
-	// 重新 Feed 正常切分
-	res2 := splitter.Feed("全新的句子。")
-	if !reflect.DeepEqual(res2, []string{"全新的句子。"}) {
-		t.Fatalf("unexpected sentences after reset: %v", res2)
-	}
-}
-
 // TestSentenceSplitter_ConcurrentInstances 验证多协程独立使用各自分句器实例时的并发安全与隔离性。
 func TestSentenceSplitter_ConcurrentInstances(t *testing.T) {
 	t.Parallel()

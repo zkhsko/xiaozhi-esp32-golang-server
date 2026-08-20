@@ -121,10 +121,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	clientInfo, err := AuthenticateUpgrade(r, sharedToken, maxHeaderBytes)
 	if err != nil {
-		LogAuthRejection(h.logger, r, err)
-		http.Error(w, err.Error(), HTTPStatus(err))
+		RejectUpgrade(w, r, h.logger, err)
 		return
 	}
+	LogAuthSuccess(h.logger, r, clientInfo)
 
 	// 3. 活跃会话并发准入控制（满载或停服时拒绝升级并返回 503）
 	release, ok := h.registry.Acquire()
@@ -183,17 +183,4 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"client_id", logger.TruncateString(clientInfo.ClientID),
 		"serial_number", logger.TruncateString(clientInfo.SerialNumber),
 	)
-}
-
-// serveConn 创建、注册并运行会话状态机（供测试或独立连接驱动调用）。
-func (h *Handler) serveConn(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInfo) {
-	sess := NewSession(ctx, conn, info, h.cfg, h.asrClient, h.llmClient, h.ttsClient, h.logger)
-	unregister, registered := h.registry.Register(sess)
-	if !registered {
-		sess.Close()
-		return
-	}
-	defer unregister()
-
-	_ = sess.Run()
 }

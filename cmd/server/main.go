@@ -66,9 +66,7 @@ func main() {
 	}
 
 	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
-	sessionRegistry := session.NewRegistry(sessionLimiter, slog.Default())
-
-	wsHandler := session.NewHandlerWithRegistry(cfg, sessionRegistry, asrClient, llmClient, ttsClient, slog.Default())
+	wsHandler := session.NewHandler(cfg, sessionLimiter, asrClient, llmClient, ttsClient, slog.Default())
 
 	mux := http.NewServeMux()
 	mux.Handle(bootstrap.OTAPath, bootstrap.NewHandler(cfg, slog.Default()))
@@ -76,10 +74,10 @@ func main() {
 
 	srv := server.New(cfg.Server, mux)
 	srv.RegisterOnShutdown(func(shutdownCtx context.Context) error {
-		return sessionRegistry.Shutdown(shutdownCtx)
+		return wsHandler.Shutdown(shutdownCtx)
 	})
 
-	slog.Info("starting HTTP server", "addr", cfg.Server.ListenAddr)
+	slog.Info("starting HTTP server", "addr", srv.Addr())
 	if err := srv.Run(ctx); err != nil {
 		slog.Error("server stopped with error", "error", err)
 		os.Exit(1)

@@ -56,57 +56,6 @@ func TruncateString(s string) string {
 	return Truncate(s, DefaultTruncateLimit)
 }
 
-// SessionID 返回截断后的 session_id 日志属性。
-func SessionID(id string) slog.Attr {
-	return slog.String("session_id", TruncateString(id))
-}
-
-// DeviceID 返回截断后的 device_id 日志属性。
-func DeviceID(id string) slog.Attr {
-	return slog.String("device_id", TruncateString(id))
-}
-
-// ClientID 返回截断后的 client_id 日志属性。
-func ClientID(id string) slog.Attr {
-	return slog.String("client_id", TruncateString(id))
-}
-
-// SerialNumber 返回截断后的 serial_number 日志属性。
-func SerialNumber(sn string) slog.Attr {
-	return slog.String("serial_number", TruncateString(sn))
-}
-
-// State 返回状态流转的 state 日志属性。
-func State(state string) slog.Attr {
-	return slog.String("state", TruncateString(state))
-}
-
-// Reason 返回截断后的 reason 日志属性。
-func Reason(reason string) slog.Attr {
-	return slog.String("reason", TruncateString(reason))
-}
-
-// DurationMS 返回毫秒精度的 duration_ms 日志属性。
-func DurationMS(d time.Duration) slog.Attr {
-	return slog.Int64("duration_ms", d.Milliseconds())
-}
-
-// Err 返回统一命名为 err 的错误日志属性。若 err 为 nil 则返回空属性。
-func Err(err error) slog.Attr {
-	if err == nil {
-		return slog.Attr{}
-	}
-	return slog.String("err", err.Error())
-}
-
-// SanitizeHeaderValue 对单个 HTTP Header 键值对进行脱敏或截断。
-func SanitizeHeaderValue(key, val string) string {
-	if isSensitiveKey(key) {
-		return RedactedValue
-	}
-	return TruncateString(val)
-}
-
 // SanitizeHeaders 对 http.Header 执行脱敏与字段截断，返回安全的映射。
 func SanitizeHeaders(h http.Header) map[string]string {
 	if len(h) == 0 {
@@ -125,11 +74,6 @@ func SanitizeHeaders(h http.Header) map[string]string {
 		result[k] = TruncateString(strings.Join(vals, ", "))
 	}
 	return result
-}
-
-// SafeHeaderAttr 将 http.Header 脱敏后包装为 slog.Attr。
-func SafeHeaderAttr(h http.Header) slog.Attr {
-	return slog.Any("headers", SanitizeHeaders(h))
 }
 
 // SafeReplaceAttr 是 slog.HandlerOptions 的属性替换过滤函数，执行敏感键脱敏、二进制数据屏蔽及字段截断。

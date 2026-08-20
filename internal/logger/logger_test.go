@@ -106,10 +106,10 @@ func TestLogger_SuccessEvent(t *testing.T) {
 	l := New(&buf, slog.LevelInfo)
 
 	l.Info("session started",
-		SessionID("sess-10001"),
-		DeviceID("device-esp32-abc"),
-		State("listening"),
-		DurationMS(120*time.Millisecond),
+		slog.String("session_id", "sess-10001"),
+		slog.String("device_id", "device-esp32-abc"),
+		slog.String("state", "listening"),
+		slog.Int64("duration_ms", (120*time.Millisecond).Milliseconds()),
 	)
 
 	var record map[string]any
@@ -142,9 +142,9 @@ func TestLogger_RejectionEvent(t *testing.T) {
 	l := New(&buf, slog.LevelWarn)
 
 	l.Warn("handshake rejected",
-		ClientID("client-xyz-888"),
-		Reason("unsupported protocol version"),
-		Err(errors.New("protocol mismatch")),
+		slog.String("client_id", "client-xyz-888"),
+		slog.String("reason", "unsupported protocol version"),
+		slog.Any("err", errors.New("protocol mismatch")),
 	)
 
 	var record map[string]any
@@ -174,9 +174,9 @@ func TestLogger_ErrorEvent(t *testing.T) {
 	l := New(&buf, slog.LevelError)
 
 	l.Error("asr stream terminated abnormally",
-		SessionID("sess-err-999"),
-		Err(errors.New("connection reset by peer")),
-		DurationMS(3400*time.Millisecond),
+		slog.String("session_id", "sess-err-999"),
+		slog.Any("err", errors.New("connection reset by peer")),
+		slog.Int64("duration_ms", (3400*time.Millisecond).Milliseconds()),
 	)
 
 	var record map[string]any
@@ -206,8 +206,7 @@ func TestLogger_ErrNilOmitted(t *testing.T) {
 	l := New(&buf, slog.LevelInfo)
 
 	l.Info("operation completed",
-		SessionID("sess-no-err"),
-		Err(nil),
+		slog.String("session_id", "sess-no-err"),
 	)
 
 	var record map[string]any
@@ -360,14 +359,14 @@ func TestLogger_HeaderSanitization(t *testing.T) {
 		t.Errorf("SanitizeHeaders(nil) = %v; want nil", got)
 	}
 
-	// 测试通过 SafeHeaderAttr 写入 Logger
+	// 测试通过 SanitizeHeaders 写入 Logger
 	var buf bytes.Buffer
 	l := New(&buf, slog.LevelInfo)
-	l.Info("request received", SafeHeaderAttr(headers))
+	l.Info("request received", slog.Any("headers", SanitizeHeaders(headers)))
 
 	out := buf.String()
 	if strings.Contains(out, "super-secret-access-token") {
-		t.Fatalf("token leaked via SafeHeaderAttr: %s", out)
+		t.Fatalf("token leaked via SanitizeHeaders: %s", out)
 	}
 }
 
@@ -382,11 +381,11 @@ func TestLogger_OverlongTruncationInLog(t *testing.T) {
 	overlongReason := strings.Repeat("R", 100)
 
 	l.Info("device state report",
-		DeviceID(overlongDeviceID),
-		ClientID(overlongClientID),
-		SerialNumber(overlongSerialNumber),
-		SessionID(overlongSessionID),
-		Reason(overlongReason),
+		slog.String("device_id", overlongDeviceID),
+		slog.String("client_id", overlongClientID),
+		slog.String("serial_number", overlongSerialNumber),
+		slog.String("session_id", overlongSessionID),
+		slog.String("reason", overlongReason),
 	)
 
 	var record map[string]any
@@ -414,36 +413,6 @@ func TestLogger_OverlongTruncationInLog(t *testing.T) {
 	}
 	if record["reason"] != expectedReason {
 		t.Errorf("reason = %q; want %q", record["reason"], expectedReason)
-	}
-
-	// 同时验证如果不通过辅助函数直接传 slog.String("device_id", overlongDeviceID)，SafeReplaceAttr 也会自动截断
-	buf.Reset()
-	l.Info("raw attribute report",
-		slog.String("device_id", overlongDeviceID),
-		slog.String("client_id", overlongClientID),
-		slog.String("serial_number", overlongSerialNumber),
-		slog.String("session_id", overlongSessionID),
-		slog.String("reason", overlongReason),
-	)
-
-	if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
-		t.Fatalf("failed to unmarshal log json: %v, raw: %s", err, buf.String())
-	}
-
-	if record["device_id"] != expectedDeviceID {
-		t.Errorf("raw device_id = %q; want %q", record["device_id"], expectedDeviceID)
-	}
-	if record["client_id"] != expectedClientID {
-		t.Errorf("raw client_id = %q; want %q", record["client_id"], expectedClientID)
-	}
-	if record["serial_number"] != expectedSerialNumber {
-		t.Errorf("raw serial_number = %q; want %q", record["serial_number"], expectedSerialNumber)
-	}
-	if record["session_id"] != expectedSessionID {
-		t.Errorf("raw session_id = %q; want %q", record["session_id"], expectedSessionID)
-	}
-	if record["reason"] != expectedReason {
-		t.Errorf("raw reason = %q; want %q", record["reason"], expectedReason)
 	}
 }
 
@@ -535,7 +504,7 @@ func TestInitDefault(t *testing.T) {
 
 	slog.Info("global logger message",
 		slog.String("Authorization", "secret-token"),
-		DeviceID("my-device"),
+		slog.String("device_id", "my-device"),
 	)
 
 	out := buf.String()

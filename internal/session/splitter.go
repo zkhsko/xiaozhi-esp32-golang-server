@@ -48,11 +48,6 @@ func (s *SentenceSplitter) Flush() []string {
 	return []string{trimmed}
 }
 
-// Reset 清空分句器内部缓冲区，重置状态。
-func (s *SentenceSplitter) Reset() {
-	s.buffer = s.buffer[:0]
-}
-
 // split 循环扫描缓冲区，根据中英文标点和单句最大字符数提取所有已就绪的句子。
 func (s *SentenceSplitter) split() []string {
 	var sentences []string

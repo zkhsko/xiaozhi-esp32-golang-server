@@ -228,11 +228,11 @@ func TestSecurityAudit_DeviceClaimsTruncation(t *testing.T) {
 	over200 := strings.Repeat("z", 200)
 
 	l.Info("device connection",
-		logger.DeviceID(over200),
-		logger.ClientID(over65),
-		logger.SerialNumber(exact64),
-		logger.SessionID(over200),
-		logger.Reason(over200),
+		slog.String("device_id", over200),
+		slog.String("client_id", over65),
+		slog.String("serial_number", exact64),
+		slog.String("session_id", over200),
+		slog.String("reason", over200),
 	)
 
 	var record map[string]any
