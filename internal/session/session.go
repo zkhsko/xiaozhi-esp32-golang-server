@@ -1056,6 +1056,10 @@ func (s *Session) handleCloseEvent(ev event) {
 // closeWithReason 执行会话资源清理并安全关闭底层连接。
 func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 	s.closeOnce.Do(func() {
+		s.stopASR()
+		s.stopTTS()
+		s.stopPacer()
+
 		s.mu.Lock()
 		s.state = StateClosed
 		s.history = nil
@@ -1074,10 +1078,6 @@ func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 			s.turnCancel = nil
 		}
 		s.mu.Unlock()
-
-		s.stopASR()
-		s.stopTTS()
-		s.stopPacer()
 
 		if s.writer != nil {
 			done := make(chan struct{})
