@@ -427,13 +427,23 @@ func TestSession_Abort_Speaking_SendStopOnce_ClearDownlink_ResetReady(t *testing
 	sess.PostClientText(&ClientMessage{Kind: KindAbort, AbortReason: "用户打断播放"})
 	waitState(t, sess, StateReady, 2*time.Second)
 
+	// 确定性等待 tts.stop 异步写出
+	deadline := time.Now().Add(2 * time.Second)
+	var ttsStarts, ttsStops []string
+	for time.Now().Before(deadline) {
+		ttsStarts, ttsStops, _, _ = extractMessagesByType(fakeConn.Messages())
+		if len(ttsStops) >= 1 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
 	// 验证代次自增
 	if sess.Generation() <= gen1 {
 		t.Fatalf("expected generation to increment, before: %d, after: %d", gen1, sess.Generation())
 	}
 
 	// 验证消息列表：恰好有 1 次 tts.start 和 1 次 tts.stop
-	ttsStarts, ttsStops, _, _ := extractMessagesByType(fakeConn.Messages())
 	if len(ttsStarts) != 1 {
 		t.Fatalf("expected exactly 1 tts.start message, got %d", len(ttsStarts))
 	}
@@ -493,8 +503,18 @@ func TestSession_Abort_MultipleConsecutiveAborts_Idempotent(t *testing.T) {
 
 	waitState(t, sess, StateReady, 2*time.Second)
 
+	// 确定性等待 tts.stop 异步写出
+	deadline := time.Now().Add(2 * time.Second)
+	var ttsStops []string
+	for time.Now().Before(deadline) {
+		_, ttsStops, _, _ = extractMessagesByType(fakeConn.Messages())
+		if len(ttsStops) >= 1 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
 	// 验证 tts.stop 仅补发了 1 次
-	_, ttsStops, _, _ := extractMessagesByType(fakeConn.Messages())
 	if len(ttsStops) != 1 {
 		t.Fatalf("expected exactly 1 tts.stop message for multiple consecutive aborts, got %d", len(ttsStops))
 	}

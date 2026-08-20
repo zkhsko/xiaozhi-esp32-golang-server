@@ -1080,7 +1080,17 @@ func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 		s.stopPacer()
 
 		if s.writer != nil {
-			_ = s.writer.Close()
+			done := make(chan struct{})
+			go func() {
+				_ = s.writer.Close()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(300 * time.Millisecond):
+				s.writer.Stop()
+				<-done
+			}
 		}
 
 		if s.conn != nil {

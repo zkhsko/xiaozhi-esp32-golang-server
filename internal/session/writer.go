@@ -223,6 +223,21 @@ func (w *Writer) Close() error {
 	return w.Err()
 }
 
+// Stop 立即取消串行写流程、关闭队列并排空未发送消息。
+func (w *Writer) Stop() {
+	if w == nil {
+		return
+	}
+	w.cancel()
+	w.closeOnce.Do(func() {
+		w.mu.Lock()
+		w.closed = true
+		close(w.queue)
+		w.mu.Unlock()
+	})
+	w.drainQueue()
+}
+
 // DrainPending 快速清空当前写队列中积压的全部未发送消息，用于 abort 或打断时清理旧轮次残留。
 func (w *Writer) DrainPending() {
 	if w == nil {
@@ -230,7 +245,10 @@ func (w *Writer) DrainPending() {
 	}
 	for {
 		select {
-		case <-w.queue:
+		case _, ok := <-w.queue:
+			if !ok {
+				return
+			}
 		default:
 			return
 		}

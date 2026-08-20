@@ -674,7 +674,7 @@ func TestTTSClient_ContextCancellation(t *testing.T) {
 func TestTTSClient_CloseDuringStreaming(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, _ := websocket.Accept(w, r, nil)
-		defer conn.Close(websocket.StatusInternalError, "mock closed")
+		defer conn.Close(websocket.StatusNormalClosure, "mock closed")
 
 		_, _, _ = conn.Read(r.Context())
 		resp := ttsResponseMessage{}

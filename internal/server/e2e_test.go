@@ -283,6 +283,7 @@ func newMultiTurnMockBailianWSServer(t *testing.T, asrTurns []mockASRTurn, ttsTu
 					}
 
 					if curTurn.fail && curTurn.failAfterChunks > 0 && chunkIdx >= curTurn.failAfterChunks {
+						time.Sleep(30 * time.Millisecond)
 						errCode := curTurn.errorCode
 						if errCode == "" {
 							errCode = "TTS_FAILED"
