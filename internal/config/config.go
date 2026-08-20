@@ -76,6 +76,9 @@ const (
 
 	minTTSSentenceTimeout = 5 * time.Second
 	maxTTSSentenceTimeout = 60 * time.Second
+
+	minASRResultTimeout = 1 * time.Second
+	maxASRResultTimeout = 30 * time.Second
 )
 
 // ServerConfig 定义 HTTP 和 WebSocket 基础服务配置。
@@ -97,6 +100,7 @@ type SessionConfig struct {
 	MaxWSTextMessageBytes     int64         `yaml:"max_ws_text_message_bytes"`
 	MaxOpusPacketBytes        int           `yaml:"max_opus_packet_bytes"`
 	MaxListeningDuration      time.Duration `yaml:"max_listening_duration"`
+	ASRResultTimeout          time.Duration `yaml:"asr_result_timeout,omitempty"`
 	ASRPCMQueueCapacity       int           `yaml:"asr_pcm_queue_capacity"`
 	TTSPCMQueueCapacity       int           `yaml:"tts_pcm_queue_capacity"`
 	DownlinkOpusQueueCapacity int           `yaml:"downlink_opus_queue_capacity"`
@@ -236,6 +240,11 @@ func (c *Config) validateSession() error {
 	}
 	if err := validateDuration("max_listening_duration", c.Session.MaxListeningDuration, minListeningDuration, maxListeningDuration); err != nil {
 		return err
+	}
+	if c.Session.ASRResultTimeout > 0 {
+		if err := validateDuration("asr_result_timeout", c.Session.ASRResultTimeout, minASRResultTimeout, maxASRResultTimeout); err != nil {
+			return err
+		}
 	}
 	if err := validateInt("asr_pcm_queue_capacity", c.Session.ASRPCMQueueCapacity, minPCMQueueCapacity, maxPCMQueueCapacity); err != nil {
 		return err

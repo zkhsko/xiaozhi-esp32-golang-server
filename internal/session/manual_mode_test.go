@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -32,6 +33,28 @@ func createTestSessionWithCustomDuration(ctx context.Context, asrClient *mockSes
 			HelloTimeout:         5 * time.Second,
 			MaxOpusPacketBytes:   1024,
 			MaxListeningDuration: duration,
+			ASRPCMQueueCapacity:  50,
+		},
+	}
+	info := &ClientHeaderInfo{
+		DeviceID:     "test-device",
+		ClientID:     "test-client",
+		SerialNumber: "test-sn",
+	}
+	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, asrClient, nil, nil, nil)
+	return sess, fakeConn, writer
+}
+
+// createTestSessionWithASRResultTimeout 创建包含自定义 ASR 识别结果等待超时时限的测试会话。
+func createTestSessionWithASRResultTimeout(ctx context.Context, asrClient *mockSessionASRClient, resultTimeout time.Duration) (*Session, *fakeWSConn, *Writer) {
+	fakeConn := &fakeWSConn{}
+	writer := NewWriter(ctx, fakeConn, 100, nil)
+	cfg := &config.Config{
+		Session: config.SessionConfig{
+			HelloTimeout:         5 * time.Second,
+			MaxOpusPacketBytes:   1024,
+			MaxListeningDuration: 30 * time.Second,
+			ASRResultTimeout:     resultTimeout,
 			ASRPCMQueueCapacity:  50,
 		},
 	}
@@ -620,5 +643,216 @@ func TestManualMode_ConcurrentStopAndAudio_Race(t *testing.T) {
 
 	if sess.State() != StateProcessing {
 		t.Errorf("expected final state to be PROCESSING, got %v", sess.State())
+	}
+}
+
+// TestManualMode_MidSpeechSentenceEnd_DoesNotPrematurelyCutOff 验证 manual 模式按住说话过程中，
+// 即使百炼上游在用户说话中途停顿产生中间分句 VAD 信号，会话也不会提前截断或切入 PROCESSING，
+// 只有在用户松开按键发送 listen.stop 触发 Finish 后，才会等待百炼最终整句识别结果并转入 PROCESSING。
+func TestManualMode_MidSpeechSentenceEnd_DoesNotPrematurelyCutOff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	asrClient := newMockSessionASRClient()
+	sess, fakeConn, _ := createTestSessionWithASR(ctx, asrClient, 10)
+	go func() { _ = sess.Run() }()
+	defer sess.Close()
+
+	// 握手 -> READY
+	validHello := []byte(`{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`)
+	sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHello})
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	// listen.start manual -> LISTENING
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeManual})
+	waitState(t, sess, StateListening, 2*time.Second)
+
+	stream := waitForStream(t, asrClient, 2*time.Second)
+
+	// 1. 用户按住按键发送第一句音频
+	for i := 0; i < 2; i++ {
+		sess.PostClientAudio(encodeSineOpusPacket(t, float64(440+i*20)))
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for stream.FrameCount() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if stream.FrameCount() != 2 {
+		t.Fatalf("expected 2 frames in stream, got %d", stream.FrameCount())
+	}
+
+	// 2. 模拟百炼上游在用户说话中途停顿时就绪了中间分句结果（模拟中间 VAD 分句）
+	// 注意：此时用户尚未发送 listen.stop（按键仍处于按下状态）
+	stream.SetResult("第一句话分句结果", nil)
+
+	// 稍作等待，验证会话依然稳定处于 LISTENING 状态，绝不提前切入 PROCESSING，且未下发 STT
+	time.Sleep(50 * time.Millisecond)
+	if sess.State() != StateListening {
+		t.Fatalf("expected state to remain LISTENING during manual speech hold, got %v", sess.State())
+	}
+	sttMsgs := extractSTTMessages(fakeConn.Messages())
+	if len(sttMsgs) != 0 {
+		t.Fatalf("expected 0 STT messages before listen.stop, got %d", len(sttMsgs))
+	}
+
+	// 3. 用户继续发送第二句音频
+	for i := 0; i < 2; i++ {
+		sess.PostClientAudio(encodeSineOpusPacket(t, float64(500+i*20)))
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for stream.FrameCount() < 4 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if stream.FrameCount() != 4 {
+		t.Fatalf("expected 4 frames in stream, got %d", stream.FrameCount())
+	}
+
+	// 重置 mock stream 的最终完整结果
+	const expectedFullText = "第一句话分句结果。第二句话完整识别。"
+	stream.SetResult(expectedFullText, nil)
+
+	// 4. 用户松开按键，发送 listen.stop
+	sess.PostClientText(&ClientMessage{Kind: KindListenStop})
+	waitForStreamFinish(t, stream, 2*time.Second)
+
+	// 断言会话在收到 listen.stop 后成功获取最终完整文本并流转至 PROCESSING
+	waitState(t, sess, StateProcessing, 2*time.Second)
+
+	sttMsgs = extractSTTMessages(fakeConn.Messages())
+	if len(sttMsgs) != 1 {
+		t.Fatalf("expected exactly 1 STT message after listen.stop, got %d", len(sttMsgs))
+	}
+	if sttMsgs[0].Text != expectedFullText {
+		t.Errorf("expected STT text %q, got %q", expectedFullText, sttMsgs[0].Text)
+	}
+}
+
+// TestManualMode_PostStopASRHang_TimeoutClosesConnection 验证 manual 模式收到 listen.stop 并触发 finishASR 后，
+// 若百炼上游假死挂起未返回识别结果，识别超时定时器到期后自动触发超时保护，安全关闭连接并清理 ASR 资源。
+func TestManualMode_PostStopASRHang_TimeoutClosesConnection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	asrClient := newMockSessionASRClient()
+	// 设置极短的 ASR 识别等待时限 80ms 进行确定性验证
+	shortTimeout := 80 * time.Millisecond
+	sess, _, _ := createTestSessionWithASRResultTimeout(ctx, asrClient, shortTimeout)
+	go func() { _ = sess.Run() }()
+	defer sess.Close()
+
+	// 握手 -> READY -> LISTENING (manual)
+	validHello := []byte(`{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`)
+	sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHello})
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeManual})
+	waitState(t, sess, StateListening, 2*time.Second)
+
+	stream := waitForStream(t, asrClient, 2*time.Second)
+
+	// 发送 1 帧音频
+	sess.PostClientAudio(encodeSineOpusPacket(t, 440.0))
+
+	// 发送 listen.stop -> 触发 finishASR
+	sess.PostClientText(&ClientMessage{Kind: KindListenStop})
+	waitForStreamFinish(t, stream, 2*time.Second)
+
+	// 模拟百炼上游假死：不调用 stream.SetResult，让其无期限阻塞
+	// 等待识别超时定时器到期 -> 会话应自动迁移至 CLOSED 状态并断开
+	waitState(t, sess, StateClosed, 2*time.Second)
+
+	// 验证 ASR 流已关闭且 ASRQueue 为 nil
+	if !stream.IsClosed() {
+		t.Error("expected ASR stream to be closed on ASR result timeout")
+	}
+	if sess.ASRQueue() != nil {
+		t.Error("expected session ASRQueue to be nil on ASR result timeout")
+	}
+
+	// 验证会话 Done 通道已关闭
+	select {
+	case <-sess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("session Done channel did not close after ASR result timeout")
+	}
+}
+
+// TestManualMode_PostStopAbort_CancelsASRResultTimeout 验证 manual 模式收到 listen.stop 之后、
+// ASR 结果返回之前的等待期间，若收到 abort 打断指令，识别结果等待定时器被安全取消，
+// 会话重置回 READY 状态且不会被超时的旧定时器断开连接。
+func TestManualMode_PostStopAbort_CancelsASRResultTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	asrClient := newMockSessionASRClient()
+	resultTimeout := 120 * time.Millisecond
+	sess, _, _ := createTestSessionWithASRResultTimeout(ctx, asrClient, resultTimeout)
+	go func() { _ = sess.Run() }()
+	defer sess.Close()
+
+	// 握手 -> READY -> LISTENING (manual)
+	validHello := []byte(`{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`)
+	sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHello})
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeManual})
+	waitState(t, sess, StateListening, 2*time.Second)
+
+	stream := waitForStream(t, asrClient, 2*time.Second)
+
+	// 发送 listen.stop -> 启动识别超时定时器
+	sess.PostClientText(&ClientMessage{Kind: KindListenStop})
+	waitForStreamFinish(t, stream, 2*time.Second)
+
+	// 迅速发送 abort
+	sess.PostAbort("用户在等待识别时取消")
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	// 等待超过 120ms 的超时时限
+	time.Sleep(160 * time.Millisecond)
+
+	// 验证状态依然稳定保持在 READY，未被旧的 ASR 超时定时器触发关闭
+	if sess.State() != StateReady {
+		t.Fatalf("expected state to remain READY after ASR timeout duration, got %v", sess.State())
+	}
+}
+
+// TestManualMode_PostStopASRFailure_ClosesConnection 验证 manual 模式收到 listen.stop 后，
+// 若百炼上游返回错误，会话安全清理资源并关闭连接。
+func TestManualMode_PostStopASRFailure_ClosesConnection(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	asrClient := newMockSessionASRClient()
+	sess, _, _ := createTestSessionWithASR(ctx, asrClient, 10)
+	go func() { _ = sess.Run() }()
+	defer sess.Close()
+
+	// 握手 -> READY -> LISTENING (manual)
+	validHello := []byte(`{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`)
+	sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHello})
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeManual})
+	waitState(t, sess, StateListening, 2*time.Second)
+
+	stream := waitForStream(t, asrClient, 2*time.Second)
+
+	sess.PostClientText(&ClientMessage{Kind: KindListenStop})
+	waitForStreamFinish(t, stream, 2*time.Second)
+
+	// 模拟上游返回识别错误
+	stream.SetResult("", errors.New("upstream asr recognition failure"))
+
+	// 断言会话迁移至 CLOSED
+	waitState(t, sess, StateClosed, 2*time.Second)
+
+	if !stream.IsClosed() {
+		t.Error("expected ASR stream to be closed after error")
+	}
+	if sess.ASRQueue() != nil {
+		t.Error("expected session ASRQueue to be nil after error")
 	}
 }

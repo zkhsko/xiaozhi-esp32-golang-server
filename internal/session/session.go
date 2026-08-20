@@ -26,6 +26,9 @@ const (
 	// DefaultMaxListeningDuration 默认单次最大收音时长（30 秒）。
 	DefaultMaxListeningDuration = 30 * time.Second
 
+	// DefaultASRResultTimeout 默认手动模式收音结束后等待 ASR 识别结果的最大超时（5 秒）。
+	DefaultASRResultTimeout = 5 * time.Second
+
 	// DefaultMaxHistoryTurns 默认最多保留历史轮数（6 轮）。
 	DefaultMaxHistoryTurns = 6
 
@@ -106,6 +109,7 @@ type Session struct {
 
 	helloTimer     *time.Timer
 	listeningTimer *time.Timer
+	asrResultTimer *time.Timer
 
 	mcpMu      sync.Mutex
 	mcpSeq     atomic.Int64
@@ -598,7 +602,7 @@ func (s *Session) handleClientTextEvent(ev event) {
 			s.mu.Unlock()
 
 			s.startListeningTimer(gen)
-			s.startASRStream(gen)
+			s.startASRStream(gen, mode)
 			s.logger.Info("session entered listening state",
 				"session_id", s.SessionID(),
 				"generation", gen,
@@ -634,14 +638,22 @@ func (s *Session) handleClientTextEvent(ev event) {
 					return
 				}
 				s.manualStopReceived = true
+				gen := s.generation
+				turnCtx := s.turnCtx
+				stream := s.asrStream
+				queue := s.asrQueue
 				s.mu.Unlock()
 
 				s.logger.Info("manual listen.stop received",
 					"session_id", s.SessionID(),
-					"generation", s.Generation(),
+					"generation", gen,
 				)
 				s.stopListeningTimer()
+				s.startASRResultTimer(gen)
 				s.finishASR()
+				if stream != nil {
+					go s.readASRResultManual(turnCtx, stream, queue, gen)
+				}
 			}
 		default:
 			s.logDiag("listen.stop ignored in non-listening state",
@@ -773,6 +785,7 @@ func (s *Session) handleASRFinalEvent(ev event) {
 	}
 
 	s.stopListeningTimer()
+	s.stopASRResultTimer()
 	s.stopASR()
 
 	if ev.text == "" {
@@ -943,6 +956,7 @@ func (s *Session) handleAbortEvent(reason string) {
 	s.mu.Unlock()
 
 	s.stopListeningTimer()
+	s.stopASRResultTimer()
 	s.stopASR()
 	s.stopTTS()
 	s.stopPacer()
@@ -992,6 +1006,17 @@ func (s *Session) handleTimeoutEvent(ev event) {
 				"generation", ev.generation,
 			)
 			s.closeWithReason(websocket.StatusPolicyViolation, "max listening duration exceeded")
+		}
+		return
+	}
+
+	if ev.text == "asr recognition timeout" {
+		if ev.generation == s.Generation() && s.State() == StateListening {
+			s.logger.Warn("asr recognition timeout exceeded",
+				"session_id", s.SessionID(),
+				"generation", ev.generation,
+			)
+			s.closeWithReason(websocket.StatusPolicyViolation, "asr recognition timeout")
 		}
 		return
 	}
@@ -1063,6 +1088,10 @@ func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 		if s.listeningTimer != nil {
 			s.listeningTimer.Stop()
 			s.listeningTimer = nil
+		}
+		if s.asrResultTimer != nil {
+			s.asrResultTimer.Stop()
+			s.asrResultTimer = nil
 		}
 
 		if s.turnCancel != nil {
@@ -1247,6 +1276,39 @@ func (s *Session) stopListeningTimer() {
 	}
 }
 
+// startASRResultTimer 启动手动模式收音结束后等待 ASR 识别结果的超时定时器。
+func (s *Session) startASRResultTimer(gen uint64) {
+	dur := DefaultASRResultTimeout
+	if s.cfg != nil && s.cfg.Session.ASRResultTimeout > 0 {
+		dur = s.cfg.Session.ASRResultTimeout
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == StateClosed {
+		return
+	}
+	if s.asrResultTimer != nil {
+		s.asrResultTimer.Stop()
+	}
+	s.asrResultTimer = time.AfterFunc(dur, func() {
+		s.postEvent(event{
+			kind:       eventKindTimeout,
+			generation: gen,
+			text:       "asr recognition timeout",
+		})
+	})
+}
+
+// stopASRResultTimer 停止等待 ASR 识别结果的超时定时器。
+func (s *Session) stopASRResultTimer() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.asrResultTimer != nil {
+		s.asrResultTimer.Stop()
+		s.asrResultTimer = nil
+	}
+}
+
 // sendTextMessage 向写队列发送文本消息。
 func (s *Session) sendTextMessage(payload []byte) error {
 	if s.writer == nil {
@@ -1280,7 +1342,7 @@ func (s *Session) truncatedSerialNumber() string {
 }
 
 // startASRStream 为指定代次启动 ASR 流式识别与音频消费队列。
-func (s *Session) startASRStream(gen uint64) {
+func (s *Session) startASRStream(gen uint64, mode string) {
 	if s.asrClient == nil {
 		return
 	}
@@ -1312,17 +1374,72 @@ func (s *Session) startASRStream(gen uint64) {
 	s.asrQueue = audio.NewASRAudioQueue(turnCtx, stream, queueCap, s.logger)
 	s.mu.Unlock()
 
-	go s.readASRResult(turnCtx, stream, gen)
+	if mode == ListenModeAuto {
+		go s.readASRResultAuto(turnCtx, stream, gen)
+	}
 }
 
-// readASRResult 在后台协程中等待 ASR 流式识别结果并投递至事件通道。
-func (s *Session) readASRResult(ctx context.Context, stream ai.ASRStream, gen uint64) {
+// readASRResultAuto 在自动模式后台协程中等待 VAD 识别结果并投递至事件通道。
+func (s *Session) readASRResultAuto(ctx context.Context, stream ai.ASRStream, gen uint64) {
 	text, err := stream.Result(ctx)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			return
 		}
-		s.logger.Warn("asr recognition failed",
+		s.logger.Warn("asr recognition failed in auto mode",
+			"error", err,
+			"session_id", s.SessionID(),
+			"generation", gen,
+		)
+		s.postEvent(event{
+			kind:       eventKindError,
+			generation: gen,
+			err:        err,
+			fatal:      true,
+		})
+		return
+	}
+
+	s.postEvent(event{
+		kind:       eventKindASRFinal,
+		generation: gen,
+		text:       text,
+	})
+}
+
+// readASRResultManual 在手动模式收音结束后等待音频排空与百炼最终识别结果，并投递至事件通道。
+func (s *Session) readASRResultManual(ctx context.Context, stream ai.ASRStream, queue *audio.ASRAudioQueue, gen uint64) {
+	if queue != nil {
+		select {
+		case <-queue.Done():
+			if qErr := queue.Err(); qErr != nil && !errors.Is(qErr, context.Canceled) {
+				if ctx.Err() != nil {
+					return
+				}
+				s.logger.Warn("asr audio queue finished with error",
+					"error", qErr,
+					"session_id", s.SessionID(),
+					"generation", gen,
+				)
+				s.postEvent(event{
+					kind:       eventKindError,
+					generation: gen,
+					err:        qErr,
+					fatal:      true,
+				})
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+
+	text, err := stream.Result(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return
+		}
+		s.logger.Warn("asr recognition failed in manual mode",
 			"error", err,
 			"session_id", s.SessionID(),
 			"generation", gen,
