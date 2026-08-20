@@ -229,11 +229,12 @@ func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 	streamCtx, streamCancel := context.WithCancel(ctx)
 
 	stream := &ASRStream{
-		conn:        conn,
-		taskID:      taskID,
-		ctx:         streamCtx,
-		cancel:      streamCancel,
-		resultReady: make(chan struct{}),
+		conn:           conn,
+		taskID:         taskID,
+		ctx:            streamCtx,
+		cancel:         streamCancel,
+		vadReady:       make(chan struct{}),
+		taskFinishedCh: make(chan struct{}),
 	}
 
 	go stream.readLoop()
@@ -252,13 +253,15 @@ type ASRStream struct {
 
 	writeMu sync.Mutex
 
-	mu          sync.RWMutex
-	closed      bool
-	finished    bool
-	partialText string
-	finalText   string
-	err         error
-	resultReady chan struct{}
+	mu             sync.RWMutex
+	closed         bool
+	finished       bool
+	finishCalled   bool
+	partialText    string
+	finalText      string
+	err            error
+	vadReady       chan struct{}
+	taskFinishedCh chan struct{}
 }
 
 func (s *ASRStream) readLoop() {
@@ -268,9 +271,14 @@ func (s *ASRStream) readLoop() {
 		}
 		s.mu.Lock()
 		select {
-		case <-s.resultReady:
+		case <-s.vadReady:
 		default:
-			close(s.resultReady)
+			close(s.vadReady)
+		}
+		select {
+		case <-s.taskFinishedCh:
+		default:
+			close(s.taskFinishedCh)
 		}
 		s.mu.Unlock()
 	}()
@@ -306,6 +314,7 @@ func (s *ASRStream) readLoop() {
 					} else if sentence.Text != "" {
 						s.updateFinalText(sentence.Text)
 					}
+					s.markVADReady()
 				} else {
 					if resp.Payload.Output.Text != "" {
 						s.updatePartialText(resp.Payload.Output.Text)
@@ -379,9 +388,24 @@ func (s *ASRStream) recordError(err error) {
 		}
 	}
 	select {
-	case <-s.resultReady:
+	case <-s.vadReady:
 	default:
-		close(s.resultReady)
+		close(s.vadReady)
+	}
+	select {
+	case <-s.taskFinishedCh:
+	default:
+		close(s.taskFinishedCh)
+	}
+}
+
+func (s *ASRStream) markVADReady() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case <-s.vadReady:
+	default:
+		close(s.vadReady)
 	}
 }
 
@@ -389,9 +413,14 @@ func (s *ASRStream) markFinished() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	select {
-	case <-s.resultReady:
+	case <-s.vadReady:
 	default:
-		close(s.resultReady)
+		close(s.vadReady)
+	}
+	select {
+	case <-s.taskFinishedCh:
+	default:
+		close(s.taskFinishedCh)
 	}
 }
 
@@ -449,6 +478,7 @@ func (s *ASRStream) Finish(ctx context.Context) error {
 		s.mu.Unlock()
 		return errors.New("asr stream is closed")
 	}
+	s.finishCalled = true
 	if s.finished {
 		s.mu.Unlock()
 		return nil
@@ -458,7 +488,6 @@ func (s *ASRStream) Finish(ctx context.Context) error {
 		s.mu.Unlock()
 		return err
 	}
-	s.finished = true
 	taskID := s.taskID
 	s.mu.Unlock()
 
@@ -483,8 +512,26 @@ func (s *ASRStream) Finish(ctx context.Context) error {
 
 // Result 等待并返回最终非空识别文本。
 func (s *ASRStream) Result(ctx context.Context) (string, error) {
+	s.mu.RLock()
+	finishCalled := s.finishCalled
+	s.mu.RUnlock()
+
+	var waitCh chan struct{}
+	if finishCalled {
+		waitCh = s.taskFinishedCh
+	} else {
+		waitCh = s.vadReady
+	}
+
 	select {
-	case <-s.resultReady:
+	case <-waitCh:
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		if s.err != nil {
+			return "", s.err
+		}
+		return s.finalText, nil
+	case <-s.taskFinishedCh:
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		if s.err != nil {
@@ -519,9 +566,14 @@ func (s *ASRStream) Close() error {
 
 		s.mu.Lock()
 		select {
-		case <-s.resultReady:
+		case <-s.vadReady:
 		default:
-			close(s.resultReady)
+			close(s.vadReady)
+		}
+		select {
+		case <-s.taskFinishedCh:
+		default:
+			close(s.taskFinishedCh)
 		}
 		s.mu.Unlock()
 	})
