@@ -1698,3 +1698,447 @@ func TestTTSStream_CancelMethod(t *testing.T) {
 		t.Fatal("expected SendSentence to fail after Cancel, got nil")
 	}
 }
+
+func TestTTSClient_TimeoutConfiguration(t *testing.T) {
+	t.Run("custom_timeouts_preserved", func(t *testing.T) {
+		cfg := &config.Config{
+			DashScopeAPIKey: "test-key",
+			AI: config.AIConfig{
+				Bailian: config.BailianConfig{
+					WSEndpoint:           "ws://127.0.0.1:8080/ws",
+					TTSModel:             "qwen-audio-3.0-tts-flash",
+					TTSVoice:             "longanlingxi",
+					TTSFirstAudioTimeout: 8 * time.Second,
+					TTSSentenceTimeout:   25 * time.Second,
+				},
+			},
+		}
+
+		client, err := NewTTSClient(cfg)
+		if err != nil {
+			t.Fatalf("NewTTSClient failed: %v", err)
+		}
+		if client.firstAudioTimeout != 8*time.Second {
+			t.Fatalf("expected firstAudioTimeout 8s, got %v", client.firstAudioTimeout)
+		}
+		if client.sentenceTimeout != 25*time.Second {
+			t.Fatalf("expected sentenceTimeout 25s, got %v", client.sentenceTimeout)
+		}
+	})
+
+	t.Run("default_timeouts_fallback", func(t *testing.T) {
+		cfg := &config.Config{
+			DashScopeAPIKey: "test-key",
+			AI: config.AIConfig{
+				Bailian: config.BailianConfig{
+					WSEndpoint: "ws://127.0.0.1:8080/ws",
+					TTSModel:   "qwen-audio-3.0-tts-flash",
+					TTSVoice:   "longanlingxi",
+				},
+			},
+		}
+
+		client, err := NewTTSClient(cfg)
+		if err != nil {
+			t.Fatalf("NewTTSClient failed: %v", err)
+		}
+		if client.firstAudioTimeout != 5*time.Second {
+			t.Fatalf("expected default firstAudioTimeout 5s, got %v", client.firstAudioTimeout)
+		}
+		if client.sentenceTimeout != 20*time.Second {
+			t.Fatalf("expected default sentenceTimeout 20s, got %v", client.sentenceTimeout)
+		}
+	})
+}
+
+func TestTTSStream_FirstAudioTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusInternalError, "closed")
+
+		_, data, err := conn.Read(r.Context())
+		if err != nil {
+			return
+		}
+		var runMsg ttsRunTaskMessage
+		_ = json.Unmarshal(data, &runMsg)
+
+		startResp := ttsResponseMessage{}
+		startResp.Header.Event = "task-started"
+		startResp.Header.TaskID = runMsg.Header.TaskID
+		sb, _ := json.Marshal(startResp)
+		_ = conn.Write(r.Context(), websocket.MessageText, sb)
+
+		// 持续读取客户端请求，但不返回任何 PCM 音频数据，模拟首音频假死
+		for {
+			_, _, rErr := conn.Read(r.Context())
+			if rErr != nil {
+				break
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.Config{
+		DashScopeAPIKey: "test-key",
+		AI: config.AIConfig{
+			Bailian: config.BailianConfig{
+				WSEndpoint:           wsURL,
+				TTSModel:             "qwen-audio-3.0-tts-flash",
+				TTSVoice:             "longanlingxi",
+				TTSFirstAudioTimeout: 80 * time.Millisecond,
+				TTSSentenceTimeout:   300 * time.Millisecond,
+			},
+		},
+	}
+
+	client, err := NewTTSClient(cfg)
+	if err != nil {
+		t.Fatalf("NewTTSClient failed: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream failed: %v", err)
+	}
+	defer stream.Close()
+
+	// 发送首句文本
+	if err := stream.SendSentence(context.Background(), "你好，请回答。"); err != nil {
+		t.Fatalf("SendSentence failed: %v", err)
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		_, rErr := stream.NextPCM(context.Background())
+		doneCh <- rErr
+	}()
+
+	select {
+	case rErr := <-doneCh:
+		if rErr == nil {
+			t.Fatal("expected error on first audio timeout, got nil")
+		}
+		if !errors.Is(rErr, context.DeadlineExceeded) {
+			t.Fatalf("expected context.DeadlineExceeded in error chain, got: %v", rErr)
+		}
+		if !strings.Contains(rErr.Error(), "first audio timeout") {
+			t.Fatalf("expected error message to contain 'first audio timeout', got: %v", rErr)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("NextPCM did not unblock in time on first audio timeout")
+	}
+
+	// 验证超时后后续调用均安全报错
+	if err := stream.SendSentence(context.Background(), "后续句子"); err == nil {
+		t.Fatal("expected SendSentence to fail after timeout, got nil")
+	}
+}
+
+func TestTTSStream_SentenceTimeout_MidStreamHang(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusInternalError, "closed")
+
+		_, data, err := conn.Read(r.Context())
+		if err != nil {
+			return
+		}
+		var runMsg ttsRunTaskMessage
+		_ = json.Unmarshal(data, &runMsg)
+
+		startResp := ttsResponseMessage{}
+		startResp.Header.Event = "task-started"
+		startResp.Header.TaskID = runMsg.Header.TaskID
+		sb, _ := json.Marshal(startResp)
+		_ = conn.Write(r.Context(), websocket.MessageText, sb)
+
+		var sentenceIndex int
+		for {
+			mType, mData, rErr := conn.Read(r.Context())
+			if rErr != nil {
+				break
+			}
+			if mType == websocket.MessageText && strings.Contains(string(mData), "continue-task") {
+				sentenceIndex++
+				if sentenceIndex == 1 {
+					// 第一句正常返回 PCM 数据块
+					_ = conn.Write(r.Context(), websocket.MessageBinary, []byte{0x01, 0x02, 0x03, 0x04})
+				}
+				// 第二句收到后假死挂起，不再返回任何数据
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.Config{
+		DashScopeAPIKey: "test-key",
+		AI: config.AIConfig{
+			Bailian: config.BailianConfig{
+				WSEndpoint:           wsURL,
+				TTSModel:             "qwen-audio-3.0-tts-flash",
+				TTSVoice:             "longanlingxi",
+				TTSFirstAudioTimeout: 300 * time.Millisecond,
+				TTSSentenceTimeout:   80 * time.Millisecond,
+			},
+		},
+	}
+
+	client, err := NewTTSClient(cfg)
+	if err != nil {
+		t.Fatalf("NewTTSClient failed: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream failed: %v", err)
+	}
+	defer stream.Close()
+
+	// 发送第一句
+	if err := stream.SendSentence(context.Background(), "第一句话。"); err != nil {
+		t.Fatalf("SendSentence 1 failed: %v", err)
+	}
+
+	// 接收第一句的 PCM 音频
+	chunk, err := stream.NextPCM(context.Background())
+	if err != nil {
+		t.Fatalf("expected initial pcm chunk, got error: %v", err)
+	}
+	if !bytes.Equal(chunk, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("unexpected chunk content: %v", chunk)
+	}
+
+	// 发送第二句（服务端将假死不回音频）
+	if err := stream.SendSentence(context.Background(), "第二句话。"); err != nil {
+		t.Fatalf("SendSentence 2 failed: %v", err)
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		_, rErr := stream.NextPCM(context.Background())
+		doneCh <- rErr
+	}()
+
+	select {
+	case rErr := <-doneCh:
+		if rErr == nil {
+			t.Fatal("expected error on sentence timeout, got nil")
+		}
+		if !errors.Is(rErr, context.DeadlineExceeded) {
+			t.Fatalf("expected context.DeadlineExceeded in error chain, got: %v", rErr)
+		}
+		if !strings.Contains(rErr.Error(), "sentence timeout") {
+			t.Fatalf("expected error message to contain 'sentence timeout', got: %v", rErr)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("NextPCM did not unblock in time on sentence timeout")
+	}
+}
+
+func TestTTSStream_SentenceTimeout_FinishHang(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusInternalError, "closed")
+
+		_, data, err := conn.Read(r.Context())
+		if err != nil {
+			return
+		}
+		var runMsg ttsRunTaskMessage
+		_ = json.Unmarshal(data, &runMsg)
+
+		startResp := ttsResponseMessage{}
+		startResp.Header.Event = "task-started"
+		startResp.Header.TaskID = runMsg.Header.TaskID
+		sb, _ := json.Marshal(startResp)
+		_ = conn.Write(r.Context(), websocket.MessageText, sb)
+
+		for {
+			mType, mData, rErr := conn.Read(r.Context())
+			if rErr != nil {
+				break
+			}
+			if mType == websocket.MessageText {
+				if strings.Contains(string(mData), "continue-task") {
+					// 响应 1 个音频块
+					_ = conn.Write(r.Context(), websocket.MessageBinary, []byte{0xaa, 0xbb})
+				}
+				// 收到 finish-task 后故意挂起，不发 task-finished 也不发剩余音频
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.Config{
+		DashScopeAPIKey: "test-key",
+		AI: config.AIConfig{
+			Bailian: config.BailianConfig{
+				WSEndpoint:           wsURL,
+				TTSModel:             "qwen-audio-3.0-tts-flash",
+				TTSVoice:             "longanlingxi",
+				TTSFirstAudioTimeout: 300 * time.Millisecond,
+				TTSSentenceTimeout:   80 * time.Millisecond,
+			},
+		},
+	}
+
+	client, err := NewTTSClient(cfg)
+	if err != nil {
+		t.Fatalf("NewTTSClient failed: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream failed: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.SendSentence(context.Background(), "唯一的一句话。"); err != nil {
+		t.Fatalf("SendSentence failed: %v", err)
+	}
+
+	chunk, err := stream.NextPCM(context.Background())
+	if err != nil {
+		t.Fatalf("expected pcm chunk, got error: %v", err)
+	}
+	if !bytes.Equal(chunk, []byte{0xaa, 0xbb}) {
+		t.Fatalf("unexpected chunk content: %v", chunk)
+	}
+
+	// 调用 Finish 发送结束，随后等待流完成
+	if err := stream.Finish(context.Background()); err != nil {
+		t.Fatalf("Finish failed: %v", err)
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		_, rErr := stream.NextPCM(context.Background())
+		doneCh <- rErr
+	}()
+
+	select {
+	case rErr := <-doneCh:
+		if rErr == nil {
+			t.Fatal("expected error on finish sentence timeout, got nil")
+		}
+		if !errors.Is(rErr, context.DeadlineExceeded) {
+			t.Fatalf("expected context.DeadlineExceeded in error chain, got: %v", rErr)
+		}
+		if !strings.Contains(rErr.Error(), "sentence timeout") {
+			t.Fatalf("expected error message to contain 'sentence timeout', got: %v", rErr)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("NextPCM did not unblock in time on finish sentence timeout")
+	}
+}
+
+func TestTTSStream_NormalFlowWithSentenceReset(t *testing.T) {
+	// 验证在正常多次交互且单句间隔内持续产出 PCM 时，定时器不断重置，正常完成不会被误杀
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusInternalError, "closed")
+
+		_, data, _ := conn.Read(r.Context())
+		var runMsg ttsRunTaskMessage
+		_ = json.Unmarshal(data, &runMsg)
+
+		startResp := ttsResponseMessage{}
+		startResp.Header.Event = "task-started"
+		startResp.Header.TaskID = runMsg.Header.TaskID
+		sb, _ := json.Marshal(startResp)
+		_ = conn.Write(r.Context(), websocket.MessageText, sb)
+
+		for {
+			mType, mData, rErr := conn.Read(r.Context())
+			if rErr != nil {
+				break
+			}
+			if mType == websocket.MessageText {
+				if strings.Contains(string(mData), "continue-task") {
+					// 持续下发 3 个小音频包，每个包间隔 20ms
+					for i := 0; i < 3; i++ {
+						time.Sleep(20 * time.Millisecond)
+						_ = conn.Write(r.Context(), websocket.MessageBinary, []byte{byte(i + 1)})
+					}
+				} else if strings.Contains(string(mData), "finish-task") {
+					time.Sleep(20 * time.Millisecond)
+					_ = conn.Write(r.Context(), websocket.MessageBinary, []byte{0x99})
+					finishResp := ttsResponseMessage{}
+					finishResp.Header.Event = "task-finished"
+					fb, _ := json.Marshal(finishResp)
+					_ = conn.Write(r.Context(), websocket.MessageText, fb)
+					return
+				}
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &config.Config{
+		DashScopeAPIKey: "test-key",
+		AI: config.AIConfig{
+			Bailian: config.BailianConfig{
+				WSEndpoint:           wsURL,
+				TTSModel:             "qwen-audio-3.0-tts-flash",
+				TTSVoice:             "longanlingxi",
+				TTSFirstAudioTimeout: 100 * time.Millisecond,
+				TTSSentenceTimeout:   100 * time.Millisecond,
+			},
+		},
+	}
+
+	client, err := NewTTSClient(cfg)
+	if err != nil {
+		t.Fatalf("NewTTSClient failed: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream failed: %v", err)
+	}
+	defer stream.Close()
+
+	// 发送两个句子，每个句子生成耗时约 60ms（总耗时约 140ms > 100ms 超时），但因中间持续有 PCM 重置定时器，应顺利完成
+	if err := stream.SendSentence(context.Background(), "句子一"); err != nil {
+		t.Fatalf("SendSentence 1 failed: %v", err)
+	}
+	if err := stream.SendSentence(context.Background(), "句子二"); err != nil {
+		t.Fatalf("SendSentence 2 failed: %v", err)
+	}
+	if err := stream.Finish(context.Background()); err != nil {
+		t.Fatalf("Finish failed: %v", err)
+	}
+
+	var totalChunks int
+	for {
+		_, rErr := stream.NextPCM(context.Background())
+		if errors.Is(rErr, io.EOF) {
+			break
+		}
+		if rErr != nil {
+			t.Fatalf("unexpected error during streaming: %v", rErr)
+		}
+		totalChunks++
+	}
+
+	if totalChunks != 7 { // 3 + 3 + 1
+		t.Fatalf("expected 7 chunks, got %d", totalChunks)
+	}
+}

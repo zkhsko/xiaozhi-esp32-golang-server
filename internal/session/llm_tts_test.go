@@ -943,3 +943,116 @@ func TestOrchestration_ConcurrentRace(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestOrchestration_TTSFirstAudioTimeout_SessionRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockLLM := newMockLLMStream([]string{"第一句话。", "第二句话。"}, nil)
+	llmClient := newMockLLMClient(mockLLM, nil)
+
+	mockTTS := newMockTTSStream(nil)
+	// 模拟首音频超时错误
+	mockTTS.nextPCMErr = errors.New("tts first audio timeout (5s): context deadline exceeded")
+	ttsClient := newMockTTSClient(mockTTS, nil)
+
+	asrClient := newMockSessionASRClient()
+	conn := newTracingWSConn(nil)
+	writer := NewWriter(ctx, conn, 100, slog.Default())
+	cfg := &config.Config{
+		Session: config.SessionConfig{
+			HelloTimeout:              5 * time.Second,
+			MaxOpusPacketBytes:        1024,
+			MaxListeningDuration:      30 * time.Second,
+			ASRPCMQueueCapacity:       50,
+			TTSPCMQueueCapacity:       50,
+			DownlinkOpusQueueCapacity: 50,
+		},
+	}
+	info := &ClientHeaderInfo{
+		DeviceID:     "test-device",
+		ClientID:     "test-client",
+		SerialNumber: "test-sn",
+	}
+
+	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, asrClient, llmClient, ttsClient, slog.Default())
+	go func() { _ = sess.Run() }()
+	defer sess.Close()
+
+	// 1. 完成握手 -> READY
+	validHello := []byte(`{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`)
+	sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHello})
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	// 2. listen.start -> LISTENING
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
+	waitState(t, sess, StateListening, 2*time.Second)
+
+	// 3. ASR 产生识别结果触发编排
+	sess.postEvent(event{
+		kind:       eventKindASRFinal,
+		generation: 1,
+		text:       "测试首音频超时",
+	})
+
+	// 验证会话在超时后能够迅速处理错误并优雅退出/关闭，不会无限期阻塞在 PROCESSING 或 SPEAKING
+	waitState(t, sess, StateClosed, 2*time.Second)
+}
+
+func TestOrchestration_TTSSentenceTimeout_SessionRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockLLM := newMockLLMStream([]string{"第一句话。"}, nil)
+	llmClient := newMockLLMClient(mockLLM, nil)
+
+	mockTTS := newMockTTSStream(nil)
+	// 模拟返回首块 PCM 音频后，在后续单句读取时发生单句超时
+	mockTTS.pcmDataToReturn = [][]byte{
+		make([]byte, 1920), // 24kHz 16bit 40ms PCM
+	}
+	mockTTS.nextPCMErr = errors.New("tts sentence timeout (20s): context deadline exceeded")
+	ttsClient := newMockTTSClient(mockTTS, nil)
+
+	asrClient := newMockSessionASRClient()
+	conn := newTracingWSConn(nil)
+	writer := NewWriter(ctx, conn, 100, slog.Default())
+	cfg := &config.Config{
+		Session: config.SessionConfig{
+			HelloTimeout:              5 * time.Second,
+			MaxOpusPacketBytes:        1024,
+			MaxListeningDuration:      30 * time.Second,
+			ASRPCMQueueCapacity:       50,
+			TTSPCMQueueCapacity:       50,
+			DownlinkOpusQueueCapacity: 50,
+		},
+	}
+	info := &ClientHeaderInfo{
+		DeviceID:     "test-device",
+		ClientID:     "test-client",
+		SerialNumber: "test-sn",
+	}
+
+	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, asrClient, llmClient, ttsClient, slog.Default())
+	go func() { _ = sess.Run() }()
+	defer sess.Close()
+
+	// 1. 完成握手 -> READY
+	validHello := []byte(`{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`)
+	sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHello})
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	// 2. listen.start -> LISTENING
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
+	waitState(t, sess, StateListening, 2*time.Second)
+
+	// 3. ASR 产生识别结果触发编排
+	sess.postEvent(event{
+		kind:       eventKindASRFinal,
+		generation: 1,
+		text:       "测试单句超时",
+	})
+
+	// 验证会话在单句超时后迅速处理错误并优雅退出/关闭，不会无限期挂起
+	waitState(t, sess, StateClosed, 2*time.Second)
+}

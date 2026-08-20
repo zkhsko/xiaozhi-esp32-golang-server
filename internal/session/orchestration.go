@@ -171,7 +171,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		}
 	}()
 
-	pcmDone := make(chan struct{})
+	pcmDone := make(chan error, 1)
 
 	// 启动后台协程消费 TTS PCM 数据并送入 24 kHz Opus 分帧编码器与节奏调度器
 	go s.consumeTTSPCM(ctx, gen, ttsStream, pacer, pcmDone)
@@ -476,7 +476,10 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	select {
 	case <-ctx.Done():
 		return
-	case <-pcmDone:
+	case pcmErr := <-pcmDone:
+		if pcmErr != nil {
+			return
+		}
 	}
 
 	if s.Generation() > gen {
@@ -491,6 +494,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSStream, args ...any) {
 	var pacer *DownlinkPacer
 	var doneCh chan struct{}
+	var errCh chan error
 
 	for _, arg := range args {
 		switch v := arg.(type) {
@@ -498,15 +502,27 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 			pacer = v
 		case chan struct{}:
 			doneCh = v
+		case chan error:
+			errCh = v
 		}
 	}
 	if pacer == nil {
 		pacer = s.Pacer()
 	}
 
-	if doneCh != nil {
-		defer close(doneCh)
-	}
+	var consumeErr error
+	defer func() {
+		if doneCh != nil {
+			close(doneCh)
+		}
+		if errCh != nil {
+			select {
+			case errCh <- consumeErr:
+			default:
+			}
+			close(errCh)
+		}
+	}()
 
 	if stream == nil {
 		return
@@ -519,6 +535,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 
 	enc, err := audio.NewEncoder(maxOpusBytes)
 	if err != nil {
+		consumeErr = err
 		s.logger.Error("failed to create per-turn opus encoder",
 			"error", err,
 			"session_id", s.SessionID(),
@@ -551,6 +568,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 				// TTS PCM 流正常结束，刷新尾帧（若有残余数据，补静音输出最后一帧 Opus；若无残余则不输出多余包）
 				packets, flushErr := streamEncoder.Flush()
 				if flushErr != nil {
+					consumeErr = flushErr
 					if ctx.Err() != nil || s.Generation() > gen {
 						return
 					}
@@ -585,6 +603,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 				return
 			}
 
+			consumeErr = err
 			s.logger.Warn("tts stream pcm read failed",
 				"error", err,
 				"session_id", sessionID,
@@ -609,6 +628,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 
 		packets, err := streamEncoder.Feed(pcmChunk)
 		if err != nil {
+			consumeErr = err
 			if ctx.Err() != nil || s.Generation() > gen {
 				return
 			}
