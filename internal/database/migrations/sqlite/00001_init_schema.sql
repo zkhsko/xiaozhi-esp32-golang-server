@@ -38,7 +38,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_device_activation_serial_number ON device_a
 CREATE INDEX IF NOT EXISTS idx_device_activation_device_id ON device_activation(device_id);
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+-- device_user_ref: 设备与用户绑定关系表
+CREATE TABLE IF NOT EXISTS device_user_ref (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- 绑定记录自增主键
+    serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
+    user_id INTEGER NOT NULL,                                      -- 当前绑定的用户 ID
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 绑定记录创建时间
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 绑定关系最近更新时间
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE UNIQUE INDEX IF NOT EXISTS uk_device_user_ref_serial_number ON device_user_ref(serial_number);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+CREATE INDEX IF NOT EXISTS idx_device_user_ref_user_serial ON device_user_ref(user_id, serial_number);
+-- +goose StatementEnd
+
 -- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS device_user_ref;
+-- +goose StatementEnd
+
 -- +goose StatementBegin
 DROP TABLE IF EXISTS device_activation;
 -- +goose StatementEnd

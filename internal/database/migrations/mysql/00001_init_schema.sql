@@ -31,7 +31,25 @@ CREATE TABLE IF NOT EXISTS `device_activation` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='设备激活关系表';
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+-- device_user_ref: 设备与用户绑定关系表
+CREATE TABLE IF NOT EXISTS `device_user_ref` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '绑定记录自增主键',
+    `serial_number` VARCHAR(64) NOT NULL COMMENT '设备序列号，全局业务唯一（一台设备最多绑定一个当前用户）',
+    `user_id` BIGINT UNSIGNED NOT NULL COMMENT '当前绑定的用户 ID',
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '绑定记录创建时间',
+    `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '绑定关系最近更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_device_user_ref_serial_number` (`serial_number`),
+    KEY `idx_device_user_ref_user_serial` (`user_id`, `serial_number`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='设备与用户绑定关系表';
+-- +goose StatementEnd
+
 -- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS `device_user_ref`;
+-- +goose StatementEnd
+
 -- +goose StatementBegin
 DROP TABLE IF EXISTS `device_activation`;
 -- +goose StatementEnd
