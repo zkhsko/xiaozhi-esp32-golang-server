@@ -10,6 +10,7 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	gormLogger "gorm.io/gorm/logger"
 
 	"xiaozhi-esp32-golang-server/internal/config"
 )
@@ -37,6 +38,7 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*Database, error) {
 
 	gormDB, err := gorm.Open(dialector, &gorm.Config{
 		DisableAutomaticPing: true,
+		Logger:               gormLogger.Default.LogMode(gormLogger.Silent),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open %s database: %w", cfg.Driver, err)
