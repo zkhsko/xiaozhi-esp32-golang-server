@@ -22,14 +22,8 @@ const (
 	// MaxTotalHeaderBytes 所有请求头键值对累计最大长度（8192 字符）。
 	MaxTotalHeaderBytes = 8192
 
-	// ProtocolVersionV1 WebSocket v1 协议版本号。
-	ProtocolVersionV1 = "1"
-
-	// ProtocolVersionV2 WebSocket v2 协议版本号。
-	ProtocolVersionV2 = "2"
-
-	// ExpectedProtocolVersion 要求的默认协议版本号字符串（兼容历史常量）。
-	ExpectedProtocolVersion = ProtocolVersionV1
+	// ProtocolVersion WebSocket 协议版本号。
+	ProtocolVersion = "1"
 
 	// BearerPrefix Authorization 头要求的 Bearer 前缀。
 	BearerPrefix = "Bearer "
@@ -42,7 +36,6 @@ var (
 	ErrInvalidTokenFormat     = errors.New("invalid authorization header format")
 	ErrInvalidToken           = errors.New("invalid authorization token")
 	ErrInvalidProtocolVersion = errors.New("invalid or missing protocol version")
-	ErrMissingSerialNumber    = errors.New("missing or empty serial-number header")
 )
 
 // ClientHeaderInfo 包含握手请求中提取并脱敏的客户端设备诊断信息。
@@ -85,7 +78,7 @@ func HTTPStatus(err error) int {
 	if errors.Is(err, ErrMissingToken) || errors.Is(err, ErrInvalidTokenFormat) || errors.Is(err, ErrInvalidToken) {
 		return http.StatusUnauthorized
 	}
-	if errors.Is(err, ErrHeaderTooLarge) || errors.Is(err, ErrInvalidProtocolVersion) || errors.Is(err, ErrMissingSerialNumber) {
+	if errors.Is(err, ErrHeaderTooLarge) || errors.Is(err, ErrInvalidProtocolVersion) {
 		return http.StatusBadRequest
 	}
 	return http.StatusBadRequest
@@ -141,9 +134,9 @@ func AuthenticateUpgrade(r *http.Request, sharedToken string, maxHeaderBytes int
 		}
 	}
 
-	// 2. 协议版本校验（支持 v1 和 v2 协议）
+	// 2. 协议版本校验
 	protocolVer := strings.TrimSpace(r.Header.Get("Protocol-Version"))
-	if protocolVer != ProtocolVersionV1 && protocolVer != ProtocolVersionV2 {
+	if protocolVer != ProtocolVersion {
 		return nil, &AuthError{
 			StatusCode: http.StatusBadRequest,
 			Err:        ErrInvalidProtocolVersion,
@@ -195,16 +188,6 @@ func AuthenticateUpgrade(r *http.Request, sharedToken string, maxHeaderBytes int
 	serialNum := strings.TrimSpace(r.Header.Get("Serial-Number"))
 	deviceID := strings.TrimSpace(r.Header.Get("Device-Id"))
 	clientID := strings.TrimSpace(r.Header.Get("Client-Id"))
-
-	// 协议版本区分校验：
-	// v2 协议下 Serial-Number 为必填项，用于硬件级设备唯一身份认证；
-	// v1 协议下 Serial-Number 为选填，未提供时不报错（兼容原生 v1 固件以 Device-Id 作为标识接入）。
-	if protocolVer == ProtocolVersionV2 && serialNum == "" {
-		return nil, &AuthError{
-			StatusCode: http.StatusBadRequest,
-			Err:        ErrMissingSerialNumber,
-		}
-	}
 
 	info := &ClientHeaderInfo{
 		DeviceID:        deviceID,
