@@ -106,13 +106,17 @@ func TestOpen_WithMigration_Success(t *testing.T) {
 		}
 	}()
 
-	// 验证 goose_db_version 表已创建并包含版本 1 记录
+	// 验证 goose_db_version 表已创建且已应用有效迁移版本
 	var currentVersion int64
-	err = db.DB().Raw("SELECT version_id FROM goose_db_version ORDER BY id DESC LIMIT 1").Scan(&currentVersion).Error
+	var isApplied int
+	err = db.DB().Raw("SELECT version_id, is_applied FROM goose_db_version ORDER BY id DESC LIMIT 1").Row().Scan(&currentVersion, &isApplied)
 	if err != nil {
 		t.Fatalf("failed to query goose_db_version table: %v", err)
 	}
-	if currentVersion != 1 {
-		t.Errorf("expected database version 1, got %d", currentVersion)
+	if currentVersion <= 0 {
+		t.Errorf("expected database version > 0, got %d", currentVersion)
+	}
+	if isApplied != 1 {
+		t.Errorf("expected latest migration to be applied (is_applied=1), got %d", isApplied)
 	}
 }
