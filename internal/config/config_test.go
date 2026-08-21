@@ -51,6 +51,14 @@ ai:
 proxy:
   enabled: false
   url: ""
+
+database:
+  driver: "sqlite"
+  max_open_conns: 1
+  max_idle_conns: 1
+  connection_max_lifetime: 0s
+  connection_max_idle_time: 0s
+  ping_timeout: 3s
 `
 
 func newValidConfig() config.Config {
@@ -97,6 +105,15 @@ func newValidConfig() config.Config {
 			Enabled: false,
 			URL:     "",
 		},
+		Database: config.DatabaseConfig{
+			Driver:                "sqlite",
+			MaxOpenConns:          1,
+			MaxIdleConns:          1,
+			ConnectionMaxLifetime: 0,
+			ConnectionMaxIdleTime: 0,
+			PingTimeout:           3 * time.Second,
+			DSN:                   "file:test.db",
+		},
 		DashScopeAPIKey:   "test-dashscope-api-key",
 		DeviceSharedToken: "test-device-shared-token",
 	}
@@ -105,6 +122,7 @@ func newValidConfig() config.Config {
 func TestLoadFromReader_Valid(t *testing.T) {
 	t.Setenv(config.EnvDashScopeAPIKey, "test-dashscope-api-key")
 	t.Setenv(config.EnvDeviceSharedToken, "test-device-shared-token")
+	t.Setenv(config.EnvDatabaseDSN, "file:valid.db")
 
 	cfg, err := config.LoadFromReader(strings.NewReader(validYAML))
 	if err != nil {
@@ -210,6 +228,21 @@ func TestLoadFromReader_Valid(t *testing.T) {
 	if cfg.Proxy.URL != "" {
 		t.Errorf("expected Proxy.URL to be empty, got %s", cfg.Proxy.URL)
 	}
+	if cfg.Database.Driver != "sqlite" {
+		t.Errorf("expected Database.Driver sqlite, got %s", cfg.Database.Driver)
+	}
+	if cfg.Database.DSN != "file:valid.db" {
+		t.Errorf("expected Database.DSN file:valid.db, got %s", cfg.Database.DSN)
+	}
+	if cfg.Database.MaxOpenConns != 1 {
+		t.Errorf("expected Database.MaxOpenConns 1, got %d", cfg.Database.MaxOpenConns)
+	}
+	if cfg.Database.MaxIdleConns != 1 {
+		t.Errorf("expected Database.MaxIdleConns 1, got %d", cfg.Database.MaxIdleConns)
+	}
+	if cfg.Database.PingTimeout != 3*time.Second {
+		t.Errorf("expected Database.PingTimeout 3s, got %v", cfg.Database.PingTimeout)
+	}
 	if cfg.DashScopeAPIKey != "test-dashscope-api-key" {
 		t.Errorf("expected DashScopeAPIKey match, got %s", cfg.DashScopeAPIKey)
 	}
@@ -221,6 +254,7 @@ func TestLoadFromReader_Valid(t *testing.T) {
 func TestLoad_ExampleConfigFile(t *testing.T) {
 	t.Setenv(config.EnvDashScopeAPIKey, "test-dashscope-api-key")
 	t.Setenv(config.EnvDeviceSharedToken, "test-device-shared-token")
+	t.Setenv(config.EnvDatabaseDSN, "file:example.db")
 
 	examplePath := filepath.Join("..", "..", "config.example.yaml")
 	cfg, err := config.Load(examplePath)
@@ -254,6 +288,7 @@ server:
 func TestLoadFromReader_MissingCredentials(t *testing.T) {
 	t.Setenv(config.EnvDashScopeAPIKey, "")
 	t.Setenv(config.EnvDeviceSharedToken, "")
+	t.Setenv(config.EnvDatabaseDSN, "file:valid.db")
 
 	_, err := config.LoadFromReader(strings.NewReader(validYAML))
 	if err == nil {
@@ -261,6 +296,20 @@ func TestLoadFromReader_MissingCredentials(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "dashscope api key is required") {
 		t.Errorf("expected error message to mention missing dashscope api key, got %v", err)
+	}
+}
+
+func TestLoadFromReader_MissingDatabaseDSN(t *testing.T) {
+	t.Setenv(config.EnvDashScopeAPIKey, "test-dashscope-api-key")
+	t.Setenv(config.EnvDeviceSharedToken, "test-device-shared-token")
+	t.Setenv(config.EnvDatabaseDSN, "")
+
+	_, err := config.LoadFromReader(strings.NewReader(validYAML))
+	if err == nil {
+		t.Fatalf("expected error when database dsn missing, got nil")
+	}
+	if !strings.Contains(err.Error(), "database dsn is required") {
+		t.Errorf("expected error message to mention missing database dsn, got %v", err)
 	}
 }
 
@@ -818,6 +867,142 @@ func TestConfig_Validate_TableDriven(t *testing.T) {
 			},
 			expectError: "llm_overall_timeout (15s) must be greater than llm_first_token_timeout (20s)",
 		},
+
+		// 5. DatabaseConfig 校验
+		{
+			name: "database with valid sqlite config",
+			modify: func(c *config.Config) {
+				c.Database.Driver = "sqlite"
+				c.Database.DSN = "file:test.db?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000"
+				c.Database.MaxOpenConns = 1
+				c.Database.MaxIdleConns = 1
+				c.Database.ConnectionMaxLifetime = 0
+				c.Database.ConnectionMaxIdleTime = 0
+				c.Database.PingTimeout = 3 * time.Second
+			},
+			expectError: "",
+		},
+		{
+			name: "database driver empty",
+			modify: func(c *config.Config) {
+				c.Database.Driver = ""
+			},
+			expectError: "driver is required",
+		},
+		{
+			name: "database driver whitespace only",
+			modify: func(c *config.Config) {
+				c.Database.Driver = "   "
+			},
+			expectError: "driver is required",
+		},
+		{
+			name: "database with unsupported driver mysql",
+			modify: func(c *config.Config) {
+				c.Database.Driver = "mysql"
+			},
+			expectError: "unsupported database driver \"mysql\"",
+		},
+		{
+			name: "database with unsupported driver postgres",
+			modify: func(c *config.Config) {
+				c.Database.Driver = "postgres"
+			},
+			expectError: "unsupported database driver \"postgres\"",
+		},
+		{
+			name: "database dsn empty",
+			modify: func(c *config.Config) {
+				c.Database.DSN = ""
+			},
+			expectError: "database dsn is required",
+		},
+		{
+			name: "database dsn whitespace only",
+			modify: func(c *config.Config) {
+				c.Database.DSN = "   "
+			},
+			expectError: "database dsn is required",
+		},
+		{
+			name: "database max_open_conns zero",
+			modify: func(c *config.Config) {
+				c.Database.MaxOpenConns = 0
+			},
+			expectError: "max_open_conns must be between 1 and 1000",
+		},
+		{
+			name: "database max_open_conns above max",
+			modify: func(c *config.Config) {
+				c.Database.MaxOpenConns = 1001
+			},
+			expectError: "max_open_conns must be between 1 and 1000",
+		},
+		{
+			name: "database max_idle_conns zero",
+			modify: func(c *config.Config) {
+				c.Database.MaxIdleConns = 0
+			},
+			expectError: "max_idle_conns must be between 1 and 1000",
+		},
+		{
+			name: "database max_idle_conns above max",
+			modify: func(c *config.Config) {
+				c.Database.MaxOpenConns = 1000
+				c.Database.MaxIdleConns = 1001
+			},
+			expectError: "max_idle_conns must be between 1 and 1000",
+		},
+		{
+			name: "database max_idle_conns greater than max_open_conns",
+			modify: func(c *config.Config) {
+				c.Database.MaxOpenConns = 2
+				c.Database.MaxIdleConns = 5
+			},
+			expectError: "max_idle_conns (5) cannot exceed max_open_conns (2)",
+		},
+		{
+			name: "database connection_max_lifetime negative",
+			modify: func(c *config.Config) {
+				c.Database.ConnectionMaxLifetime = -1 * time.Second
+			},
+			expectError: "connection_max_lifetime must be between 0 and 24h0m0s",
+		},
+		{
+			name: "database connection_max_lifetime above max",
+			modify: func(c *config.Config) {
+				c.Database.ConnectionMaxLifetime = 25 * time.Hour
+			},
+			expectError: "connection_max_lifetime must be between 0 and 24h0m0s",
+		},
+		{
+			name: "database connection_max_idle_time negative",
+			modify: func(c *config.Config) {
+				c.Database.ConnectionMaxIdleTime = -1 * time.Second
+			},
+			expectError: "connection_max_idle_time must be between 0 and 24h0m0s",
+		},
+		{
+			name: "database connection_max_idle_time above max",
+			modify: func(c *config.Config) {
+				c.Database.ConnectionMaxIdleTime = 25 * time.Hour
+			},
+			expectError: "connection_max_idle_time must be between 0 and 24h0m0s",
+		},
+		{
+			name: "database ping_timeout below min",
+			modify: func(c *config.Config) {
+				c.Database.PingTimeout = 100 * time.Millisecond
+			},
+			expectError: "ping_timeout must be between 500ms and 30s",
+		},
+		{
+			name: "database ping_timeout above max",
+			modify: func(c *config.Config) {
+				c.Database.PingTimeout = 31 * time.Second
+			},
+			expectError: "ping_timeout must be between 500ms and 30s",
+		},
 	}
 
 	for _, tt := range tests {
@@ -846,11 +1031,13 @@ func TestConfig_Validate_CredentialLeakSafety(t *testing.T) {
 	const (
 		sensitiveAPIKey = "super-secret-api-key-value-987654321"
 		sensitiveToken  = "super-secret-device-token-123456789"
+		sensitiveDSN    = "super-secret-database-dsn-xyz987"
 	)
 
 	cfg := newValidConfig()
 	cfg.DashScopeAPIKey = sensitiveAPIKey
 	cfg.DeviceSharedToken = sensitiveToken
+	cfg.Database.DSN = sensitiveDSN
 	// 触发某种校验失败
 	cfg.Server.ListenAddr = ""
 
@@ -865,5 +1052,74 @@ func TestConfig_Validate_CredentialLeakSafety(t *testing.T) {
 	}
 	if strings.Contains(errMsg, sensitiveToken) {
 		t.Fatalf("error message leaked sensitive token: %s", errMsg)
+	}
+	if strings.Contains(errMsg, sensitiveDSN) {
+		t.Fatalf("error message leaked sensitive database dsn: %s", errMsg)
+	}
+}
+
+func TestLoadFromReader_DatabaseDSNFromEnv(t *testing.T) {
+	t.Setenv(config.EnvDashScopeAPIKey, "test-dashscope-api-key")
+	t.Setenv(config.EnvDeviceSharedToken, "test-device-shared-token")
+	t.Setenv(config.EnvDatabaseDSN, "file:env-injected.db")
+
+	yamlContent := `
+server:
+  listen_addr: ":8080"
+  websocket_url: "wss://example.com/xiaozhi/v1/"
+  max_concurrent_sessions: 10
+  shutdown_timeout: 10s
+  http_read_timeout: 15s
+  http_write_timeout: 30s
+  http_idle_timeout: 60s
+  max_http_body_bytes: 65536
+  max_http_header_bytes: 1024
+
+session:
+  hello_timeout: 10s
+  max_ws_text_message_bytes: 32768
+  max_opus_packet_bytes: 1024
+  max_listening_duration: 30s
+  asr_pcm_queue_capacity: 100
+  tts_pcm_queue_capacity: 100
+  downlink_opus_queue_capacity: 100
+  max_history_turns: 6
+  system_prompt: "你是小智，一个智能语音助手。"
+
+ai:
+  bailian:
+    ws_endpoint: "wss://llm.aliyun.com/ws"
+    llm_endpoint: "https://llm.aliyun.com/v1"
+    asr_model: "asr-flash"
+    llm_model: "qwen-flash"
+    tts_model: "tts-flash"
+    tts_voice: "voice"
+    asr_connect_timeout: 10s
+    tts_connect_timeout: 10s
+    llm_first_token_timeout: 15s
+    llm_overall_timeout: 60s
+    tts_first_audio_timeout: 10s
+    tts_sentence_timeout: 15s
+
+proxy:
+  enabled: false
+  url: ""
+
+database:
+  driver: "sqlite"
+  max_open_conns: 1
+  max_idle_conns: 1
+  connection_max_lifetime: 0s
+  connection_max_idle_time: 0s
+  ping_timeout: 3s
+`
+
+	cfg, err := config.LoadFromReader(strings.NewReader(yamlContent))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Database.DSN != "file:env-injected.db" {
+		t.Errorf("expected DSN file:env-injected.db, got %s", cfg.Database.DSN)
 	}
 }

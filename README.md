@@ -40,6 +40,7 @@ server:
 ```bash
 export DASHSCOPE_API_KEY="sk-your-dashscope-api-key"
 export DEVICE_SHARED_TOKEN="your-device-token"
+export DATABASE_DSN="file:xiaozhi-dev.db?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000"
 ```
 
 ### 3. 启动服务
@@ -78,6 +79,7 @@ curl http://127.0.0.1:8080/xiaozhi/ota/
 | `session.system_prompt` | 系统提示词 | 简明语音助手设定 |
 | `ai.bailian.*` | 百炼 ASR / LLM / TTS 模型 | `qwen-audio-3.0-asr-flash-streaming` / `qwen3.7-flash` / `qwen-audio-3.0-tts-flash` |
 | `proxy.enabled` | 出站代理开关 | `false` |
+| `database.driver` | 数据库驱动类型（当前支持 sqlite） | `sqlite` |
 
 ---
 

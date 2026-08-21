@@ -38,3 +38,11 @@ ai:
 proxy:
   enabled: false
   url: ""
+
+database:
+  driver: "sqlite"
+  max_open_conns: 1
+  max_idle_conns: 1
+  connection_max_lifetime: 0s
+  connection_max_idle_time: 0s
+  ping_timeout: 3s

@@ -16,6 +16,7 @@ import (
 const (
 	EnvDashScopeAPIKey   = "DASHSCOPE_API_KEY"
 	EnvDeviceSharedToken = "DEVICE_SHARED_TOKEN"
+	EnvDatabaseDSN       = "DATABASE_DSN"
 )
 
 // 合法取值区间边界常量定义。
@@ -79,6 +80,12 @@ const (
 
 	minASRResultTimeout = 1 * time.Second
 	maxASRResultTimeout = 30 * time.Second
+
+	minDatabaseConns       = 1
+	maxDatabaseConns       = 1000
+	minDatabasePingTimeout = 500 * time.Millisecond
+	maxDatabasePingTimeout = 30 * time.Second
+	maxConnLifetime        = 24 * time.Hour
 )
 
 // ServerConfig 定义 HTTP 和 WebSocket 基础服务配置。
@@ -135,12 +142,25 @@ type ProxyConfig struct {
 	URL     string `yaml:"url"`
 }
 
+// DatabaseConfig 定义数据库连接与连接池配置。
+type DatabaseConfig struct {
+	Driver                string        `yaml:"driver"`
+	MaxOpenConns          int           `yaml:"max_open_conns"`
+	MaxIdleConns          int           `yaml:"max_idle_conns"`
+	ConnectionMaxLifetime time.Duration `yaml:"connection_max_lifetime"`
+	ConnectionMaxIdleTime time.Duration `yaml:"connection_max_idle_time"`
+	PingTimeout           time.Duration `yaml:"ping_timeout"`
+
+	DSN string `yaml:"-"`
+}
+
 // Config 包含服务端运行所需的全部配置项。
 type Config struct {
-	Server  ServerConfig  `yaml:"server"`
-	Session SessionConfig `yaml:"session"`
-	AI      AIConfig      `yaml:"ai"`
-	Proxy   ProxyConfig   `yaml:"proxy"`
+	Server   ServerConfig   `yaml:"server"`
+	Session  SessionConfig  `yaml:"session"`
+	AI       AIConfig       `yaml:"ai"`
+	Proxy    ProxyConfig    `yaml:"proxy"`
+	Database DatabaseConfig `yaml:"database"`
 
 	// 敏感凭据从环境变量注入，不出现在 YAML 配置文件中
 	DashScopeAPIKey   string `yaml:"-"`
@@ -169,6 +189,7 @@ func LoadFromReader(r io.Reader) (*Config, error) {
 
 	cfg.DashScopeAPIKey = os.Getenv(EnvDashScopeAPIKey)
 	cfg.DeviceSharedToken = os.Getenv(EnvDeviceSharedToken)
+	cfg.Database.DSN = os.Getenv(EnvDatabaseDSN)
 
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
@@ -190,6 +211,9 @@ func (c *Config) Validate() error {
 	}
 	if err := c.validateProxy(); err != nil {
 		return fmt.Errorf("proxy config: %w", err)
+	}
+	if err := c.validateDatabase(); err != nil {
+		return fmt.Errorf("database config: %w", err)
 	}
 	if err := c.validateCredentials(); err != nil {
 		return fmt.Errorf("credentials: %w", err)
@@ -322,6 +346,39 @@ func (c *Config) validateProxy() error {
 	}
 	if err := validateProxyURL(c.Proxy.URL); err != nil {
 		return fmt.Errorf("url: %w", err)
+	}
+	return nil
+}
+
+func (c *Config) validateDatabase() error {
+	if strings.TrimSpace(c.Database.Driver) == "" {
+		return errors.New("driver is required")
+	}
+	switch c.Database.Driver {
+	case "sqlite":
+	default:
+		return fmt.Errorf("unsupported database driver %q", c.Database.Driver)
+	}
+	if strings.TrimSpace(c.Database.DSN) == "" {
+		return fmt.Errorf("database dsn is required (environment variable %s)", EnvDatabaseDSN)
+	}
+	if err := validateInt("max_open_conns", c.Database.MaxOpenConns, minDatabaseConns, maxDatabaseConns); err != nil {
+		return err
+	}
+	if err := validateInt("max_idle_conns", c.Database.MaxIdleConns, minDatabaseConns, maxDatabaseConns); err != nil {
+		return err
+	}
+	if c.Database.MaxIdleConns > c.Database.MaxOpenConns {
+		return fmt.Errorf("max_idle_conns (%d) cannot exceed max_open_conns (%d)", c.Database.MaxIdleConns, c.Database.MaxOpenConns)
+	}
+	if c.Database.ConnectionMaxLifetime < 0 || c.Database.ConnectionMaxLifetime > maxConnLifetime {
+		return fmt.Errorf("connection_max_lifetime must be between 0 and %v, got %v", maxConnLifetime, c.Database.ConnectionMaxLifetime)
+	}
+	if c.Database.ConnectionMaxIdleTime < 0 || c.Database.ConnectionMaxIdleTime > maxConnLifetime {
+		return fmt.Errorf("connection_max_idle_time must be between 0 and %v, got %v", maxConnLifetime, c.Database.ConnectionMaxIdleTime)
+	}
+	if err := validateDuration("ping_timeout", c.Database.PingTimeout, minDatabasePingTimeout, maxDatabasePingTimeout); err != nil {
+		return err
 	}
 	return nil
 }

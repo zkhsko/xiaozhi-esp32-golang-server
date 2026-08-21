@@ -12,6 +12,7 @@ import (
 	"xiaozhi-esp32-golang-server/internal/ai/bailian"
 	"xiaozhi-esp32-golang-server/internal/bootstrap"
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/logger"
 	"xiaozhi-esp32-golang-server/internal/server"
 	"xiaozhi-esp32-golang-server/internal/session"
@@ -42,10 +43,23 @@ func main() {
 		"llm_model", cfg.AI.Bailian.LLMModel,
 		"tts_model", cfg.AI.Bailian.TTSModel,
 		"proxy_enabled", cfg.Proxy.Enabled,
+		"database_driver", cfg.Database.Driver,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	db, err := database.Open(ctx, cfg.Database)
+	if err != nil {
+		slog.Error("failed to initialize database", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			slog.Error("failed to close database", "error", err)
+		}
+	}()
+	slog.Info("database initialized successfully", "driver", cfg.Database.Driver)
 
 	asrClient, err := bailian.NewASRClient(cfg)
 	if err != nil {
