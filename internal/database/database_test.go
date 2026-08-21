@@ -53,8 +53,8 @@ func TestOpen_SQLite_Success(t *testing.T) {
 
 func TestOpen_UnsupportedDriver(t *testing.T) {
 	cfg := config.DatabaseConfig{
-		Driver:      "mysql",
-		DSN:         "root:secret@tcp(127.0.0.1:3306)/xiaozhi",
+		Driver:      "oracle",
+		DSN:         "user/secret@127.0.0.1:1521/xe",
 		PingTimeout: 1 * time.Second,
 	}
 
@@ -64,6 +64,50 @@ func TestOpen_UnsupportedDriver(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported database driver") {
 		t.Errorf("expected unsupported database driver error, got: %v", err)
+	}
+}
+
+func TestOpen_MySQL_Unreachable_FailsSafely(t *testing.T) {
+	// 使用保留测试网段不可达地址验证 dialector 构建与失败安全处理
+	cfg := config.DatabaseConfig{
+		Driver:       "mysql",
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+		PingTimeout:  100 * time.Millisecond,
+		DSN:          "test_user:sensitive_mysql_pass_123@tcp(192.0.2.1:3306)/test_db?timeout=100ms",
+	}
+
+	_, err := database.Open(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for unreachable mysql, got nil")
+	}
+	if !strings.Contains(err.Error(), "mysql database") {
+		t.Errorf("expected mysql database error prefix, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "sensitive_mysql_pass_123") {
+		t.Fatalf("error message leaked mysql password: %s", err.Error())
+	}
+}
+
+func TestOpen_PostgreSQL_Unreachable_FailsSafely(t *testing.T) {
+	// 使用保留测试网段不可达地址验证 dialector 构建与失败安全处理
+	cfg := config.DatabaseConfig{
+		Driver:       "postgres",
+		MaxOpenConns: 1,
+		MaxIdleConns: 1,
+		PingTimeout:  100 * time.Millisecond,
+		DSN:          "host=192.0.2.1 port=5432 user=test_pg password=sensitive_pg_pass_456 dbname=test_db connect_timeout=1 sslmode=disable",
+	}
+
+	_, err := database.Open(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("expected error for unreachable postgres, got nil")
+	}
+	if !strings.Contains(err.Error(), "postgres database") {
+		t.Errorf("expected postgres database error prefix, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "sensitive_pg_pass_456") {
+		t.Fatalf("error message leaked postgres password: %s", err.Error())
 	}
 }
 

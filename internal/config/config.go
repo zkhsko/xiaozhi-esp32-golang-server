@@ -355,7 +355,7 @@ func (c *Config) validateDatabase() error {
 		return errors.New("driver is required")
 	}
 	switch c.Database.Driver {
-	case "sqlite":
+	case "sqlite", "mysql", "postgres":
 	default:
 		return fmt.Errorf("unsupported database driver %q", c.Database.Driver)
 	}

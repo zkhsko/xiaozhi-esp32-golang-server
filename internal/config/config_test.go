@@ -883,6 +883,32 @@ func TestConfig_Validate_TableDriven(t *testing.T) {
 			expectError: "",
 		},
 		{
+			name: "database with valid mysql config",
+			modify: func(c *config.Config) {
+				c.Database.Driver = "mysql"
+				c.Database.DSN = "user:password@tcp(127.0.0.1:3306)/xiaozhi?charset=utf8mb4&parseTime=True&loc=Local"
+				c.Database.MaxOpenConns = 10
+				c.Database.MaxIdleConns = 5
+				c.Database.ConnectionMaxLifetime = 30 * time.Minute
+				c.Database.ConnectionMaxIdleTime = 5 * time.Minute
+				c.Database.PingTimeout = 3 * time.Second
+			},
+			expectError: "",
+		},
+		{
+			name: "database with valid postgres config",
+			modify: func(c *config.Config) {
+				c.Database.Driver = "postgres"
+				c.Database.DSN = "host=localhost user=gorm password=gorm dbname=gorm port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+				c.Database.MaxOpenConns = 10
+				c.Database.MaxIdleConns = 5
+				c.Database.ConnectionMaxLifetime = 30 * time.Minute
+				c.Database.ConnectionMaxIdleTime = 5 * time.Minute
+				c.Database.PingTimeout = 3 * time.Second
+			},
+			expectError: "",
+		},
+		{
 			name: "database driver empty",
 			modify: func(c *config.Config) {
 				c.Database.Driver = ""
@@ -897,18 +923,18 @@ func TestConfig_Validate_TableDriven(t *testing.T) {
 			expectError: "driver is required",
 		},
 		{
-			name: "database with unsupported driver mysql",
+			name: "database with unsupported driver oracle",
 			modify: func(c *config.Config) {
-				c.Database.Driver = "mysql"
+				c.Database.Driver = "oracle"
 			},
-			expectError: "unsupported database driver \"mysql\"",
+			expectError: "unsupported database driver \"oracle\"",
 		},
 		{
-			name: "database with unsupported driver postgres",
+			name: "database with unsupported driver sqlserver",
 			modify: func(c *config.Config) {
-				c.Database.Driver = "postgres"
+				c.Database.Driver = "sqlserver"
 			},
-			expectError: "unsupported database driver \"postgres\"",
+			expectError: "unsupported database driver \"sqlserver\"",
 		},
 		{
 			name: "database dsn empty",

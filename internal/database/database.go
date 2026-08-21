@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
@@ -25,6 +27,10 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*Database, error) {
 	switch cfg.Driver {
 	case "sqlite":
 		dialector = sqlite.Open(cfg.DSN)
+	case "mysql":
+		dialector = mysql.Open(cfg.DSN)
+	case "postgres":
+		dialector = postgres.Open(cfg.DSN)
 	default:
 		return nil, fmt.Errorf("unsupported database driver %q", cfg.Driver)
 	}
