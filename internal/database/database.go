@@ -65,6 +65,11 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*Database, error) {
 		return nil, fmt.Errorf("ping %s database: %w", cfg.Driver, err)
 	}
 
+	if err := Migrate(ctx, sqlDB, cfg.Driver); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("migrate %s database: %w", cfg.Driver, err)
+	}
+
 	return &Database{
 		gormDB: gormDB,
 		sqlDB:  sqlDB,
