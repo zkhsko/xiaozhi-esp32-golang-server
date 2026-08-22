@@ -8,12 +8,9 @@ CREATE TABLE IF NOT EXISTS device_hmac_credential (
     hmac_key_ciphertext BLOB NOT NULL,                             -- 加密后的 HMAC Key 密文（禁止明文存储）
     credential_status VARCHAR(16) NOT NULL DEFAULT 'enabled',      -- 凭证状态：enabled / activated / blocked / revoked
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 凭证创建时间
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 凭证最近更新时间
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 凭证最近更新时间
+    CONSTRAINT uk_serial_number UNIQUE (serial_number)
 );
--- +goose StatementEnd
-
--- +goose StatementBegin
-CREATE UNIQUE INDEX IF NOT EXISTS uk_serial_number ON device_hmac_credential(serial_number);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -26,16 +23,14 @@ CREATE TABLE IF NOT EXISTS device_activation (
     activation_status VARCHAR(16) NOT NULL DEFAULT 'active',       -- 激活状态：active / frozen / revoked
     activated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,     -- 首次激活时间
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 记录创建时间
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 记录最近更新时间
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 记录最近更新时间
+    CONSTRAINT uk_serial_number UNIQUE (serial_number)
 );
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE UNIQUE INDEX IF NOT EXISTS uk_device_activation_serial_number ON device_activation(serial_number);
--- +goose StatementEnd
-
--- +goose StatementBegin
-CREATE INDEX IF NOT EXISTS idx_device_activation_device_id ON device_activation(device_id);
+-- idx_device_id: 后端设备标识普通索引
+CREATE INDEX IF NOT EXISTS idx_device_id ON device_activation(device_id);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -45,19 +40,37 @@ CREATE TABLE IF NOT EXISTS device_user_ref (
     serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
     user_id INTEGER NOT NULL,                                      -- 当前绑定的用户 ID
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 绑定记录创建时间
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 绑定关系最近更新时间
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 绑定关系最近更新时间
+    CONSTRAINT uk_serial_number UNIQUE (serial_number)
 );
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE UNIQUE INDEX IF NOT EXISTS uk_device_user_ref_serial_number ON device_user_ref(serial_number);
+-- idx_user_id_serial_number: 用户设备绑定联合索引
+CREATE INDEX IF NOT EXISTS idx_user_id_serial_number ON device_user_ref(user_id, serial_number);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE INDEX IF NOT EXISTS idx_device_user_ref_user_serial ON device_user_ref(user_id, serial_number);
+-- device_access_token: 设备鉴权 Access Token 表
+CREATE TABLE IF NOT EXISTS device_access_token (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- Token 凭证内部自增主键
+    serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
+    access_token_hash BLOB NOT NULL,                                -- 设备 Access Token 的 SHA-256 哈希值（禁止明文存储）
+    issued_at DATETIME NOT NULL,                                   -- Token 签发时间
+    expires_at DATETIME DEFAULT NULL,                              -- Token 过期时间（为空表示无固定过期时间）
+    revoked_at DATETIME DEFAULT NULL,                              -- Token 撤销时间（为空表示未撤销）
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 记录创建时间
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 记录最近更新时间
+    CONSTRAINT uk_serial_number UNIQUE (serial_number),
+    CONSTRAINT uk_access_token_hash UNIQUE (access_token_hash)
+);
 -- +goose StatementEnd
 
 -- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS device_access_token;
+-- +goose StatementEnd
+
 -- +goose StatementBegin
 DROP TABLE IF EXISTS device_user_ref;
 -- +goose StatementEnd

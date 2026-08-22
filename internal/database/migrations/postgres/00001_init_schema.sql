@@ -35,7 +35,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_device_activation_serial_number ON device_a
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE INDEX IF NOT EXISTS idx_device_activation_device_id ON device_activation(device_id);
+-- idx_device_id: 后端设备标识普通索引
+CREATE INDEX IF NOT EXISTS idx_device_id ON device_activation(device_id);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -54,10 +55,39 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_device_user_ref_serial_number ON device_use
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE INDEX IF NOT EXISTS idx_device_user_ref_user_serial ON device_user_ref(user_id, serial_number);
+-- idx_user_id_serial_number: 用户设备绑定联合索引
+CREATE INDEX IF NOT EXISTS idx_user_id_serial_number ON device_user_ref(user_id, serial_number);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- device_access_token: 设备鉴权 Access Token 表
+CREATE TABLE IF NOT EXISTS device_access_token (
+    id BIGSERIAL PRIMARY KEY,                                       -- Token 凭证内部自增主键
+    serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
+    access_token_hash BYTEA NOT NULL,                               -- 设备 Access Token 的 SHA-256 哈希值（禁止明文存储）
+    issued_at TIMESTAMPTZ NOT NULL,                                 -- Token 签发时间
+    expires_at TIMESTAMPTZ DEFAULT NULL,                           -- Token 过期时间（为空表示无固定过期时间）
+    revoked_at TIMESTAMPTZ DEFAULT NULL,                           -- Token 撤销时间（为空表示未撤销）
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,     -- 记录创建时间
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP      -- 记录最近更新时间
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- uk_device_access_token_serial_number: 基于设备序列号的唯一索引（保证每台设备对应唯一 Token 记录）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_device_access_token_serial_number ON device_access_token(serial_number);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- uk_access_token_hash: 基于 Access Token Hash 的唯一索引（WebSocket Bearer Token 鉴权入口）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_access_token_hash ON device_access_token(access_token_hash);
 -- +goose StatementEnd
 
 -- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS device_access_token;
+-- +goose StatementEnd
+
 -- +goose StatementBegin
 DROP TABLE IF EXISTS device_user_ref;
 -- +goose StatementEnd

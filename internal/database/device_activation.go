@@ -39,8 +39,8 @@ var (
 //
 // 字段约束与索引规范：
 // - id: 自增主键。
-// - serial_number: 设备出厂序列号，全局业务唯一，唯一索引 uk_device_activation_serial_number。
-// - device_id: 后端设备标识 Device-Id，普通索引 idx_device_activation_device_id。
+// - serial_number: 设备出厂序列号，全局业务唯一，唯一索引 uk_serial_number。
+// - device_id: 后端设备标识 Device-Id，普通索引 idx_device_id。
 // - client_id: 固件/客户端安装实例标识，可为空。
 // - activation_status: 激活状态（active / frozen / revoked）。
 // - activated_at: 首次激活时间。
@@ -48,8 +48,8 @@ var (
 // - updated_at: 记录最近更新时间。
 type DeviceActivation struct {
 	ID               uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	SerialNumber     string    `gorm:"uniqueIndex:uk_device_activation_serial_number;column:serial_number;size:64;not null" json:"serial_number"`
-	DeviceID         string    `gorm:"index:idx_device_activation_device_id;column:device_id;size:64;not null" json:"device_id"`
+	SerialNumber     string    `gorm:"uniqueIndex:uk_serial_number;column:serial_number;size:64;not null" json:"serial_number"`
+	DeviceID         string    `gorm:"index:idx_device_id;column:device_id;size:64;not null" json:"device_id"`
 	ClientID         string    `gorm:"column:client_id;size:64" json:"client_id,omitempty"`
 	ActivationStatus string    `gorm:"column:activation_status;size:16;not null;default:'active'" json:"activation_status"`
 	ActivatedAt      time.Time `gorm:"column:activated_at;not null" json:"activated_at"`
