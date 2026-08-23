@@ -10,8 +10,34 @@ import (
 	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
-// handleOTA 处理设备配置发现 HTTP 请求并返回 WebSocket 连接凭据与配置。
+// handleOTA 处理设备 OTA 配置检查/版本发现入口，根据请求头中的 Serial-Number 分流。
 func (h *Handler) handleOTA(w http.ResponseWriter, r *http.Request) {
+	headers, body, ok := h.readAndValidateOTARequest(w, r)
+	if !ok {
+		return
+	}
+
+	h.logger.Info("ota check request received",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"device_id", logger.TruncateString(headers.DeviceID),
+		"client_id", logger.TruncateString(headers.ClientID),
+		"serial_number", logger.TruncateString(headers.SerialNumber),
+		"activation_version", logger.TruncateString(headers.ActivationVersion),
+		"user_agent", logger.TruncateString(headers.UserAgent),
+	)
+
+	// 根据请求头是否包含 SerialNumber 分流到对应处理框架
+	if headers.SerialNumber != "" {
+		h.handleOTASerialNumber(w, r, headers, body)
+		return
+	}
+
+	h.handleOTALegacy(w, r, headers, body)
+}
+
+// readAndValidateOTARequest 执行请求头长度、正文大小及 JSON 格式的基础校验。
+func (h *Handler) readAndValidateOTARequest(w http.ResponseWriter, r *http.Request) (DeviceHeaders, []byte, bool) {
 	// 1. 校验请求头长度限制
 	maxHeaderBytes := MaxSingleHeaderBytes
 	maxTotalHeaderBytes := MaxTotalHeaderBytes
@@ -20,7 +46,7 @@ func (h *Handler) handleOTA(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateHeaders(r.Header, maxHeaderBytes, maxTotalHeaderBytes); err != nil {
 		http.Error(w, "request header fields too large", http.StatusBadRequest)
-		return
+		return DeviceHeaders{}, nil, false
 	}
 
 	// 2. 校验并读取请求正文
@@ -35,46 +61,21 @@ func (h *Handler) handleOTA(w http.ResponseWriter, r *http.Request) {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			http.Error(w, "payload too large", http.StatusRequestEntityTooLarge)
-			return
+			return DeviceHeaders{}, nil, false
 		}
 		http.Error(w, "bad request", http.StatusBadRequest)
-		return
+		return DeviceHeaders{}, nil, false
 	}
 
-	// 非空正文必须是有效 JSON
+	// 3. 非空正文必须是有效 JSON
 	trimmedBody := bytes.TrimSpace(body)
 	if len(trimmedBody) > 0 {
 		if !json.Valid(trimmedBody) {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
-			return
+			return DeviceHeaders{}, nil, false
 		}
 	}
 
-	// 3. 记录有限诊断日志（绝不记录 Token，请求头字段自动截断）
-	h.logger.Info("bootstrap request received",
-		"method", r.Method,
-		"path", r.URL.Path,
-		"device_id", logger.TruncateString(r.Header.Get("Device-Id")),
-		"client_id", logger.TruncateString(r.Header.Get("Client-Id")),
-		"serial_number", logger.TruncateString(r.Header.Get("Serial-Number")),
-		"activation_version", logger.TruncateString(r.Header.Get("Activation-Version")),
-		"user_agent", logger.TruncateString(r.UserAgent()),
-	)
-
-	// 4. 构造配置响应（仅包含 websocket 对象，无任何冗余占位字段）
-	var wsURL, token string
-	if h.cfg != nil {
-		wsURL = h.cfg.Server.WebSocketURL
-		token = h.cfg.DeviceSharedToken
-	}
-
-	resp := Response{
-		WebSocket: WebSocketConfig{
-			URL:     wsURL,
-			Token:   token,
-			Version: ProtocolVersion,
-		},
-	}
-
-	writeJSON(w, http.StatusOK, resp)
+	headers := extractDeviceHeaders(r)
+	return headers, trimmedBody, true
 }

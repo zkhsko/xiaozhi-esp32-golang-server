@@ -53,7 +53,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 		wantEmptyBodyError bool
 	}{
 		{
-			name:   "GET request with trailing slash success",
+			name:   "GET request without Serial-Number success",
 			method: http.MethodGet,
 			path:   "/xiaozhi/ota/",
 			headers: map[string]string{
@@ -63,6 +63,35 @@ func TestRouter_OTATableDriven(t *testing.T) {
 				"User-Agent":         "xiaozhi-esp32/1.0.0",
 			},
 			body:           "",
+			wantStatusCode: http.StatusOK,
+			wantExactWS:    true,
+		},
+		{
+			name:   "GET request with Serial-Number success",
+			method: http.MethodGet,
+			path:   "/xiaozhi/ota/",
+			headers: map[string]string{
+				"Device-Id":          "AA:BB:CC:DD:EE:FF",
+				"Client-Id":          "uuid-device-client-123",
+				"Serial-Number":      "SN-DEVICE-12345678",
+				"Activation-Version": "2",
+				"User-Agent":         "xiaozhi-esp32/2.0.0",
+			},
+			body:           "",
+			wantStatusCode: http.StatusOK,
+			wantExactWS:    true,
+		},
+		{
+			name:   "POST request with Serial-Number and json body success",
+			method: http.MethodPost,
+			path:   "/xiaozhi/ota/",
+			headers: map[string]string{
+				"Device-Id":          "AA:BB:CC:DD:EE:FF",
+				"Client-Id":          "uuid-device-client-123",
+				"Serial-Number":      "SN-DEVICE-12345678",
+				"Activation-Version": "2",
+			},
+			body:           `{"version":2,"mac_address":"AA:BB:CC:DD:EE:FF","uuid":"uuid-device-client-123"}`,
 			wantStatusCode: http.StatusOK,
 			wantExactWS:    true,
 		},

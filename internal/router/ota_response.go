@@ -17,9 +17,25 @@ type WebSocketConfig struct {
 	Version int    `json:"version"`
 }
 
-// Response 定义配置发现成功的响应结构。
+// ActivationInfo 定义设备激活相关的响应字段。
+type ActivationInfo struct {
+	Code      string `json:"code,omitempty"`
+	Challenge string `json:"challenge,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+// FirmwareInfo 定义固件升级相关的响应字段。
+type FirmwareInfo struct {
+	Version string `json:"version"`
+	URL     string `json:"url"`
+	Force   int    `json:"force"`
+}
+
+// Response 定义配置发现响应结构。
 type Response struct {
-	WebSocket WebSocketConfig `json:"websocket"`
+	WebSocket  WebSocketConfig `json:"websocket"`
+	Activation *ActivationInfo `json:"activation,omitempty"`
+	Firmware   *FirmwareInfo   `json:"firmware,omitempty"`
 }
 
 // writeJSON 将数据序列化为 JSON 并写入 HTTP 响应。

@@ -6,7 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// otaRoutes 注册设备 OTA 与配置发现相关路由。
+// otaRoutes 注册设备 OTA 配置发现与版本检查路由。
 func (h *Handler) otaRoutes() http.Handler {
 	r := chi.NewRouter()
 
