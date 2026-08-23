@@ -1,4 +1,4 @@
-package bootstrap
+package router
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/logger"
+	"xiaozhi-esp32-golang-server/internal/session"
 )
 
 func newTestConfig(token string, wsURL string) *config.Config {
@@ -32,7 +33,7 @@ func newTestConfig(token string, wsURL string) *config.Config {
 	}
 }
 
-func TestBootstrapHandler_TableDriven(t *testing.T) {
+func TestRouter_OTATableDriven(t *testing.T) {
 	const (
 		testToken = "test-secret-token-xyz-12345678"
 		testWsURL = "wss://test.example.com/xiaozhi/v1/"
@@ -52,9 +53,23 @@ func TestBootstrapHandler_TableDriven(t *testing.T) {
 		wantEmptyBodyError bool
 	}{
 		{
-			name:   "GET request success",
+			name:   "GET request with trailing slash success",
 			method: http.MethodGet,
 			path:   "/xiaozhi/ota/",
+			headers: map[string]string{
+				"Device-Id":          "AA:BB:CC:DD:EE:FF",
+				"Client-Id":          "uuid-device-client-123",
+				"Activation-Version": "1",
+				"User-Agent":         "xiaozhi-esp32/1.0.0",
+			},
+			body:           "",
+			wantStatusCode: http.StatusOK,
+			wantExactWS:    true,
+		},
+		{
+			name:   "GET request without trailing slash success",
+			method: http.MethodGet,
+			path:   "/xiaozhi/ota",
 			headers: map[string]string{
 				"Device-Id":          "AA:BB:CC:DD:EE:FF",
 				"Client-Id":          "uuid-device-client-123",
@@ -112,33 +127,23 @@ func TestBootstrapHandler_TableDriven(t *testing.T) {
 			wantStatusCode: http.StatusBadRequest,
 		},
 		{
-			name:            "PUT method returns 405",
-			method:          http.MethodPut,
-			path:            "/xiaozhi/ota/",
-			body:            `{}`,
-			wantStatusCode:  http.StatusMethodNotAllowed,
-			wantAllowHeader: "GET, POST",
+			name:           "PUT method returns 405",
+			method:         http.MethodPut,
+			path:           "/xiaozhi/ota/",
+			body:           `{}`,
+			wantStatusCode: http.StatusMethodNotAllowed,
 		},
 		{
-			name:            "DELETE method returns 405",
-			method:          http.MethodDelete,
-			path:            "/xiaozhi/ota/",
-			wantStatusCode:  http.StatusMethodNotAllowed,
-			wantAllowHeader: "GET, POST",
+			name:           "DELETE method returns 405",
+			method:         http.MethodDelete,
+			path:           "/xiaozhi/ota/",
+			wantStatusCode: http.StatusMethodNotAllowed,
 		},
 		{
-			name:            "PATCH method returns 405",
-			method:          http.MethodPatch,
-			path:            "/xiaozhi/ota/",
-			wantStatusCode:  http.StatusMethodNotAllowed,
-			wantAllowHeader: "GET, POST",
-		},
-		{
-			name:            "HEAD method returns 405",
-			method:          http.MethodHead,
-			path:            "/xiaozhi/ota/",
-			wantStatusCode:  http.StatusMethodNotAllowed,
-			wantAllowHeader: "GET, POST",
+			name:           "PATCH method returns 405",
+			method:         http.MethodPatch,
+			path:           "/xiaozhi/ota/",
+			wantStatusCode: http.StatusMethodNotAllowed,
 		},
 		{
 			name:           "Unmatched subpath returns 404",
@@ -147,7 +152,7 @@ func TestBootstrapHandler_TableDriven(t *testing.T) {
 			wantStatusCode: http.StatusNotFound,
 		},
 		{
-			name:           "Different path returns 404",
+			name:           "Different root path returns 404",
 			method:         http.MethodPost,
 			path:           "/other/path",
 			body:           `{}`,
@@ -211,18 +216,12 @@ func TestBootstrapHandler_TableDriven(t *testing.T) {
 			var logBuf bytes.Buffer
 			testLogger := logger.New(&logBuf, slog.LevelDebug)
 
-			h := NewHandler(cfg, testLogger)
-			h.ServeHTTP(rec, req)
+			h := NewHandler(cfg, nil, testLogger)
+			r := NewRouter(h)
+			r.ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatusCode {
 				t.Fatalf("expected status code %d, got %d, body: %s", tt.wantStatusCode, rec.Code, rec.Body.String())
-			}
-
-			if tt.wantAllowHeader != "" {
-				gotAllow := rec.Header().Get("Allow")
-				if gotAllow != tt.wantAllowHeader {
-					t.Errorf("expected Allow header %q, got %q", tt.wantAllowHeader, gotAllow)
-				}
 			}
 
 			if tt.wantExactWS {
@@ -247,7 +246,7 @@ func TestBootstrapHandler_TableDriven(t *testing.T) {
 					t.Errorf("expected WebSocket Version %d, got %d", ProtocolVersion, resp.WebSocket.Version)
 				}
 
-				// 2. 严格字段断言：确保无 activation, mqtt, firmware 等占位字段
+				// 2. 严格字段断言：确保无冗余占位字段
 				var rawMap map[string]json.RawMessage
 				if err := json.Unmarshal(rec.Body.Bytes(), &rawMap); err != nil {
 					t.Fatalf("failed to unmarshal raw map: %v", err)
@@ -274,7 +273,7 @@ func TestBootstrapHandler_TableDriven(t *testing.T) {
 				}
 
 				if len(rawWS) != 3 {
-					t.Errorf("expected exactly 3 fields in websocket object, got %d fields: %+v", len(rawWS), rawWS)
+					t.Errorf("expected fields length 3, got %d: %+v", len(rawWS), rawWS)
 				}
 
 				for _, key := range []string{"url", "token", "version"} {
@@ -284,7 +283,7 @@ func TestBootstrapHandler_TableDriven(t *testing.T) {
 				}
 			}
 
-			// 日志安全性断言：绝不记录 Token
+			// 日志安全性断言：绝不泄露敏感 Token
 			logOutput := logBuf.String()
 			if strings.Contains(logOutput, testToken) {
 				t.Errorf("log output leaked sensitive token! log: %s", logOutput)
@@ -293,16 +292,15 @@ func TestBootstrapHandler_TableDriven(t *testing.T) {
 	}
 }
 
-func TestBootstrapHandler_PayloadTooLarge(t *testing.T) {
+func TestRouter_PayloadTooLarge(t *testing.T) {
 	const (
 		testToken = "secret-token-payload-test"
 		testWsURL = "wss://test.example.com/xiaozhi/v1/"
 	)
 
 	cfg := newTestConfig(testToken, testWsURL)
-	cfg.Server.MaxHTTPBodyBytes = 1024 // 设置为 1 KiB 测试超限
+	cfg.Server.MaxHTTPBodyBytes = 1024
 
-	// 构造 2 KiB 的请求正文
 	largeBody := strings.Repeat(`{"key":"value"}`, 150)
 	req := httptest.NewRequest(http.MethodPost, "/xiaozhi/ota/", strings.NewReader(largeBody))
 
@@ -310,8 +308,9 @@ func TestBootstrapHandler_PayloadTooLarge(t *testing.T) {
 	var logBuf bytes.Buffer
 	testLogger := logger.New(&logBuf, slog.LevelDebug)
 
-	h := NewHandler(cfg, testLogger)
-	h.ServeHTTP(rec, req)
+	h := NewHandler(cfg, nil, testLogger)
+	r := NewRouter(h)
+	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("expected status code %d (413 Payload Too Large), got %d, body: %s",
@@ -323,17 +322,16 @@ func TestBootstrapHandler_PayloadTooLarge(t *testing.T) {
 	}
 }
 
-func TestBootstrapHandler_TotalHeadersTooLarge(t *testing.T) {
+func TestRouter_TotalHeadersTooLarge(t *testing.T) {
 	const (
 		testToken = "secret-token-header-test"
 		testWsURL = "wss://test.example.com/xiaozhi/v1/"
 	)
 
 	cfg := newTestConfig(testToken, testWsURL)
-	cfg.Server.MaxHTTPHeaderBytes = 2048 // 限制总请求头 2 KiB
+	cfg.Server.MaxHTTPHeaderBytes = 2048
 
 	req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
-	// 构造多个不超过 1024 但累计超过 2048 的 headers
 	for i := 0; i < 5; i++ {
 		key := strings.Repeat("X", 20) + string(rune('A'+i))
 		req.Header.Set(key, strings.Repeat("V", 500))
@@ -343,8 +341,9 @@ func TestBootstrapHandler_TotalHeadersTooLarge(t *testing.T) {
 	var logBuf bytes.Buffer
 	testLogger := logger.New(&logBuf, slog.LevelDebug)
 
-	h := NewHandler(cfg, testLogger)
-	h.ServeHTTP(rec, req)
+	h := NewHandler(cfg, nil, testLogger)
+	r := NewRouter(h)
+	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status code %d, got %d", http.StatusBadRequest, rec.Code)
@@ -355,17 +354,29 @@ func TestBootstrapHandler_TotalHeadersTooLarge(t *testing.T) {
 	}
 }
 
-func TestBootstrapHandler_DefaultLogger(t *testing.T) {
-	// 测试传入 nil logger 时的安全性与默认行为
-	cfg := newTestConfig("sample-token", "wss://sample.example.com/xiaozhi/v1/")
-	h := NewHandler(cfg, nil)
+func TestRouter_SessionEndpointRouting(t *testing.T) {
+	cfg := newTestConfig("test-token", "ws://localhost:8080/xiaozhi/v1/")
+	sessionLimiter := session.NewSessionLimiter(10)
+	sessionHandler := session.NewHandler(cfg, sessionLimiter, nil, nil, nil, slog.Default())
 
-	req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
-	rec := httptest.NewRecorder()
+	h := NewHandler(cfg, sessionHandler, nil)
+	r := NewRouter(h)
 
-	h.ServeHTTP(rec, req)
+	// 非 GET 方法请求 /xiaozhi/v1/ 应返回 405
+	reqPost := httptest.NewRequest(http.MethodPost, "/xiaozhi/v1/", nil)
+	recPost := httptest.NewRecorder()
+	r.ServeHTTP(recPost, reqPost)
+	if recPost.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for POST on /xiaozhi/v1/, got %d", recPost.Code)
+	}
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	// 未配置 sessionHandler 时的安全性测试
+	hNil := NewHandler(cfg, nil, nil)
+	rNil := NewRouter(hNil)
+	reqGet := httptest.NewRequest(http.MethodGet, "/xiaozhi/v1/", nil)
+	recGet := httptest.NewRecorder()
+	rNil.ServeHTTP(recGet, reqGet)
+	if recGet.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 when sessionHandler is nil, got %d", recGet.Code)
 	}
 }

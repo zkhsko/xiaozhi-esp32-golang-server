@@ -17,8 +17,8 @@ import (
 	"github.com/coder/websocket"
 
 	"xiaozhi-esp32-golang-server/internal/ai/bailian"
-	"xiaozhi-esp32-golang-server/internal/bootstrap"
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/router"
 	"xiaozhi-esp32-golang-server/internal/server"
 	"xiaozhi-esp32-golang-server/internal/session"
 )
@@ -89,11 +89,10 @@ func setupCustomResourceServer(t *testing.T, wsMockURL, llmMockURL string, modif
 	registry := session.NewRegistry(limiter, nil)
 	wsHandler := session.NewHandlerWithRegistry(cfg, registry, asrClient, llmClient, ttsClient, nil)
 
-	mux := http.NewServeMux()
-	mux.Handle(bootstrap.OTAPath, bootstrap.NewHandler(cfg, nil))
-	mux.Handle(session.WebSocketPath, wsHandler)
+	routerHandler := router.NewHandler(cfg, wsHandler, nil)
+	httpRouter := router.NewRouter(routerHandler)
 
-	srv := server.New(cfg.Server, mux)
+	srv := server.New(cfg.Server, httpRouter)
 	srv.RegisterOnShutdown(func(shutdownCtx context.Context) error {
 		return registry.Shutdown(shutdownCtx)
 	})
@@ -206,7 +205,7 @@ func TestResourceLimits_HTTPBodySizeLimit_413(t *testing.T) {
 	})
 	defer cleanup()
 
-	otaURL := fmt.Sprintf("http://%s%s", addr, bootstrap.OTAPath)
+	otaURL := fmt.Sprintf("http://%s%s", addr, router.OTAPath)
 
 	// 1. 发送超出 64 KiB 上限的超大正文，断言返回 413 Payload Too Large
 	oversizedBody := bytes.Repeat([]byte("a"), 65536+10)
@@ -232,12 +231,12 @@ func TestResourceLimits_HTTPBodySizeLimit_413(t *testing.T) {
 		t.Fatalf("expected HTTP 200 OK, got %d", resp2.StatusCode)
 	}
 
-	var otaData bootstrap.Response
+	var otaData router.Response
 	if err := json.NewDecoder(resp2.Body).Decode(&otaData); err != nil {
 		t.Fatalf("failed to decode bootstrap response: %v", err)
 	}
-	if otaData.WebSocket.Version != bootstrap.ProtocolVersion {
-		t.Fatalf("expected protocol version %d, got %d", bootstrap.ProtocolVersion, otaData.WebSocket.Version)
+	if otaData.WebSocket.Version != router.ProtocolVersion {
+		t.Fatalf("expected protocol version %d, got %d", router.ProtocolVersion, otaData.WebSocket.Version)
 	}
 }
 

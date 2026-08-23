@@ -20,8 +20,8 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/ai/bailian"
-	"xiaozhi-esp32-golang-server/internal/bootstrap"
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/router"
 	"xiaozhi-esp32-golang-server/internal/server"
 	"xiaozhi-esp32-golang-server/internal/session"
 )
@@ -685,11 +685,10 @@ func TestE2E_AutoMode_SingleTurn_Success(t *testing.T) {
 	registry := session.NewRegistry(limiter, nil)
 	wsHandler := session.NewHandlerWithRegistry(cfg, registry, asrClient, llmClient, ttsClient, nil)
 
-	mux := http.NewServeMux()
-	mux.Handle(bootstrap.OTAPath, bootstrap.NewHandler(cfg, nil))
-	mux.Handle(session.WebSocketPath, wsHandler)
+	routerHandler := router.NewHandler(cfg, wsHandler, nil)
+	httpRouter := router.NewRouter(routerHandler)
 
-	srv := server.New(cfg.Server, mux)
+	srv := server.New(cfg.Server, httpRouter)
 	srv.RegisterOnShutdown(func(shutdownCtx context.Context) error {
 		return registry.Shutdown(shutdownCtx)
 	})
@@ -703,10 +702,10 @@ func TestE2E_AutoMode_SingleTurn_Success(t *testing.T) {
 	}()
 
 	addr := waitForServerReady(t, srv, 2*time.Second)
-	cfg.Server.WebSocketURL = fmt.Sprintf("ws://%s%s", addr, session.WebSocketPath)
+	cfg.Server.WebSocketURL = fmt.Sprintf("ws://%s%s", addr, router.WebSocketPath)
 
 	// 3. 配置发现 (OTA) 请求与断言
-	otaURL := fmt.Sprintf("http://%s%s", addr, bootstrap.OTAPath)
+	otaURL := fmt.Sprintf("http://%s%s", addr, router.OTAPath)
 	otaResp, err := http.Post(otaURL, "application/json", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatalf("failed to send OTA request: %v", err)
@@ -717,13 +716,13 @@ func TestE2E_AutoMode_SingleTurn_Success(t *testing.T) {
 		t.Fatalf("expected OTA status 200, got %d", otaResp.StatusCode)
 	}
 
-	var otaData bootstrap.Response
+	var otaData router.Response
 	if err := json.NewDecoder(otaResp.Body).Decode(&otaData); err != nil {
 		t.Fatalf("failed to decode OTA response: %v", err)
 	}
 
-	if otaData.WebSocket.Version != 1 {
-		t.Errorf("expected OTA websocket version 1, got %d", otaData.WebSocket.Version)
+	if otaData.WebSocket.Version != router.ProtocolVersion {
+		t.Errorf("expected OTA websocket version %d, got %d", router.ProtocolVersion, otaData.WebSocket.Version)
 	}
 	if otaData.WebSocket.Token != cfg.DeviceSharedToken {
 		t.Errorf("expected OTA token to match configured token")

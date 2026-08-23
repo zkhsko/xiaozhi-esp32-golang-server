@@ -4,16 +4,15 @@ import (
 	"context"
 	"flag"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"xiaozhi-esp32-golang-server/internal/ai/bailian"
-	"xiaozhi-esp32-golang-server/internal/bootstrap"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/logger"
+	"xiaozhi-esp32-golang-server/internal/router"
 	"xiaozhi-esp32-golang-server/internal/server"
 	"xiaozhi-esp32-golang-server/internal/session"
 )
@@ -82,11 +81,10 @@ func main() {
 	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	wsHandler := session.NewHandler(cfg, sessionLimiter, asrClient, llmClient, ttsClient, slog.Default())
 
-	mux := http.NewServeMux()
-	mux.Handle(bootstrap.OTAPath, bootstrap.NewHandler(cfg, slog.Default()))
-	mux.Handle(session.WebSocketPath, wsHandler)
+	routerHandler := router.NewHandler(cfg, wsHandler, slog.Default())
+	httpRouter := router.NewRouter(routerHandler)
 
-	srv := server.New(cfg.Server, mux)
+	srv := server.New(cfg.Server, httpRouter)
 	srv.RegisterOnShutdown(func(shutdownCtx context.Context) error {
 		return wsHandler.Shutdown(shutdownCtx)
 	})

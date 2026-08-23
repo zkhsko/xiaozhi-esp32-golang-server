@@ -124,7 +124,7 @@
 
 - `cmd/server`：读取配置、构造依赖、启动 HTTP 服务和优雅退出。
 - `internal/config`：严格解析 YAML 和环境变量并完成启动校验。
-- `internal/bootstrap`：处理设备配置发现响应。
+- `internal/router`：处理 HTTP 路由、OTA 配置发现及 WebSocket 升级入口。
 - `internal/session`：WebSocket 生命周期、状态机、对话编排和取消。
 - `internal/audio`：Opus 编解码、PCM 分帧和有界音频队列。
 - `internal/ai`：ASR、LLM、TTS 的最小使用方接口和通用值类型。

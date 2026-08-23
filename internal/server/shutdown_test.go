@@ -13,6 +13,7 @@ import (
 	"github.com/coder/websocket"
 
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/router"
 	"xiaozhi-esp32-golang-server/internal/server"
 	"xiaozhi-esp32-golang-server/internal/session"
 )
@@ -94,10 +95,10 @@ func TestServer_Shutdown_WithActiveWebSockets(t *testing.T) {
 	registry := session.NewRegistry(limiter, nil)
 	wsHandler := session.NewHandlerWithRegistry(cfg, registry, nil, nil, nil, nil)
 
-	mux := http.NewServeMux()
-	mux.Handle(session.WebSocketPath, wsHandler)
+	routerHandler := router.NewHandler(cfg, wsHandler, nil)
+	httpRouter := router.NewRouter(routerHandler)
 
-	srv := server.New(cfg.Server, mux)
+	srv := server.New(cfg.Server, httpRouter)
 	srv.RegisterOnShutdown(func(shutdownCtx context.Context) error {
 		return registry.Shutdown(shutdownCtx)
 	})
@@ -184,10 +185,10 @@ func TestServer_Shutdown_DuringActiveConversation(t *testing.T) {
 	registry := session.NewRegistry(limiter, nil)
 	wsHandler := session.NewHandlerWithRegistry(cfg, registry, nil, nil, nil, nil)
 
-	mux := http.NewServeMux()
-	mux.Handle(session.WebSocketPath, wsHandler)
+	routerHandler := router.NewHandler(cfg, wsHandler, nil)
+	httpRouter := router.NewRouter(routerHandler)
 
-	srv := server.New(cfg.Server, mux)
+	srv := server.New(cfg.Server, httpRouter)
 	srv.RegisterOnShutdown(func(shutdownCtx context.Context) error {
 		return registry.Shutdown(shutdownCtx)
 	})
@@ -263,10 +264,10 @@ func TestServer_Shutdown_TimeoutBranchWithHooks(t *testing.T) {
 	registry := session.NewRegistry(limiter, nil)
 	wsHandler := session.NewHandlerWithRegistry(cfg, registry, nil, nil, nil, nil)
 
-	mux := http.NewServeMux()
-	mux.Handle(session.WebSocketPath, wsHandler)
+	routerHandler := router.NewHandler(cfg, wsHandler, nil)
+	httpRouter := router.NewRouter(routerHandler)
 
-	srv := server.New(cfg.Server, mux)
+	srv := server.New(cfg.Server, httpRouter)
 
 	// 注册一个耗时超过 100ms 的钩子
 	blockCh := make(chan struct{})
@@ -314,10 +315,10 @@ func TestServer_UpgradeFailure_QuotaReleased(t *testing.T) {
 	registry := session.NewRegistry(limiter, nil)
 	wsHandler := session.NewHandlerWithRegistry(cfg, registry, nil, nil, nil, nil)
 
-	mux := http.NewServeMux()
-	mux.Handle(session.WebSocketPath, wsHandler)
+	routerHandler := router.NewHandler(cfg, wsHandler, nil)
+	httpRouter := router.NewRouter(routerHandler)
 
-	srv := server.New(cfg.Server, mux)
+	srv := server.New(cfg.Server, httpRouter)
 	srv.RegisterOnShutdown(func(shutdownCtx context.Context) error {
 		return registry.Shutdown(shutdownCtx)
 	})
@@ -390,10 +391,10 @@ func TestServer_HighConcurrency_RegistrationAndShutdown(t *testing.T) {
 	registry := session.NewRegistry(limiter, nil)
 	wsHandler := session.NewHandlerWithRegistry(cfg, registry, nil, nil, nil, nil)
 
-	mux := http.NewServeMux()
-	mux.Handle(session.WebSocketPath, wsHandler)
+	routerHandler := router.NewHandler(cfg, wsHandler, nil)
+	httpRouter := router.NewRouter(routerHandler)
 
-	srv := server.New(cfg.Server, mux)
+	srv := server.New(cfg.Server, httpRouter)
 	srv.RegisterOnShutdown(func(shutdownCtx context.Context) error {
 		return registry.Shutdown(shutdownCtx)
 	})

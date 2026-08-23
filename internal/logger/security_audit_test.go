@@ -14,9 +14,9 @@ import (
 	"sync"
 	"testing"
 
-	"xiaozhi-esp32-golang-server/internal/bootstrap"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/logger"
+	"xiaozhi-esp32-golang-server/internal/router"
 	"xiaozhi-esp32-golang-server/internal/session"
 )
 
@@ -308,8 +308,8 @@ func TestSecurityAudit_HTTPErrorResponsesNoInternalLeak(t *testing.T) {
 	var logBuf bytes.Buffer
 	auditLogger := logger.New(&logBuf, slog.LevelDebug)
 
-	bootstrapHandler := bootstrap.NewHandler(cfg, auditLogger)
 	wsHandler := session.NewHandler(cfg, session.NewSessionLimiter(1), nil, nil, nil, auditLogger)
+	httpRouter := router.NewRouter(router.NewHandler(cfg, wsHandler, auditLogger))
 
 	tests := []struct {
 		name       string
@@ -322,71 +322,71 @@ func TestSecurityAudit_HTTPErrorResponsesNoInternalLeak(t *testing.T) {
 	}{
 		{
 			name:       "bootstrap method not allowed",
-			handler:    bootstrapHandler,
+			handler:    httpRouter,
 			method:     http.MethodDelete,
-			path:       bootstrap.OTAPath,
+			path:       router.OTAPath,
 			wantStatus: http.StatusMethodNotAllowed,
 		},
 		{
 			name:       "bootstrap not found",
-			handler:    bootstrapHandler,
+			handler:    httpRouter,
 			method:     http.MethodGet,
 			path:       "/unknown/path",
 			wantStatus: http.StatusNotFound,
 		},
 		{
 			name:       "bootstrap body payload too large",
-			handler:    bootstrapHandler,
+			handler:    httpRouter,
 			method:     http.MethodPost,
-			path:       bootstrap.OTAPath,
+			path:       router.OTAPath,
 			body:       strings.Repeat("a", 2048),
 			wantStatus: http.StatusRequestEntityTooLarge,
 		},
 		{
 			name:       "bootstrap invalid json body",
-			handler:    bootstrapHandler,
+			handler:    httpRouter,
 			method:     http.MethodPost,
-			path:       bootstrap.OTAPath,
+			path:       router.OTAPath,
 			body:       "not-a-valid-json-string",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "bootstrap header too large",
-			handler:    bootstrapHandler,
+			handler:    httpRouter,
 			method:     http.MethodGet,
-			path:       bootstrap.OTAPath,
+			path:       router.OTAPath,
 			headers:    map[string]string{"X-Large-Header": strings.Repeat("h", 512)},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "ws upgrade missing authorization",
-			handler:    wsHandler,
+			handler:    httpRouter,
 			method:     http.MethodGet,
-			path:       session.WebSocketPath,
+			path:       router.WebSocketPath,
 			headers:    map[string]string{"Protocol-Version": "1"},
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
 			name:       "ws upgrade invalid token",
-			handler:    wsHandler,
+			handler:    httpRouter,
 			method:     http.MethodGet,
-			path:       session.WebSocketPath,
+			path:       router.WebSocketPath,
 			headers:    map[string]string{"Protocol-Version": "1", "Authorization": "Bearer wrong-token-xyz"},
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
 			name:       "ws upgrade invalid protocol version",
-			handler:    wsHandler,
+			handler:    httpRouter,
 			method:     http.MethodGet,
-			path:       session.WebSocketPath,
+			path:       router.WebSocketPath,
 			headers:    map[string]string{"Protocol-Version": "2", "Authorization": "Bearer correct-secret-shared-token"},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "ws upgrade header too large",
-			handler:    wsHandler,
+			handler:    httpRouter,
 			method:     http.MethodGet,
-			path:       session.WebSocketPath,
+			path:       router.WebSocketPath,
 			headers:    map[string]string{"Protocol-Version": "1", "Authorization": "Bearer correct-secret-shared-token", "X-Big": strings.Repeat("b", 512)},
 			wantStatus: http.StatusBadRequest,
 		},

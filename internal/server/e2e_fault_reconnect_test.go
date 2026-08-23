@@ -14,8 +14,8 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/ai/bailian"
-	"xiaozhi-esp32-golang-server/internal/bootstrap"
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/router"
 	"xiaozhi-esp32-golang-server/internal/server"
 	"xiaozhi-esp32-golang-server/internal/session"
 )
@@ -105,11 +105,10 @@ func setupE2ETestServer(t *testing.T, wsMockURL, llmMockURL string) (string, *co
 	registry := session.NewRegistry(limiter, nil)
 	wsHandler := session.NewHandlerWithRegistry(cfg, registry, asrClient, llmClient, ttsClient, nil)
 
-	mux := http.NewServeMux()
-	mux.Handle(bootstrap.OTAPath, bootstrap.NewHandler(cfg, nil))
-	mux.Handle(session.WebSocketPath, wsHandler)
+	routerHandler := router.NewHandler(cfg, wsHandler, nil)
+	httpRouter := router.NewRouter(routerHandler)
 
-	srv := server.New(cfg.Server, mux)
+	srv := server.New(cfg.Server, httpRouter)
 	srv.RegisterOnShutdown(func(shutdownCtx context.Context) error {
 		return registry.Shutdown(shutdownCtx)
 	})
