@@ -13,9 +13,19 @@ import (
 	"github.com/coder/websocket"
 
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/router"
 	"xiaozhi-esp32-golang-server/internal/server"
 	"xiaozhi-esp32-golang-server/internal/session"
 )
+
+// newTestRouter 使用统一标准装配测试路由，隔离具体的 router.Options 细节。
+func newTestRouter(cfg *config.Config, websocketSessionHandler *session.Handler) http.Handler {
+	otaHandler := router.NewOTAHandler(cfg, nil)
+	return router.NewRouter(router.Options{
+		OTA:              otaHandler,
+		WebsocketSession: websocketSessionHandler,
+	})
+}
 
 func createServerTestConfig(maxSessions int, shutdownTimeout time.Duration) *config.Config {
 	return &config.Config{
@@ -92,7 +102,10 @@ func TestServer_Shutdown_WithActiveWebSockets(t *testing.T) {
 	cfg := createServerTestConfig(10, 2*time.Second)
 	limiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	registry := session.NewRegistry(limiter, nil)
-	websocketSessionHandler := session.NewHandlerWithRegistry(cfg, registry, nil, nil, nil, nil)
+	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
+		Config:   cfg,
+		Registry: registry,
+	})
 
 	httpRouter := newTestRouter(cfg, websocketSessionHandler)
 	srv := server.New(cfg.Server, httpRouter)
@@ -180,7 +193,10 @@ func TestServer_Shutdown_DuringActiveConversation(t *testing.T) {
 	cfg := createServerTestConfig(5, 2*time.Second)
 	limiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	registry := session.NewRegistry(limiter, nil)
-	websocketSessionHandler := session.NewHandlerWithRegistry(cfg, registry, nil, nil, nil, nil)
+	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
+		Config:   cfg,
+		Registry: registry,
+	})
 
 	httpRouter := newTestRouter(cfg, websocketSessionHandler)
 	srv := server.New(cfg.Server, httpRouter)
@@ -257,7 +273,10 @@ func TestServer_Shutdown_TimeoutBranchWithHooks(t *testing.T) {
 	cfg := createServerTestConfig(5, 100*time.Millisecond)
 	limiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	registry := session.NewRegistry(limiter, nil)
-	websocketSessionHandler := session.NewHandlerWithRegistry(cfg, registry, nil, nil, nil, nil)
+	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
+		Config:   cfg,
+		Registry: registry,
+	})
 
 	httpRouter := newTestRouter(cfg, websocketSessionHandler)
 	srv := server.New(cfg.Server, httpRouter)
@@ -306,7 +325,10 @@ func TestServer_UpgradeFailure_QuotaReleased(t *testing.T) {
 	cfg := createServerTestConfig(1, 2*time.Second)
 	limiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	registry := session.NewRegistry(limiter, nil)
-	websocketSessionHandler := session.NewHandlerWithRegistry(cfg, registry, nil, nil, nil, nil)
+	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
+		Config:   cfg,
+		Registry: registry,
+	})
 
 	httpRouter := newTestRouter(cfg, websocketSessionHandler)
 	srv := server.New(cfg.Server, httpRouter)
@@ -380,7 +402,10 @@ func TestServer_HighConcurrency_RegistrationAndShutdown(t *testing.T) {
 	cfg := createServerTestConfig(10, 2*time.Second)
 	limiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	registry := session.NewRegistry(limiter, nil)
-	websocketSessionHandler := session.NewHandlerWithRegistry(cfg, registry, nil, nil, nil, nil)
+	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
+		Config:   cfg,
+		Registry: registry,
+	})
 
 	httpRouter := newTestRouter(cfg, websocketSessionHandler)
 	srv := server.New(cfg.Server, httpRouter)

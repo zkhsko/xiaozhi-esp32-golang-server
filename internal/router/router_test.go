@@ -409,7 +409,11 @@ func TestRouter_TotalHeadersTooLarge(t *testing.T) {
 func TestRouter_SessionEndpointRouting(t *testing.T) {
 	cfg := newTestConfig("test-token", "ws://localhost:8080/xiaozhi/v1/")
 	sessionLimiter := session.NewSessionLimiter(10)
-	websocketSessionHandler := session.NewHandler(cfg, sessionLimiter, nil, nil, nil, slog.Default())
+	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
+		Config:  cfg,
+		Limiter: sessionLimiter,
+		Logger:  slog.Default(),
+	})
 
 	r := NewRouter(Options{
 		WebsocketSession: websocketSessionHandler,

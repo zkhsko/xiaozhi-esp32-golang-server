@@ -282,7 +282,15 @@ func createAbortTestSession(ctx context.Context, asr ai.ASRClient, llm ai.LLMCli
 		SerialNumber: "abort-sn-1",
 	}
 
-	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, asr, llm, tts, slog.Default())
+	sess := NewSession(ctx, Options{
+		Writer:     writer,
+		ClientInfo: info,
+		Config:     cfg,
+		ASRClient:  asr,
+		LLMClient:  llm,
+		TTSClient:  tts,
+		Logger:     slog.Default(),
+	})
 	return sess, fakeConn
 }
 

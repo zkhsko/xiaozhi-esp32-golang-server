@@ -92,7 +92,12 @@ func createTestSession(ctx context.Context) (*Session, *fakeWSConn, *Writer) {
 		ClientID:     "test-client",
 		SerialNumber: "test-sn",
 	}
-	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, nil, nil, nil, slog.Default())
+	sess := NewSession(ctx, Options{
+		Writer:     writer,
+		ClientInfo: info,
+		Config:     cfg,
+		Logger:     slog.Default(),
+	})
 	return sess, fakeConn, writer
 }
 

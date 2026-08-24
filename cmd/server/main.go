@@ -79,7 +79,14 @@ func main() {
 	}
 
 	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
-	websocketSessionHandler := session.NewHandler(cfg, sessionLimiter, asrClient, llmClient, ttsClient, slog.Default())
+	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
+		Config:    cfg,
+		Limiter:   sessionLimiter,
+		ASRClient: asrClient,
+		LLMClient: llmClient,
+		TTSClient: ttsClient,
+		Logger:    slog.Default(),
+	})
 
 	otaHandler := router.NewOTAHandler(cfg, slog.Default())
 	httpRouter := router.NewRouter(router.Options{

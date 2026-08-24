@@ -545,7 +545,15 @@ func createFaultTestSession(t *testing.T, asr ai.ASRClient, llm ai.LLMClient, tt
 	}
 
 	w := NewWriter(context.Background(), conn, 100, logger)
-	sess := NewSessionWithWriter(context.Background(), nil, w, info, cfg, asr, llm, tts, logger)
+	sess := NewSession(context.Background(), Options{
+		Writer:     w,
+		ClientInfo: info,
+		Config:     cfg,
+		ASRClient:  asr,
+		LLMClient:  llm,
+		TTSClient:  tts,
+		Logger:     logger,
+	})
 	sess.SetTickerFactory(func(d time.Duration) Ticker {
 		return &testImmediateTicker{c: make(chan time.Time, 100)}
 	})

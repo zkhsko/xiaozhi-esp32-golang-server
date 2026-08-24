@@ -118,37 +118,47 @@ type Session struct {
 	mcpTools   []ai.Tool
 }
 
-// NewSession 创建配置就绪的 WebSocket 会话对象。
-func NewSession(ctx context.Context, conn *websocket.Conn, info *ClientHeaderInfo, cfg *config.Config, asrClient ai.ASRClient, llmClient ai.LLMClient, ttsClient ai.TTSClient, l *slog.Logger) *Session {
-	var w *Writer
-	if conn != nil {
-		queueCap := DefaultWriteQueueCapacity
-		if cfg != nil && cfg.Session.DownlinkOpusQueueCapacity > 0 {
-			queueCap = cfg.Session.DownlinkOpusQueueCapacity
-		}
-		w = NewWriter(ctx, conn, queueCap, l)
-	}
-	return NewSessionWithWriter(ctx, conn, w, info, cfg, asrClient, llmClient, ttsClient, l)
+// Options 聚合构造单个 WebSocket 会话的依赖与上下文。
+type Options struct {
+	Conn          *websocket.Conn
+	Writer        *Writer
+	ClientInfo    *ClientHeaderInfo
+	Config        *config.Config
+	ASRClient     ai.ASRClient
+	LLMClient     ai.LLMClient
+	TTSClient     ai.TTSClient
+	Logger        *slog.Logger
+	TickerFactory func(time.Duration) Ticker
 }
 
-// NewSessionWithWriter 创建指定串行写流程的 WebSocket 会话对象。
-func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Writer, info *ClientHeaderInfo, cfg *config.Config, asrClient ai.ASRClient, llmClient ai.LLMClient, ttsClient ai.TTSClient, l *slog.Logger) *Session {
+// NewSession 使用具名选项创建配置就绪的 WebSocket 会话对象。
+func NewSession(ctx context.Context, opts Options) *Session {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	l := opts.Logger
 	if l == nil {
 		l = slog.Default()
 	}
 
+	w := opts.Writer
+	if w == nil && opts.Conn != nil {
+		queueCap := DefaultWriteQueueCapacity
+		if opts.Config != nil && opts.Config.Session.DownlinkOpusQueueCapacity > 0 {
+			queueCap = opts.Config.Session.DownlinkOpusQueueCapacity
+		}
+		w = NewWriter(ctx, opts.Conn, queueCap, l)
+	}
+
 	sessionCtx, cancel := context.WithCancel(ctx)
 	eventCap := DefaultEventChannelCapacity
-	if cfg != nil && cfg.Session.ASRPCMQueueCapacity > 0 {
-		eventCap = cfg.Session.ASRPCMQueueCapacity
+	if opts.Config != nil && opts.Config.Session.ASRPCMQueueCapacity > 0 {
+		eventCap = opts.Config.Session.ASRPCMQueueCapacity
 	}
 
 	maxOpusBytes := DefaultMaxOpusPacketBytes
-	if cfg != nil && cfg.Session.MaxOpusPacketBytes > 0 {
-		maxOpusBytes = cfg.Session.MaxOpusPacketBytes
+	if opts.Config != nil && opts.Config.Session.MaxOpusPacketBytes > 0 {
+		maxOpusBytes = opts.Config.Session.MaxOpusPacketBytes
 	}
 	dec, err := audio.NewDecoder(maxOpusBytes)
 	if err != nil {
@@ -156,23 +166,24 @@ func NewSessionWithWriter(ctx context.Context, conn *websocket.Conn, writer *Wri
 	}
 
 	return &Session{
-		conn:        conn,
-		clientInfo:  info,
-		cfg:         cfg,
-		asrClient:   asrClient,
-		llmClient:   llmClient,
-		ttsClient:   ttsClient,
-		logger:      l,
-		diagLimiter: logger.NewDiagRateLimiter(),
-		writer:      writer,
-		events:      make(chan event, eventCap),
-		ctx:         sessionCtx,
-		cancel:      cancel,
-		done:        make(chan struct{}),
-		pendingMCP:  make(map[int64]chan *mcpResponse),
-		state:       StateConnected,
-		mode:        ListenModeAuto,
-		decoder:     dec,
+		conn:          opts.Conn,
+		clientInfo:    opts.ClientInfo,
+		cfg:           opts.Config,
+		asrClient:     opts.ASRClient,
+		llmClient:     opts.LLMClient,
+		ttsClient:     opts.TTSClient,
+		logger:        l,
+		diagLimiter:   logger.NewDiagRateLimiter(),
+		writer:        w,
+		events:        make(chan event, eventCap),
+		tickerFactory: opts.TickerFactory,
+		ctx:           sessionCtx,
+		cancel:        cancel,
+		done:          make(chan struct{}),
+		pendingMCP:    make(map[int64]chan *mcpResponse),
+		state:         StateConnected,
+		mode:          ListenModeAuto,
+		decoder:       dec,
 	}
 }
 

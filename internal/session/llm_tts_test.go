@@ -346,7 +346,7 @@ func createTestSessionForOrchestration(ctx context.Context, llmClient ai.LLMClie
 		SerialNumber: "test-sn",
 	}
 
-	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, nil, llmClient, ttsClient, slog.Default())
+	sess := NewSession(ctx, Options{Writer: writer, ClientInfo: info, Config: cfg, LLMClient: llmClient, TTSClient: ttsClient, Logger: slog.Default()})
 
 	// 设置 sessionID 以便编码消息
 	sess.mu.Lock()
@@ -841,7 +841,7 @@ func TestOrchestration_EndToEndIntegration(t *testing.T) {
 		SerialNumber: "test-sn",
 	}
 
-	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, asrClient, llmClient, ttsClient, slog.Default())
+	sess := NewSession(ctx, Options{Writer: writer, ClientInfo: info, Config: cfg, ASRClient: asrClient, LLMClient: llmClient, TTSClient: ttsClient, Logger: slog.Default()})
 	go func() { _ = sess.Run() }()
 	defer sess.Close()
 
@@ -975,7 +975,7 @@ func TestOrchestration_TTSFirstAudioTimeout_SessionRecovery(t *testing.T) {
 		SerialNumber: "test-sn",
 	}
 
-	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, asrClient, llmClient, ttsClient, slog.Default())
+	sess := NewSession(ctx, Options{Writer: writer, ClientInfo: info, Config: cfg, ASRClient: asrClient, LLMClient: llmClient, TTSClient: ttsClient, Logger: slog.Default()})
 	go func() { _ = sess.Run() }()
 	defer sess.Close()
 
@@ -1033,7 +1033,7 @@ func TestOrchestration_TTSSentenceTimeout_SessionRecovery(t *testing.T) {
 		SerialNumber: "test-sn",
 	}
 
-	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, asrClient, llmClient, ttsClient, slog.Default())
+	sess := NewSession(ctx, Options{Writer: writer, ClientInfo: info, Config: cfg, ASRClient: asrClient, LLMClient: llmClient, TTSClient: ttsClient, Logger: slog.Default()})
 	go func() { _ = sess.Run() }()
 	defer sess.Close()
 

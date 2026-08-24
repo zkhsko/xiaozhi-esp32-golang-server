@@ -22,40 +22,43 @@ type Handler struct {
 	logger    *slog.Logger
 }
 
-// NewHandler 创建配置就绪的 WebSocket HTTP 升级处理器。
-func NewHandler(cfg *config.Config, limiter *SessionLimiter, asrClient ai.ASRClient, llmClient ai.LLMClient, ttsClient ai.TTSClient, l *slog.Logger) *Handler {
-	if l == nil {
-		l = slog.Default()
-	}
-	if limiter == nil {
-		maxSessions := 1
-		if cfg != nil && cfg.Server.MaxConcurrentSessions > 0 {
-			maxSessions = cfg.Server.MaxConcurrentSessions
-		}
-		limiter = NewSessionLimiter(maxSessions)
-	}
-	reg := NewRegistry(limiter, l)
-	return NewHandlerWithRegistry(cfg, reg, asrClient, llmClient, ttsClient, l)
+// HandlerOptions 聚合创建 WebSocket HTTP 升级处理器的依赖与配置。
+type HandlerOptions struct {
+	Config    *config.Config
+	Limiter   *SessionLimiter
+	Registry  *Registry
+	ASRClient ai.ASRClient
+	LLMClient ai.LLMClient
+	TTSClient ai.TTSClient
+	Logger    *slog.Logger
 }
 
-// NewHandlerWithRegistry 使用指定会话注册表创建 WebSocket HTTP 升级处理器。
-func NewHandlerWithRegistry(cfg *config.Config, registry *Registry, asrClient ai.ASRClient, llmClient ai.LLMClient, ttsClient ai.TTSClient, l *slog.Logger) *Handler {
+// NewHandler 使用具名选项创建配置就绪的 WebSocket HTTP 升级处理器。
+func NewHandler(opts HandlerOptions) *Handler {
+	l := opts.Logger
 	if l == nil {
 		l = slog.Default()
 	}
-	if registry == nil {
-		maxSessions := 1
-		if cfg != nil && cfg.Server.MaxConcurrentSessions > 0 {
-			maxSessions = cfg.Server.MaxConcurrentSessions
+
+	reg := opts.Registry
+	if reg == nil {
+		limiter := opts.Limiter
+		if limiter == nil {
+			maxSessions := 1
+			if opts.Config != nil && opts.Config.Server.MaxConcurrentSessions > 0 {
+				maxSessions = opts.Config.Server.MaxConcurrentSessions
+			}
+			limiter = NewSessionLimiter(maxSessions)
 		}
-		registry = NewRegistry(NewSessionLimiter(maxSessions), l)
+		reg = NewRegistry(limiter, l)
 	}
+
 	return &Handler{
-		cfg:       cfg,
-		registry:  registry,
-		asrClient: asrClient,
-		llmClient: llmClient,
-		ttsClient: ttsClient,
+		cfg:       opts.Config,
+		registry:  reg,
+		asrClient: opts.ASRClient,
+		llmClient: opts.LLMClient,
+		ttsClient: opts.TTSClient,
 		logger:    l,
 	}
 }
@@ -166,7 +169,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// 5. 构造会话并注册到会话注册表，统一注销与名额释放顺序
-	sess := NewSession(r.Context(), conn, clientInfo, h.cfg, h.asrClient, h.llmClient, h.ttsClient, h.logger)
+	sess := NewSession(r.Context(), Options{
+		Conn:       conn,
+		ClientInfo: clientInfo,
+		Config:     h.cfg,
+		ASRClient:  h.asrClient,
+		LLMClient:  h.llmClient,
+		TTSClient:  h.ttsClient,
+		Logger:     h.logger,
+	})
 	unregister, registered := h.registry.Register(sess, release)
 	if !registered {
 		release()

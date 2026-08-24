@@ -97,7 +97,7 @@ func TestMCP_DiscoverToolsPagination(t *testing.T) {
 
 	conn := newHistoryWSConn()
 	writer := NewWriter(ctx, conn, 100, slog.Default())
-	sess := NewSessionWithWriter(ctx, nil, writer, nil, nil, nil, nil, nil, slog.Default())
+	sess := NewSession(ctx, Options{Writer: writer, Logger: slog.Default()})
 	defer sess.Close()
 	go func() { _ = sess.Run() }()
 
@@ -200,11 +200,17 @@ func TestMCP_ToolCallExecutionAndLLMFeedback(t *testing.T) {
 	ttsClient := newMockTTSStream(nil)
 	ttsClientWrapper := newMockTTSClient(ttsClient, nil)
 
-	sess := NewSessionWithWriter(ctx, nil, writer, nil, &config.Config{
-		Session: config.SessionConfig{
-			SystemPrompt: "你是小智助手。",
+	sess := NewSession(ctx, Options{
+		Writer: writer,
+		Config: &config.Config{
+			Session: config.SessionConfig{
+				SystemPrompt: "你是小智助手。",
+			},
 		},
-	}, nil, llmClient, ttsClientWrapper, slog.Default())
+		LLMClient: llmClient,
+		TTSClient: ttsClientWrapper,
+		Logger:    slog.Default(),
+	})
 	defer sess.Close()
 	go func() { _ = sess.Run() }()
 
@@ -312,7 +318,7 @@ func TestMCP_ToolCallErrorResponse(t *testing.T) {
 	ttsClient := newMockTTSStream(nil)
 	ttsClientWrapper := newMockTTSClient(ttsClient, nil)
 
-	sess := NewSessionWithWriter(ctx, nil, writer, nil, nil, nil, llmClient, ttsClientWrapper, slog.Default())
+	sess := NewSession(ctx, Options{Writer: writer, LLMClient: llmClient, TTSClient: ttsClientWrapper, Logger: slog.Default()})
 	defer sess.Close()
 	go func() { _ = sess.Run() }()
 
@@ -379,7 +385,7 @@ func TestMCP_ConcurrentResponseAndSessionClose(t *testing.T) {
 
 		conn := newHistoryWSConn()
 		writer := NewWriter(ctx, conn, 200, slog.Default())
-		sess := NewSessionWithWriter(ctx, nil, writer, nil, nil, nil, nil, nil, slog.Default())
+		sess := NewSession(ctx, Options{Writer: writer, Logger: slog.Default()})
 
 		const concurrentRequests = 20
 		var wg sync.WaitGroup
@@ -421,7 +427,7 @@ func TestMCP_HandleIncomingAndCloseDirectRace(t *testing.T) {
 
 		conn := newHistoryWSConn()
 		writer := NewWriter(ctx, conn, 100, slog.Default())
-		sess := NewSessionWithWriter(ctx, nil, writer, nil, nil, nil, nil, nil, slog.Default())
+		sess := NewSession(ctx, Options{Writer: writer, Logger: slog.Default()})
 
 		respCh := make(chan *mcpResponse, 1)
 		reqID := int64(100 + iteration)
@@ -500,11 +506,17 @@ func TestMCP_ToolCallUnauthorizedRejected(t *testing.T) {
 	ttsClient := newMockTTSStream(nil)
 	ttsClientWrapper := newMockTTSClient(ttsClient, nil)
 
-	sess := NewSessionWithWriter(ctx, nil, writer, nil, &config.Config{
-		Session: config.SessionConfig{
-			SystemPrompt: "你是小智助手。",
+	sess := NewSession(ctx, Options{
+		Writer: writer,
+		Config: &config.Config{
+			Session: config.SessionConfig{
+				SystemPrompt: "你是小智助手。",
+			},
 		},
-	}, nil, llmClient, ttsClientWrapper, slog.Default())
+		LLMClient: llmClient,
+		TTSClient: ttsClientWrapper,
+		Logger:    slog.Default(),
+	})
 	defer sess.Close()
 	go func() { _ = sess.Run() }()
 
@@ -594,7 +606,7 @@ func TestMCP_ToolCallMixedAuthorization(t *testing.T) {
 	ttsClient := newMockTTSStream(nil)
 	ttsClientWrapper := newMockTTSClient(ttsClient, nil)
 
-	sess := NewSessionWithWriter(ctx, nil, writer, nil, nil, nil, llmClient, ttsClientWrapper, slog.Default())
+	sess := NewSession(ctx, Options{Writer: writer, LLMClient: llmClient, TTSClient: ttsClientWrapper, Logger: slog.Default()})
 	defer sess.Close()
 	go func() { _ = sess.Run() }()
 

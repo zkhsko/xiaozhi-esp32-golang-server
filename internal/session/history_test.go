@@ -273,7 +273,7 @@ func newTestHistoryConfig(maxHistoryTurns int, systemPrompt string) *config.Conf
 // TestHistory_AppendAndFIFOEviction 单元测试：验证会话历史追加与 FIFO 滚动淘汰行为。
 func TestHistory_AppendAndFIFOEviction(t *testing.T) {
 	cfg := newTestHistoryConfig(2, "系统提示词")
-	sess := NewSession(context.Background(), nil, nil, cfg, nil, nil, nil, slog.Default())
+	sess := NewSession(context.Background(), Options{Config: cfg, Logger: slog.Default()})
 
 	// 1. 空输入不追加
 	sess.AppendHistory("", "有效回答")
@@ -326,7 +326,7 @@ func TestHistory_AppendAndFIFOEviction(t *testing.T) {
 func TestHistory_BuildLLMMessages(t *testing.T) {
 	t.Run("with system prompt", func(t *testing.T) {
 		cfg := newTestHistoryConfig(6, "你是小智。")
-		sess := NewSession(context.Background(), nil, nil, cfg, nil, nil, nil, slog.Default())
+		sess := NewSession(context.Background(), Options{Config: cfg, Logger: slog.Default()})
 
 		// 无历史时
 		msgs0 := sess.buildLLMMessages("当前问题 0")
@@ -371,7 +371,7 @@ func TestHistory_BuildLLMMessages(t *testing.T) {
 
 	t.Run("without system prompt", func(t *testing.T) {
 		cfg := newTestHistoryConfig(6, "")
-		sess := NewSession(context.Background(), nil, nil, cfg, nil, nil, nil, slog.Default())
+		sess := NewSession(context.Background(), Options{Config: cfg, Logger: slog.Default()})
 
 		sess.AppendHistory("问 1", "答 1")
 		msgs := sess.buildLLMMessages("当前问题 2")
@@ -414,7 +414,7 @@ func TestHistory_SevenConsecutiveTurns_E2E(t *testing.T) {
 		SerialNumber: "sn-test-7turns",
 	}
 
-	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, nil, llmClient, ttsClient, slog.Default())
+	sess := NewSession(ctx, Options{Writer: writer, ClientInfo: info, Config: cfg, LLMClient: llmClient, TTSClient: ttsClient, Logger: slog.Default()})
 
 	// 设置手动可控时钟，加速下行发送
 	ticker := newManualTicker()
@@ -567,7 +567,7 @@ func TestHistory_AbortInProcessingDoesNotPollute(t *testing.T) {
 
 	conn := newHistoryWSConn()
 	writer := NewWriter(ctx, conn, 100, slog.Default())
-	sess := NewSessionWithWriter(ctx, nil, writer, nil, cfg, nil, llmClient, ttsClient, slog.Default())
+	sess := NewSession(ctx, Options{Writer: writer, Config: cfg, LLMClient: llmClient, TTSClient: ttsClient, Logger: slog.Default()})
 	ticker := newManualTicker()
 	sess.SetTickerFactory(func(d time.Duration) Ticker { return ticker })
 
@@ -710,7 +710,7 @@ func TestHistory_AbortInSpeakingDoesNotPollute(t *testing.T) {
 
 	conn := newHistoryWSConn()
 	writer := NewWriter(ctx, conn, 100, slog.Default())
-	sess := NewSessionWithWriter(ctx, nil, writer, nil, cfg, nil, llmClient, ttsClient, slog.Default())
+	sess := NewSession(ctx, Options{Writer: writer, Config: cfg, LLMClient: llmClient, TTSClient: ttsClient, Logger: slog.Default()})
 	ticker := newManualTicker()
 	sess.SetTickerFactory(func(d time.Duration) Ticker { return ticker })
 
@@ -773,7 +773,7 @@ func TestHistory_FailureDoesNotPollute(t *testing.T) {
 		})
 		ttsClient := newHistoryMockTTSClient(nil)
 
-		sess := NewSession(ctx, nil, nil, cfg, nil, llmClient, ttsClient, slog.Default())
+		sess := NewSession(ctx, Options{Config: cfg, LLMClient: llmClient, TTSClient: ttsClient, Logger: slog.Default()})
 		sess.orchestrateLLMAndTTS(ctx, 1, "测试 LLM 失败")
 
 		if len(sess.History()) != 0 {
@@ -790,7 +790,7 @@ func TestHistory_FailureDoesNotPollute(t *testing.T) {
 		ttsClient := newHistoryMockTTSClient(nil)
 		ttsClient.createErr = errors.New("tts service unavailable")
 
-		sess := NewSession(ctx, nil, nil, cfg, nil, llmClient, ttsClient, slog.Default())
+		sess := NewSession(ctx, Options{Config: cfg, LLMClient: llmClient, TTSClient: ttsClient, Logger: slog.Default()})
 		sess.orchestrateLLMAndTTS(ctx, 1, "测试 TTS 失败")
 
 		if len(sess.History()) != 0 {
@@ -810,7 +810,7 @@ func TestHistory_FailureDoesNotPollute(t *testing.T) {
 			return newHistoryMockTTSStream(nil, nil), nil
 		})
 
-		sess := NewSession(ctx, nil, nil, cfg, nil, llmClient, ttsClient, slog.Default())
+		sess := NewSession(ctx, Options{Config: cfg, LLMClient: llmClient, TTSClient: ttsClient, Logger: slog.Default()})
 		sess.orchestrateLLMAndTTS(ctx, 1, "测试空回答")
 
 		if len(sess.History()) != 0 {
@@ -826,7 +826,7 @@ func TestHistory_FailureDoesNotPollute(t *testing.T) {
 		conn := newHistoryWSConn()
 		writer := NewWriter(ctx, conn, 100, slog.Default())
 
-		sess := NewSessionWithWriter(ctx, nil, writer, nil, cfg, nil, nil, nil, slog.Default())
+		sess := NewSession(ctx, Options{Writer: writer, Config: cfg, Logger: slog.Default()})
 		sess.state = StateSpeaking
 		sess.sessionID = "test-session"
 
@@ -852,8 +852,8 @@ func TestHistory_FailureDoesNotPollute(t *testing.T) {
 func TestHistory_CloseClearsMemoryAndIsolation(t *testing.T) {
 	cfg := newTestHistoryConfig(6, "系统提示词")
 
-	sess1 := NewSession(context.Background(), nil, nil, cfg, nil, nil, nil, slog.Default())
-	sess2 := NewSession(context.Background(), nil, nil, cfg, nil, nil, nil, slog.Default())
+	sess1 := NewSession(context.Background(), Options{Config: cfg, Logger: slog.Default()})
+	sess2 := NewSession(context.Background(), Options{Config: cfg, Logger: slog.Default()})
 
 	// 会话 1 追加 2 轮历史
 	sess1.AppendHistory("S1 问 1", "S1 答 1")
@@ -886,7 +886,7 @@ func TestHistory_ConcurrentRace(t *testing.T) {
 	wg.Add(concurrency)
 
 	cfg := newTestHistoryConfig(4, "并发测试提示词")
-	sess := NewSession(context.Background(), nil, nil, cfg, nil, nil, nil, slog.Default())
+	sess := NewSession(context.Background(), Options{Config: cfg, Logger: slog.Default()})
 
 	for i := 0; i < concurrency; i++ {
 		go func(idx int) {

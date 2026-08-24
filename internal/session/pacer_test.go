@@ -196,7 +196,14 @@ func createTestSessionWithManualTicker(ctx context.Context, mt *manualTicker, ws
 		SerialNumber: "test-pacer-sn",
 	}
 
-	sess := NewSessionWithWriter(ctx, nil, writer, info, cfg, nil, llmClient, ttsClient, slog.Default())
+	sess := NewSession(ctx, Options{
+		Writer:     writer,
+		ClientInfo: info,
+		Config:     cfg,
+		LLMClient:  llmClient,
+		TTSClient:  ttsClient,
+		Logger:     slog.Default(),
+	})
 	if mt != nil {
 		sess.SetTickerFactory(func(d time.Duration) Ticker {
 			return mt

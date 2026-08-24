@@ -44,7 +44,7 @@ func TestRegistry_BasicLifecycle(t *testing.T) {
 
 	// 2. 会话注册
 	mockConn := &faultWSConn{}
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-1", SerialNumber: "sn-1"}, nil, nil, nil, nil, nil)
+	sess := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: "dev-1", SerialNumber: "sn-1"}})
 	sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 	defer sess.writer.Close()
 
@@ -103,7 +103,7 @@ func TestRegistry_DuplicateSerialNumber_EvictsOldSession(t *testing.T) {
 		t.Fatal("failed to acquire for session 1")
 	}
 	mockConn1 := &faultWSConn{}
-	sess1 := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-001", SerialNumber: sn}, nil, nil, nil, nil, nil)
+	sess1 := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: "dev-001", SerialNumber: sn}})
 	sess1.writer = NewWriter(context.Background(), mockConn1, 10, nil)
 
 	unreg1, reg1Ok := reg.Register(sess1, rel1)
@@ -135,7 +135,7 @@ func TestRegistry_DuplicateSerialNumber_EvictsOldSession(t *testing.T) {
 		t.Fatal("failed to acquire for session 2")
 	}
 	mockConn2 := &faultWSConn{}
-	sess2 := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-001-reconnect", SerialNumber: sn}, nil, nil, nil, nil, nil)
+	sess2 := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: "dev-001-reconnect", SerialNumber: sn}})
 	sess2.writer = NewWriter(context.Background(), mockConn2, 10, nil)
 
 	unreg2, reg2Ok := reg.Register(sess2, rel2)
@@ -207,7 +207,7 @@ func TestRegistry_DuplicateDeviceID_EvictsOldSession_V1(t *testing.T) {
 		t.Fatal("failed to acquire for session 1")
 	}
 	mockConn1 := &faultWSConn{}
-	sess1 := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: deviceID, SerialNumber: "", ProtocolVersion: "1"}, nil, nil, nil, nil, nil)
+	sess1 := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: deviceID, SerialNumber: "", ProtocolVersion: "1"}})
 	sess1.writer = NewWriter(context.Background(), mockConn1, 10, nil)
 
 	unreg1, reg1Ok := reg.Register(sess1, rel1)
@@ -238,7 +238,7 @@ func TestRegistry_DuplicateDeviceID_EvictsOldSession_V1(t *testing.T) {
 		t.Fatal("failed to acquire for session 2")
 	}
 	mockConn2 := &faultWSConn{}
-	sess2 := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: deviceID, SerialNumber: "", ProtocolVersion: "1"}, nil, nil, nil, nil, nil)
+	sess2 := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: deviceID, SerialNumber: "", ProtocolVersion: "1"}})
 	sess2.writer = NewWriter(context.Background(), mockConn2, 10, nil)
 
 	unreg2, reg2Ok := reg.Register(sess2, rel2)
@@ -310,7 +310,7 @@ func TestRegistry_ConcurrentDuplicateConnectRace(t *testing.T) {
 			}
 
 			mockConn := &faultWSConn{}
-			sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: fmt.Sprintf("dev-race-%d", idx), SerialNumber: sn}, nil, nil, nil, nil, nil)
+			sess := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: fmt.Sprintf("dev-race-%d", idx), SerialNumber: sn}})
 			sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 
 			unreg, registered := reg.Register(sess, rel)
@@ -358,12 +358,12 @@ func TestRegistry_MultiDeviceIsolationAndIndependentUnregister(t *testing.T) {
 	snB := "SN-DEVICE-BBB"
 
 	relA, _ := reg.Acquire()
-	sessA := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-A", SerialNumber: snA}, nil, nil, nil, nil, nil)
+	sessA := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: "dev-A", SerialNumber: snA}})
 	sessA.writer = NewWriter(context.Background(), &faultWSConn{}, 10, nil)
 	unregA, _ := reg.Register(sessA, relA)
 
 	relB, _ := reg.Acquire()
-	sessB := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-B", SerialNumber: snB}, nil, nil, nil, nil, nil)
+	sessB := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: "dev-B", SerialNumber: snB}})
 	sessB.writer = NewWriter(context.Background(), &faultWSConn{}, 10, nil)
 	unregB, _ := reg.Register(sessB, relB)
 
@@ -429,7 +429,7 @@ func TestRegistry_ConcurrentAcquireAndRegister(t *testing.T) {
 			}
 
 			mockConn := &faultWSConn{}
-			sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: fmt.Sprintf("dev-%d", idx), SerialNumber: fmt.Sprintf("sn-%d", idx)}, nil, nil, nil, nil, nil)
+			sess := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: fmt.Sprintf("dev-%d", idx), SerialNumber: fmt.Sprintf("sn-%d", idx)}})
 			sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 			defer sess.writer.Close()
 
@@ -530,7 +530,7 @@ func TestRegistry_Shutdown_RejectsNewAdmissions(t *testing.T) {
 
 	// 会话登记应直接失败
 	mockConn := &faultWSConn{}
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-shut", SerialNumber: "sn-shut"}, nil, nil, nil, nil, nil)
+	sess := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: "dev-shut", SerialNumber: "sn-shut"}})
 	sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 	defer sess.writer.Close()
 
@@ -556,7 +556,7 @@ func TestRegistry_Shutdown_CancelsAllActiveSessions(t *testing.T) {
 		}
 
 		mockConn := &faultWSConn{}
-		sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: fmt.Sprintf("dev-%d", i), SerialNumber: fmt.Sprintf("sn-%d", i)}, nil, nil, nil, nil, nil)
+		sess := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: fmt.Sprintf("dev-%d", i), SerialNumber: fmt.Sprintf("sn-%d", i)}})
 		sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 		sessions = append(sessions, sess)
 
@@ -614,7 +614,7 @@ func TestRegistry_Shutdown_TimeoutBranch(t *testing.T) {
 	}
 
 	mockConn := &faultWSConn{}
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-blocked", SerialNumber: "sn-blocked"}, nil, nil, nil, nil, nil)
+	sess := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: "dev-blocked", SerialNumber: "sn-blocked"}})
 	sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 
 	blockCh := make(chan struct{})
@@ -670,7 +670,7 @@ func TestRegistry_Shutdown_DuringListeningState(t *testing.T) {
 		t.Fatal("failed to acquire")
 	}
 
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-listen", SerialNumber: "sn-listen"}, nil, asrClient, nil, nil, nil)
+	sess := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: "dev-listen", SerialNumber: "sn-listen"}, ASRClient: asrClient})
 	sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 
 	unreg, registered := reg.Register(sess, release)
@@ -740,7 +740,7 @@ func TestRegistry_Shutdown_DuringProcessingState(t *testing.T) {
 		t.Fatal("failed to acquire")
 	}
 
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-proc", SerialNumber: "sn-proc"}, nil, asrClient, llmClient, ttsClient, nil)
+	sess := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: "dev-proc", SerialNumber: "sn-proc"}, ASRClient: asrClient, LLMClient: llmClient, TTSClient: ttsClient})
 	sess.writer = NewWriter(context.Background(), mockConn, 10, nil)
 
 	unreg, registered := reg.Register(sess, release)
@@ -829,7 +829,7 @@ func TestRegistry_Shutdown_DuringSpeakingState(t *testing.T) {
 		t.Fatal("failed to acquire")
 	}
 
-	sess := NewSession(context.Background(), nil, &ClientHeaderInfo{DeviceID: "dev-speak", SerialNumber: "sn-speak"}, cfg, asrClient, llmClient, ttsClient, nil)
+	sess := NewSession(context.Background(), Options{ClientInfo: &ClientHeaderInfo{DeviceID: "dev-speak", SerialNumber: "sn-speak"}, Config: cfg, ASRClient: asrClient, LLMClient: llmClient, TTSClient: ttsClient})
 	sess.writer = NewWriter(context.Background(), mockConn, 50, nil)
 
 	unreg, registered := reg.Register(sess, release)
