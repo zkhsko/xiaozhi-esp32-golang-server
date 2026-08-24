@@ -11,7 +11,7 @@ import (
 //   - 若未激活：生成 6 位一次性激活码并下发 activation.code 与 message；
 //   - 若已激活：首次下发独立 Token，后续轮询省略 Token 返回 WebSocket 配置。
 func (h *Handler) handleOTALegacy(w http.ResponseWriter, r *http.Request, headers DeviceHeaders, body []byte) {
-	// 框架占位：当前默认返回可用 WebSocket 配置
+	// 框架占位：当前默认返回可用 WebSocket 配置及服务器时间
 	var wsURL, token string
 	if h.cfg != nil {
 		wsURL = h.cfg.Server.WebSocketURL
@@ -19,6 +19,7 @@ func (h *Handler) handleOTALegacy(w http.ResponseWriter, r *http.Request, header
 	}
 
 	resp := Response{
+		ServerTime: currentServerTime(),
 		WebSocket: WebSocketConfig{
 			URL:     wsURL,
 			Token:   token,

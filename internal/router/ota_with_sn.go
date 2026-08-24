@@ -11,7 +11,7 @@ import (
 // 3. 按权威 SN 加锁查询 device_activation 绑定记录，校验 device_id / client_id 绑定关系；
 // 4. 已激活设备返回 WebSocket 连接配置及固件升级信息。
 func (h *Handler) handleOTASerialNumber(w http.ResponseWriter, r *http.Request, headers DeviceHeaders, body []byte) {
-	// 框架占位：当前默认返回可用 WebSocket 配置
+	// 框架占位：当前默认返回可用 WebSocket 配置及服务器时间
 	var wsURL, token string
 	if h.cfg != nil {
 		wsURL = h.cfg.Server.WebSocketURL
@@ -19,6 +19,7 @@ func (h *Handler) handleOTASerialNumber(w http.ResponseWriter, r *http.Request, 
 	}
 
 	resp := Response{
+		ServerTime: currentServerTime(),
 		WebSocket: WebSocketConfig{
 			URL:     wsURL,
 			Token:   token,

@@ -274,6 +274,12 @@ func TestRouter_OTATableDriven(t *testing.T) {
 				if resp.WebSocket.Version != ProtocolVersion {
 					t.Errorf("expected WebSocket Version %d, got %d", ProtocolVersion, resp.WebSocket.Version)
 				}
+				if resp.ServerTime == nil {
+					t.Fatalf("expected ServerTime to be non-nil")
+				}
+				if resp.ServerTime.Timestamp <= 0 {
+					t.Errorf("expected positive ServerTime.Timestamp, got %d", resp.ServerTime.Timestamp)
+				}
 
 				// 2. 严格字段断言：确保无冗余占位字段
 				var rawMap map[string]json.RawMessage
@@ -281,12 +287,15 @@ func TestRouter_OTATableDriven(t *testing.T) {
 					t.Fatalf("failed to unmarshal raw map: %v", err)
 				}
 
-				if len(rawMap) != 1 {
-					t.Errorf("expected exactly 1 top-level field (websocket), got %d fields: %+v", len(rawMap), rawMap)
+				if len(rawMap) != 2 {
+					t.Errorf("expected exactly 2 top-level fields (websocket, server_time), got %d fields: %+v", len(rawMap), rawMap)
 				}
 
 				if _, ok := rawMap["websocket"]; !ok {
 					t.Errorf("missing top-level 'websocket' field in response")
+				}
+				if _, ok := rawMap["server_time"]; !ok {
+					t.Errorf("missing top-level 'server_time' field in response")
 				}
 
 				forbiddenKeys := []string{"activation", "mqtt", "firmware", "device", "server", "tools"}
@@ -309,6 +318,14 @@ func TestRouter_OTATableDriven(t *testing.T) {
 					if _, exists := rawWS[key]; !exists {
 						t.Errorf("missing expected field %q in websocket object", key)
 					}
+				}
+
+				var rawServerTime map[string]any
+				if err := json.Unmarshal(rawMap["server_time"], &rawServerTime); err != nil {
+					t.Fatalf("failed to unmarshal server_time map: %v", err)
+				}
+				if _, exists := rawServerTime["timestamp"]; !exists {
+					t.Errorf("missing expected field 'timestamp' in server_time object")
 				}
 			}
 

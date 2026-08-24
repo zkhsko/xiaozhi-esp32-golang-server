@@ -3,12 +3,19 @@ package router
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 const (
 	// ProtocolVersion 固定协议版本号。
 	ProtocolVersion = 1
 )
+
+// ServerTimeInfo 定义服务端下发的时间同步信息。
+type ServerTimeInfo struct {
+	Timestamp      int64 `json:"timestamp"`                 // UTC 毫秒时间戳
+	TimezoneOffset int   `json:"timezone_offset,omitempty"` // 时区偏移量（分钟），例如东八区为 480
+}
 
 // WebSocketConfig 定义返回给设备的 WebSocket 连接配置。
 type WebSocketConfig struct {
@@ -33,9 +40,20 @@ type FirmwareInfo struct {
 
 // Response 定义配置发现响应结构。
 type Response struct {
+	ServerTime *ServerTimeInfo `json:"server_time,omitempty"`
 	WebSocket  WebSocketConfig `json:"websocket"`
 	Activation *ActivationInfo `json:"activation,omitempty"`
 	Firmware   *FirmwareInfo   `json:"firmware,omitempty"`
+}
+
+// currentServerTime 获取当前服务端时间信息。
+func currentServerTime() *ServerTimeInfo {
+	now := time.Now()
+	_, offsetSec := now.Zone()
+	return &ServerTimeInfo{
+		Timestamp:      now.UnixMilli(),
+		TimezoneOffset: offsetSec / 60,
+	}
 }
 
 // writeJSON 将数据序列化为 JSON 并写入 HTTP 响应。
