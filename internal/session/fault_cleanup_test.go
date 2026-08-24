@@ -912,53 +912,7 @@ func TestFaultCleanup_TTSSynthesisErrorAfterStart(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------------------
-// 测试 8：下行队列满载背压保护（已发 tts.start 后） -> 补发一次 tts.stop 并关闭连接
-// -----------------------------------------------------------------------------------------
-func TestFaultCleanup_DownlinkBackpressureAfterStart(t *testing.T) {
-	asrClient := newFaultASRClient()
-	llmClient := newFaultLLMClient()
-	ttsClient := newFaultTTSClient()
-
-	sess, conn, logCap := createFaultTestSession(t, asrClient, llmClient, ttsClient, nil)
-	defer sess.Close()
-
-	completeHello(t, sess, conn)
-
-	// 直接推进到 SPEAKING 状态并建立容量为 1 的 Pacer
-	pacer := NewDownlinkPacer(context.Background(), sess, 1, 1, nil)
-	sess.mu.Lock()
-	sess.state = StateSpeaking
-	sess.generation = 1
-	sess.pacer = pacer
-	sess.mu.Unlock()
-
-	// 不启动 pacer.Run() 使得消费挂起，第 1 包占满队列，第 2 包触发背压拒绝并投递 PostError
-	_ = pacer.Enqueue([]byte{1, 2, 3})
-	err := pacer.Enqueue([]byte{4, 5, 6})
-	if !errors.Is(err, ErrDownlinkQueueFull) {
-		t.Fatalf("expected ErrDownlinkQueueFull, got %v", err)
-	}
-
-	waitState(t, sess, StateClosed, 2*time.Second)
-
-	if !conn.HasTTSStop() {
-		t.Fatalf("expected tts.stop to be sent on backpressure in speaking state")
-	}
-	if conn.TTSStopCount() != 1 {
-		t.Fatalf("expected exactly 1 tts.stop, got %d", conn.TTSStopCount())
-	}
-	if sess.State() != StateClosed {
-		t.Fatalf("expected session state to be CLOSED, got %s", sess.State())
-	}
-
-	errCount := logCap.CountLevel(slog.LevelWarn)
-	if errCount != 1 {
-		t.Fatalf("expected exactly 1 warn/error log, got %d: %v", errCount, logCap.Messages(slog.LevelWarn))
-	}
-}
-
-// -----------------------------------------------------------------------------------------
-// 测试 9：设备在 CONNECTED 阶段主动断开连接 -> 立即 CLOSED，无写操作，资源释放
+// 测试 8：设备在 CONNECTED 阶段主动断开连接 -> 立即 CLOSED，无写操作，资源释放
 // -----------------------------------------------------------------------------------------
 func TestFaultCleanup_ClientDisconnectInConnectedState(t *testing.T) {
 	sess, conn, _ := createFaultTestSession(t, nil, nil, nil, nil)
@@ -983,7 +937,7 @@ func TestFaultCleanup_ClientDisconnectInConnectedState(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------------------
-// 测试 10：设备在 LISTENING 阶段主动断开连接 -> 立即 CLOSED，无写操作，ASR 资源释放
+// 测试 9：设备在 LISTENING 阶段主动断开连接 -> 立即 CLOSED，无写操作，ASR 资源释放
 // -----------------------------------------------------------------------------------------
 func TestFaultCleanup_ClientDisconnectInListeningState(t *testing.T) {
 	asrClient := newFaultASRClient()
@@ -1021,7 +975,7 @@ func TestFaultCleanup_ClientDisconnectInListeningState(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------------------
-// 测试 11：设备在 PROCESSING 阶段主动断开连接 -> 立即 CLOSED，无写操作，LLM/TTS 资源释放
+// 测试 10：设备在 PROCESSING 阶段主动断开连接 -> 立即 CLOSED，无写操作，LLM/TTS 资源释放
 // -----------------------------------------------------------------------------------------
 func TestFaultCleanup_ClientDisconnectInProcessingState(t *testing.T) {
 	asrClient := newFaultASRClient()
@@ -1067,7 +1021,7 @@ func TestFaultCleanup_ClientDisconnectInProcessingState(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------------------
-// 测试 12：设备在 SPEAKING 阶段主动断开连接 -> 立即 CLOSED，严禁再写已断开 WebSocket
+// 测试 11：设备在 SPEAKING 阶段主动断开连接 -> 立即 CLOSED，严禁再写已断开 WebSocket
 // -----------------------------------------------------------------------------------------
 func TestFaultCleanup_ClientDisconnectInSpeakingState(t *testing.T) {
 	asrClient := newFaultASRClient()
@@ -1109,7 +1063,7 @@ func TestFaultCleanup_ClientDisconnectInSpeakingState(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------------------
-// 测试 13：Hello 握手超时 (10s) -> 1008 关闭连接，未发 tts.stop，单日志记录
+// 测试 12：Hello 握手超时 (10s) -> 1008 关闭连接，未发 tts.stop，单日志记录
 // -----------------------------------------------------------------------------------------
 func TestFaultCleanup_HelloTimeout(t *testing.T) {
 	sess, conn, logCap := createFaultTestSession(t, nil, nil, nil, nil)
@@ -1134,7 +1088,7 @@ func TestFaultCleanup_HelloTimeout(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------------------
-// 测试 14：收音时长上限 (30s) 超时 -> 1008 关闭连接，未发 tts.stop，单日志记录
+// 测试 13：收音时长上限 (30s) 超时 -> 1008 关闭连接，未发 tts.stop，单日志记录
 // -----------------------------------------------------------------------------------------
 func TestFaultCleanup_ListeningDurationTimeout(t *testing.T) {
 	asrClient := newFaultASRClient()
@@ -1168,7 +1122,7 @@ func TestFaultCleanup_ListeningDurationTimeout(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------------------
-// 测试 15：通用超时兜底 -> 1008 关闭连接，未发 tts.stop，单日志记录
+// 测试 14：通用超时兜底 -> 1008 关闭连接，未发 tts.stop，单日志记录
 // -----------------------------------------------------------------------------------------
 func TestFaultCleanup_GenericTimeout(t *testing.T) {
 	sess, conn, logCap := createFaultTestSession(t, nil, nil, nil, nil)
@@ -1195,7 +1149,7 @@ func TestFaultCleanup_GenericTimeout(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------------------
-// 测试 16：迟到错误事件被安全丢弃 -> 不改变状态，不重复关闭
+// 测试 15：迟到错误事件被安全丢弃 -> 不改变状态，不重复关闭
 // -----------------------------------------------------------------------------------------
 func TestFaultCleanup_StaleErrorEventDiscarded(t *testing.T) {
 	sess, conn, logCap := createFaultTestSession(t, nil, nil, nil, nil)
@@ -1222,7 +1176,7 @@ func TestFaultCleanup_StaleErrorEventDiscarded(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------------------
-// 测试 17：并发故障、超时与断线竞态安全与 Goroutine 零泄漏
+// 测试 16：并发故障、超时与断线竞态安全与 Goroutine 零泄漏
 // -----------------------------------------------------------------------------------------
 func TestFaultCleanup_ConcurrentFaultsAndDisconnectRace(t *testing.T) {
 	initialGoroutines := runtime.NumGoroutine()

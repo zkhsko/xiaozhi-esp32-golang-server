@@ -16,9 +16,6 @@ const (
 )
 
 var (
-	// ErrDownlinkQueueFull 下行音频队列满载背压拒绝错误。
-	ErrDownlinkQueueFull = errors.New("downlink opus queue is full")
-
 	// ErrPacerStopped 节奏调度器已停止错误。
 	ErrPacerStopped = errors.New("downlink pacer is stopped")
 )
@@ -123,7 +120,7 @@ func (p *DownlinkPacer) sessionID() string {
 	return "pacer-session"
 }
 
-// Enqueue 将单个编码完成的 Opus 音频包存入下行发送队列，队列满时触发背压。
+// Enqueue 将单个编码完成的 Opus 音频包存入下行发送队列，队列满时阻塞等待（背压机制）。
 func (p *DownlinkPacer) Enqueue(packet []byte) error {
 	if len(packet) == 0 {
 		return nil
@@ -149,16 +146,6 @@ func (p *DownlinkPacer) Enqueue(packet []byte) error {
 		return p.ctx.Err()
 	case p.packetQueue <- copied:
 		return nil
-	default:
-		p.logger.Warn("downlink opus queue full, triggering backpressure",
-			"session_id", p.sessionID(),
-			"generation", p.gen,
-			"capacity", cap(p.packetQueue),
-		)
-		if p.session != nil {
-			p.session.PostError(p.gen, ErrDownlinkQueueFull, true)
-		}
-		return ErrDownlinkQueueFull
 	}
 }
 

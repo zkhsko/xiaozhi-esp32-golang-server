@@ -591,8 +591,8 @@ func TestPacer_AbortWhileProcessing_NoStopEmitted(t *testing.T) {
 	}
 }
 
-// TestPacer_Backpressure_DownlinkQueueFull 验证下行队列积压满时触发背压错误并安全关闭连接。
-func TestPacer_Backpressure_DownlinkQueueFull(t *testing.T) {
+// TestPacer_Backpressure_QueueBlocking 验证下行队列积压满时正确进行背压阻塞，并在消费腾出槽位后成功写入。
+func TestPacer_Backpressure_QueueBlocking(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -601,7 +601,7 @@ func TestPacer_Backpressure_DownlinkQueueFull(t *testing.T) {
 
 	pkt := []byte{0xF8, 0xFF, 0xFE}
 
-	// 写入前 2 包成功
+	// 写入前 2 包成功（填满容量 2 的队列）
 	if err := pacer.Enqueue(pkt); err != nil {
 		t.Fatalf("enqueue 1 failed: %v", err)
 	}
@@ -609,10 +609,71 @@ func TestPacer_Backpressure_DownlinkQueueFull(t *testing.T) {
 		t.Fatalf("enqueue 2 failed: %v", err)
 	}
 
-	// 第 3 包应触发满载背压拒绝
-	err := pacer.Enqueue(pkt)
-	if !errors.Is(err, ErrDownlinkQueueFull) {
-		t.Fatalf("expected ErrDownlinkQueueFull on full queue, got: %v", err)
+	// 在后台协程尝试写入第 3 包，预期会因为背压而阻塞
+	enqueueDone := make(chan error, 1)
+	go func() {
+		enqueueDone <- pacer.Enqueue(pkt)
+	}()
+
+	select {
+	case err := <-enqueueDone:
+		t.Fatalf("expected enqueue to block on full queue, but finished with: %v", err)
+	case <-time.After(50 * time.Millisecond):
+		// 正常阻塞
+	}
+
+	// 从队列中消费 1 包，腾出空间
+	select {
+	case <-pacer.packetQueue:
+	case <-time.After(time.Second):
+		t.Fatal("failed to read from packetQueue")
+	}
+
+	// 此时第 3 包应解除阻塞并成功写入
+	select {
+	case err := <-enqueueDone:
+		if err != nil {
+			t.Fatalf("expected enqueue to succeed after drain, got: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected enqueue to unblock after queue drain")
+	}
+}
+
+// TestPacer_Backpressure_ContextCancellation 验证在背压阻塞等待期间若 Context 取消能及时退出。
+func TestPacer_Backpressure_ContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	pacer := NewDownlinkPacer(ctx, nil, 1, 1, nil) // 容量为 1
+	defer pacer.Stop()
+
+	pkt := []byte{0xF8, 0xFF, 0xFE}
+
+	if err := pacer.Enqueue(pkt); err != nil {
+		t.Fatalf("enqueue 1 failed: %v", err)
+	}
+
+	enqueueDone := make(chan error, 1)
+	go func() {
+		enqueueDone <- pacer.Enqueue(pkt)
+	}()
+
+	select {
+	case err := <-enqueueDone:
+		t.Fatalf("expected enqueue to block, got: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// 取消 context
+	cancel()
+
+	select {
+	case err := <-enqueueDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected enqueue to unblock on context cancellation")
 	}
 }
 
@@ -751,4 +812,76 @@ func TestPacer_ConcurrentRaceSafety(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+// TestPacer_LongAnswer_BackpressureEndToEnd 验证长回答（包数量远超下行队列容量）在背压下能够无丢包完整下发并正常回到 READY。
+func TestPacer_LongAnswer_BackpressureEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mt := newManualTicker()
+	wsConn := newRecordingWSConn()
+
+	const totalFrames = 120
+	frames := make([][]byte, totalFrames)
+	for i := 0; i < totalFrames; i++ {
+		frames[i] = generate24kSinePCMForSession(440.0, 15000.0)
+	}
+
+	mockStream := newMockLLMStream([]string{"这是一段超长的回复内容。"}, nil)
+	llmClient := newMockLLMClient(mockStream, nil)
+	mockTTS := &mockTTSStream{
+		pcmDataToReturn: frames,
+	}
+	ttsClient := newMockTTSClient(mockTTS, nil)
+
+	sess, writer := createTestSessionWithManualTicker(ctx, mt, wsConn, llmClient, ttsClient)
+	defer writer.Close()
+
+	go func() { _ = sess.Run() }()
+
+	initSessionToListening(t, sess)
+	sess.PostASRFinal(1, "讲个长故事")
+
+	// 等待进入 SPEAKING 状态
+	waitState(t, sess, StateSpeaking, 2*time.Second)
+
+	// 持续推动 manualTicker 消费所有音频包
+	go func() {
+		for i := 0; i < totalFrames+20; i++ {
+			mt.Tick()
+			time.Sleep(1 * time.Millisecond)
+		}
+	}()
+
+	// 验证最终正常回到 READY 状态，没有发生断连
+	waitState(t, sess, StateReady, 5*time.Second)
+
+	msgs := wsConn.Messages()
+	var binaryCount int
+	var hasStart, hasStop bool
+	for _, m := range msgs {
+		if m.typ == websocket.MessageBinary {
+			binaryCount++
+		}
+		var ttsMsg ServerTTSStartMessage
+		if err := json.Unmarshal(m.payload, &ttsMsg); err == nil && ttsMsg.Type == MessageTypeTTS {
+			if ttsMsg.State == TTSStateStart {
+				hasStart = true
+			}
+			if ttsMsg.State == TTSStateStop {
+				hasStop = true
+			}
+		}
+	}
+
+	if !hasStart {
+		t.Errorf("expected tts.start message")
+	}
+	if !hasStop {
+		t.Errorf("expected tts.stop message")
+	}
+	if binaryCount != totalFrames {
+		t.Fatalf("expected all %d binary frames to be sent, got %d", totalFrames, binaryCount)
+	}
 }
