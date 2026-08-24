@@ -5,13 +5,32 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 
+	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
+// OTAHandler 处理设备 OTA 配置发现及版本检查。
+type OTAHandler struct {
+	cfg    *config.Config
+	logger *slog.Logger
+}
+
+// NewOTAHandler 创建 OTA 处理器实例。
+func NewOTAHandler(cfg *config.Config, l *slog.Logger) *OTAHandler {
+	if l == nil {
+		l = slog.Default()
+	}
+	return &OTAHandler{
+		cfg:    cfg,
+		logger: l,
+	}
+}
+
 // handleOTA 处理设备 OTA 配置检查/版本发现入口，根据请求头中的 Serial-Number 分流。
-func (h *Handler) handleOTA(w http.ResponseWriter, r *http.Request) {
+func (h *OTAHandler) handleOTA(w http.ResponseWriter, r *http.Request) {
 	headers, body, ok := h.readAndValidateOTARequest(w, r)
 	if !ok {
 		return
@@ -37,7 +56,7 @@ func (h *Handler) handleOTA(w http.ResponseWriter, r *http.Request) {
 }
 
 // readAndValidateOTARequest 执行请求头长度、正文大小及 JSON 格式的基础校验。
-func (h *Handler) readAndValidateOTARequest(w http.ResponseWriter, r *http.Request) (DeviceHeaders, []byte, bool) {
+func (h *OTAHandler) readAndValidateOTARequest(w http.ResponseWriter, r *http.Request) (DeviceHeaders, []byte, bool) {
 	// 1. 校验请求头长度限制
 	maxHeaderBytes := MaxSingleHeaderBytes
 	maxTotalHeaderBytes := MaxTotalHeaderBytes

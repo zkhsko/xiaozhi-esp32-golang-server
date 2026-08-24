@@ -79,14 +79,17 @@ func main() {
 	}
 
 	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
-	wsHandler := session.NewHandler(cfg, sessionLimiter, asrClient, llmClient, ttsClient, slog.Default())
+	websocketSessionHandler := session.NewHandler(cfg, sessionLimiter, asrClient, llmClient, ttsClient, slog.Default())
 
-	routerHandler := router.NewHandler(cfg, wsHandler, slog.Default())
-	httpRouter := router.NewRouter(routerHandler)
+	otaHandler := router.NewOTAHandler(cfg, slog.Default())
+	httpRouter := router.NewRouter(router.Options{
+		OTA:              otaHandler,
+		WebsocketSession: websocketSessionHandler,
+	})
 
 	srv := server.New(cfg.Server, httpRouter)
 	srv.RegisterOnShutdown(func(shutdownCtx context.Context) error {
-		return wsHandler.Shutdown(shutdownCtx)
+		return websocketSessionHandler.Shutdown(shutdownCtx)
 	})
 
 	slog.Info("starting HTTP server", "addr", srv.Addr())

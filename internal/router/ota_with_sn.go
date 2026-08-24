@@ -10,7 +10,7 @@ import (
 // 2. 根据 SerialNumber 查询 device_hmac_credential 凭证记录并校验状态（不可用/未激活时下发 challenge 挑战字符串）；
 // 3. 按权威 SN 加锁查询 device_activation 绑定记录，校验 device_id / client_id 绑定关系；
 // 4. 已激活设备返回 WebSocket 连接配置及固件升级信息。
-func (h *Handler) handleOTASerialNumber(w http.ResponseWriter, r *http.Request, headers DeviceHeaders, body []byte) {
+func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Request, headers DeviceHeaders, body []byte) {
 	// 框架占位：当前默认返回可用 WebSocket 配置及服务器时间
 	var wsURL, token string
 	if h.cfg != nil {

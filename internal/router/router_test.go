@@ -245,8 +245,10 @@ func TestRouter_OTATableDriven(t *testing.T) {
 			var logBuf bytes.Buffer
 			testLogger := logger.New(&logBuf, slog.LevelDebug)
 
-			h := NewHandler(cfg, nil, testLogger)
-			r := NewRouter(h)
+			otaHandler := NewOTAHandler(cfg, testLogger)
+			r := NewRouter(Options{
+				OTA: otaHandler,
+			})
 			r.ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantStatusCode {
@@ -354,8 +356,10 @@ func TestRouter_PayloadTooLarge(t *testing.T) {
 	var logBuf bytes.Buffer
 	testLogger := logger.New(&logBuf, slog.LevelDebug)
 
-	h := NewHandler(cfg, nil, testLogger)
-	r := NewRouter(h)
+	otaHandler := NewOTAHandler(cfg, testLogger)
+	r := NewRouter(Options{
+		OTA: otaHandler,
+	})
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
@@ -387,8 +391,10 @@ func TestRouter_TotalHeadersTooLarge(t *testing.T) {
 	var logBuf bytes.Buffer
 	testLogger := logger.New(&logBuf, slog.LevelDebug)
 
-	h := NewHandler(cfg, nil, testLogger)
-	r := NewRouter(h)
+	otaHandler := NewOTAHandler(cfg, testLogger)
+	r := NewRouter(Options{
+		OTA: otaHandler,
+	})
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -403,10 +409,11 @@ func TestRouter_TotalHeadersTooLarge(t *testing.T) {
 func TestRouter_SessionEndpointRouting(t *testing.T) {
 	cfg := newTestConfig("test-token", "ws://localhost:8080/xiaozhi/v1/")
 	sessionLimiter := session.NewSessionLimiter(10)
-	sessionHandler := session.NewHandler(cfg, sessionLimiter, nil, nil, nil, slog.Default())
+	websocketSessionHandler := session.NewHandler(cfg, sessionLimiter, nil, nil, nil, slog.Default())
 
-	h := NewHandler(cfg, sessionHandler, nil)
-	r := NewRouter(h)
+	r := NewRouter(Options{
+		WebsocketSession: websocketSessionHandler,
+	})
 
 	// 非 GET 方法请求 /xiaozhi/v1/ 应返回 405
 	reqPost := httptest.NewRequest(http.MethodPost, "/xiaozhi/v1/", nil)
@@ -416,13 +423,12 @@ func TestRouter_SessionEndpointRouting(t *testing.T) {
 		t.Errorf("expected 405 for POST on /xiaozhi/v1/, got %d", recPost.Code)
 	}
 
-	// 未配置 sessionHandler 时的安全性测试
-	hNil := NewHandler(cfg, nil, nil)
-	rNil := NewRouter(hNil)
-	reqGet := httptest.NewRequest(http.MethodGet, "/xiaozhi/v1/", nil)
-	recGet := httptest.NewRecorder()
-	rNil.ServeHTTP(recGet, reqGet)
-	if recGet.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500 when sessionHandler is nil, got %d", recGet.Code)
+	// 未配置 WebsocketSession 模块时的路由未挂载测试 (404)
+	rUnmounted := NewRouter(Options{})
+	reqUnmounted := httptest.NewRequest(http.MethodGet, "/xiaozhi/v1/", nil)
+	recUnmounted := httptest.NewRecorder()
+	rUnmounted.ServeHTTP(recUnmounted, reqUnmounted)
+	if recUnmounted.Code != http.StatusNotFound {
+		t.Errorf("expected 404 when session handler is nil in Options, got %d", recUnmounted.Code)
 	}
 }
