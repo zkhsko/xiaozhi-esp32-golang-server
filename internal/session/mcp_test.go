@@ -707,3 +707,154 @@ func TestMCP_IsMCPToolAllowedAndDirectCallValidation(t *testing.T) {
 		t.Errorf("expected ErrMCPToolNotFound, got %v", err)
 	}
 }
+
+// TestMCP_MultiStepToolCallVolumeControl 验证完整的多步 Agent Loop（先查设备状态后调音量再生成最终回答）。
+func TestMCP_MultiStepToolCallVolumeControl(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn := newHistoryWSConn()
+	writer := NewWriter(ctx, conn, 100, slog.Default())
+
+	tools := []ai.Tool{
+		{
+			Name:        "self.get_device_status",
+			Description: "Get device status",
+			Parameters:  map[string]any{"type": "object"},
+		},
+		{
+			Name:        "self.audio_speaker.set_volume",
+			Description: "Set volume",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}
+
+	// 模拟 3 步流：
+	// 1. 调用 self.get_device_status
+	stream1 := newMockMCPLLMStream(nil, []ai.ToolCall{
+		{
+			ID:        "call_status_1",
+			Name:      "self.get_device_status",
+			Arguments: `{}`,
+		},
+	})
+	// 2. 根据状态 (volume=60) 调用 self.audio_speaker.set_volume(70)
+	stream2 := newMockMCPLLMStream(nil, []ai.ToolCall{
+		{
+			ID:        "call_vol_1",
+			Name:      "self.audio_speaker.set_volume",
+			Arguments: `{"volume":70}`,
+		},
+	})
+	// 3. 最终回复
+	stream3 := newMockMCPLLMStream([]string{"音量已从60调大到70。"}, nil)
+
+	llmClient := &mockMCPLLMClient{
+		streams: []ai.LLMStream{stream1, stream2, stream3},
+	}
+
+	ttsClient := newMockTTSStream(nil)
+	ttsClientWrapper := newMockTTSClient(ttsClient, nil)
+
+	sess := NewSession(ctx, Options{
+		Writer:    writer,
+		LLMClient: llmClient,
+		TTSClient: ttsClientWrapper,
+		Logger:    slog.Default(),
+	})
+	defer sess.Close()
+	go func() { _ = sess.Run() }()
+
+	sess.mu.Lock()
+	sess.sessionID = "test-multistep-session"
+	sess.mcpTools = tools
+	sess.mu.Unlock()
+
+	// 模拟设备响应多步 MCP 调用
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			rawMsgs := conn.TextMessages()
+			for _, m := range rawMsgs {
+				var req struct {
+					Type    string `json:"type"`
+					Payload struct {
+						JSONRPC string         `json:"jsonrpc"`
+						ID      int64          `json:"id"`
+						Method  string         `json:"method"`
+						Params  map[string]any `json:"params"`
+					} `json:"payload"`
+				}
+				if err := json.Unmarshal(m, &req); err == nil && req.Type == MessageTypeMCP && req.Payload.Method == "tools/call" {
+					toolName, _ := req.Payload.Params["name"].(string)
+					var resp string
+					if toolName == "self.get_device_status" {
+						resp = fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"{\"audio_speaker\":{\"volume\":60}}"}],"isError":false}}`, req.Payload.ID)
+					} else if toolName == "self.audio_speaker.set_volume" {
+						resp = fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"true"}],"isError":false}}`, req.Payload.ID)
+					}
+					if resp != "" {
+						sess.PostClientText(&ClientMessage{
+							Kind:       KindMCP,
+							MCPPayload: json.RawMessage(resp),
+						})
+					}
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	sess.orchestrateLLMAndTTS(ctx, 1, "调大一点音量")
+
+	// 验证 LLM 一共被调用了 3 次
+	if len(llmClient.lastMessages) != 3 {
+		t.Fatalf("expected 3 LLM calls for multi-step loop, got %d", len(llmClient.lastMessages))
+	}
+
+	// 验证前两次调用均携带了 tools
+	if len(llmClient.lastTools[0]) != 2 || len(llmClient.lastTools[1]) != 2 {
+		t.Errorf("expected tools present in first and second calls, got %+v and %+v", llmClient.lastTools[0], llmClient.lastTools[1])
+	}
+
+	// 验证第三次 LLM 调用包含两次 Tool 的请求与响应
+	thirdMsgs := llmClient.lastMessages[2]
+	var foundStatusCall, foundStatusResp, foundVolCall, foundVolResp bool
+	for _, m := range thirdMsgs {
+		if m.Role == ai.RoleAssistant && len(m.ToolCalls) > 0 {
+			for _, tc := range m.ToolCalls {
+				if tc.Name == "self.get_device_status" {
+					foundStatusCall = true
+				}
+				if tc.Name == "self.audio_speaker.set_volume" {
+					foundVolCall = true
+				}
+			}
+		}
+		if m.Role == ai.RoleTool {
+			if m.ToolCallID == "call_status_1" && strings.Contains(m.Content, "volume") {
+				foundStatusResp = true
+			}
+			if m.ToolCallID == "call_vol_1" && m.Content == "true" {
+				foundVolResp = true
+			}
+		}
+	}
+
+	if !foundStatusCall || !foundStatusResp {
+		t.Errorf("third LLM call missing status tool call or response")
+	}
+	if !foundVolCall || !foundVolResp {
+		t.Errorf("third LLM call missing volume tool call or response")
+	}
+
+	// 验证最终 TTS 下发了确认回答
+	if len(ttsClient.sentSentences) == 0 {
+		t.Fatalf("expected TTS sentences from final round, got none")
+	}
+}

@@ -176,31 +176,9 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	// 启动后台协程消费 TTS PCM 数据并送入 24 kHz Opus 分帧编码器与节奏调度器
 	go s.consumeTTSPCM(ctx, gen, ttsStream, pacer, pcmDone)
 
-	// 3. 构造上下文消息并创建 LLM 流式输出会话
+	// 3. 构造上下文消息并启动多轮工具调用与流式回复循环 (Agent Loop)
 	messages := s.buildLLMMessages(userText)
 	tools := s.getMCPTools()
-	llmStream, err := s.llmClient.CreateStream(ctx, messages, tools)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-			return
-		}
-		s.logger.Warn("failed to create llm stream",
-			"error", err,
-			"session_id", s.SessionID(),
-			"generation", gen,
-		)
-		s.postEvent(event{
-			kind:       eventKindError,
-			generation: gen,
-			err:        err,
-			fatal:      true,
-		})
-		return
-	}
-	defer func() {
-		_ = llmStream.Close()
-	}()
-
 	splitter := NewSentenceSplitter()
 	var assistantText strings.Builder
 	sessionID := s.SessionID()
@@ -230,128 +208,27 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		return nil
 	}
 
-	// 3. 消费 LLM 流文本增量并通过分句器切分为完整句子
-	for {
-		chunk, err := llmStream.Recv()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-				return
-			}
-			s.logger.Warn("llm stream read failed",
-				"error", err,
-				"session_id", sessionID,
-				"generation", gen,
-			)
-			s.postEvent(event{
-				kind:       eventKindError,
-				generation: gen,
-				err:        err,
-				fatal:      true,
-			})
-			return
-		}
-
+	for iter := 0; iter < DefaultMaxToolCallIterations; iter++ {
 		if ctx.Err() != nil || s.Generation() > gen {
 			return
 		}
 
-		if chunk == "" {
-			continue
+		// 最后一轮迭代若仍未结束，强制禁用工具以生成最终自然语言回复
+		currentTools := tools
+		if iter == DefaultMaxToolCallIterations-1 {
+			currentTools = nil
 		}
 
-		assistantText.WriteString(chunk)
-		sentences := splitter.Feed(chunk)
-		for _, sentence := range sentences {
-			if err := sendSentence(sentence); err != nil {
-				if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-					return
-				}
-				s.logger.Warn("failed to deliver sentence to tts",
-					"error", err,
-					"session_id", sessionID,
-					"generation", gen,
-				)
-				s.postEvent(event{
-					kind:       eventKindError,
-					generation: gen,
-					err:        err,
-					fatal:      true,
-				})
-				return
-			}
-		}
-	}
-
-	if ctx.Err() != nil || s.Generation() > gen {
-		return
-	}
-
-	// 检查是否有大模型工具调用 (MCP Tool Calls)
-	toolCalls := llmStream.ToolCalls()
-	if len(toolCalls) > 0 {
-		s.logger.Info("llm returned tool calls",
-			"session_id", sessionID,
-			"generation", gen,
-			"tool_count", len(toolCalls),
-		)
-
-		// 将助手的 ToolCalls 追加至上下文
-		messages = append(messages, ai.Message{
-			Role:      ai.RoleAssistant,
-			Content:   assistantText.String(),
-			ToolCalls: toolCalls,
-		})
-
-		// 逐一校验并执行 MCP Tool，将结果注入上下文
-		for _, tc := range toolCalls {
-			if ctx.Err() != nil || s.Generation() > gen {
-				return
-			}
-			var resultText string
-			if !s.isMCPToolAllowed(tc.Name) {
-				s.logger.Warn("mcp tool call rejected: tool not authorized in session",
-					"tool_name", tc.Name,
-					"session_id", sessionID,
-					"generation", gen,
-				)
-				resultText = fmt.Sprintf("Error: tool %q is not authorized in current session", tc.Name)
-			} else {
-				var err error
-				resultText, err = s.callMCPTool(ctx, tc.Name, tc.Arguments)
-				if err != nil {
-					s.logger.Warn("mcp tool call failed during turn",
-						"tool_name", tc.Name,
-						"error", err,
-						"session_id", sessionID,
-						"generation", gen,
-					)
-					resultText = fmt.Sprintf("Error: %v", err)
-				}
-			}
-			messages = append(messages, ai.Message{
-				Role:       ai.RoleTool,
-				Content:    resultText,
-				ToolCallID: tc.ID,
-			})
-		}
-
-		if ctx.Err() != nil || s.Generation() > gen {
-			return
-		}
-
-		// 携带工具执行结果再次调用 LLM 生成对用户的最终回答
-		llmStream2, err := s.llmClient.CreateStream(ctx, messages, nil)
+		llmStream, err := s.llmClient.CreateStream(ctx, messages, currentTools)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return
 			}
-			s.logger.Warn("failed to create second llm stream after tool call",
+			s.logger.Warn("failed to create llm stream",
 				"error", err,
 				"session_id", sessionID,
 				"generation", gen,
+				"iteration", iter,
 			)
 			s.postEvent(event{
 				kind:       eventKindError,
@@ -361,66 +238,121 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 			})
 			return
 		}
-		defer func() {
-			_ = llmStream2.Close()
+
+		var iterText strings.Builder
+		streamErr := func() error {
+			defer func() { _ = llmStream.Close() }()
+			for {
+				chunk, err := llmStream.Recv()
+				if err != nil {
+					if errors.Is(err, io.EOF) {
+						return nil
+					}
+					if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
+						return err
+					}
+					return err
+				}
+
+				if ctx.Err() != nil || s.Generation() > gen {
+					return ctx.Err()
+				}
+
+				if chunk == "" {
+					continue
+				}
+
+				iterText.WriteString(chunk)
+				sentences := splitter.Feed(chunk)
+				for _, sentence := range sentences {
+					if err := sendSentence(sentence); err != nil {
+						return err
+					}
+				}
+			}
 		}()
 
-		// 重置当前回答文本以接收最终自然语言回复
-		assistantText.Reset()
+		if streamErr != nil {
+			if errors.Is(streamErr, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
+				return
+			}
+			s.logger.Warn("llm stream read failed",
+				"error", streamErr,
+				"session_id", sessionID,
+				"generation", gen,
+				"iteration", iter,
+			)
+			s.postEvent(event{
+				kind:       eventKindError,
+				generation: gen,
+				err:        streamErr,
+				fatal:      true,
+			})
+			return
+		}
 
-		for {
-			chunk, err := llmStream2.Recv()
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					break
-				}
-				if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
+		if ctx.Err() != nil || s.Generation() > gen {
+			return
+		}
+
+		toolCalls := llmStream.ToolCalls()
+		if len(toolCalls) > 0 {
+			s.logger.Info("llm returned tool calls",
+				"session_id", sessionID,
+				"generation", gen,
+				"iteration", iter,
+				"tool_count", len(toolCalls),
+			)
+
+			// 将助手的 ToolCalls 追加至上下文
+			messages = append(messages, ai.Message{
+				Role:      ai.RoleAssistant,
+				Content:   iterText.String(),
+				ToolCalls: toolCalls,
+			})
+
+			// 逐一校验并执行 MCP Tool，将结果注入上下文
+			for _, tc := range toolCalls {
+				if ctx.Err() != nil || s.Generation() > gen {
 					return
 				}
-				s.logger.Warn("second llm stream read failed",
-					"error", err,
-					"session_id", sessionID,
-					"generation", gen,
-				)
-				s.postEvent(event{
-					kind:       eventKindError,
-					generation: gen,
-					err:        err,
-					fatal:      true,
-				})
-				return
-			}
-
-			if ctx.Err() != nil || s.Generation() > gen {
-				return
-			}
-
-			if chunk == "" {
-				continue
-			}
-
-			assistantText.WriteString(chunk)
-			sentences := splitter.Feed(chunk)
-			for _, sentence := range sentences {
-				if err := sendSentence(sentence); err != nil {
-					if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-						return
-					}
-					s.logger.Warn("failed to deliver sentence to tts",
-						"error", err,
+				var resultText string
+				if !s.isMCPToolAllowed(tc.Name) {
+					s.logger.Warn("mcp tool call rejected: tool not authorized in session",
+						"tool_name", tc.Name,
 						"session_id", sessionID,
 						"generation", gen,
 					)
-					s.postEvent(event{
-						kind:       eventKindError,
-						generation: gen,
-						err:        err,
-						fatal:      true,
-					})
-					return
+					resultText = fmt.Sprintf("Error: tool %q is not authorized in current session", tc.Name)
+				} else {
+					var err error
+					resultText, err = s.callMCPTool(ctx, tc.Name, tc.Arguments)
+					if err != nil {
+						s.logger.Warn("mcp tool call failed during turn",
+							"tool_name", tc.Name,
+							"error", err,
+							"session_id", sessionID,
+							"generation", gen,
+						)
+						resultText = fmt.Sprintf("Error: %v", err)
+					}
 				}
+				messages = append(messages, ai.Message{
+					Role:       ai.RoleTool,
+					Content:    resultText,
+					ToolCallID: tc.ID,
+				})
 			}
+
+			// 重置 splitter 和 assistantText，准备接收后续迭代文本
+			splitter = NewSentenceSplitter()
+			assistantText.Reset()
+			continue
 		}
+
+		// 没有 toolCalls，说明当前轮次为最终回复
+		assistantText.WriteString(iterText.String())
+		break
 	}
 
 	if ctx.Err() != nil || s.Generation() > gen {

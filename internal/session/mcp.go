@@ -18,6 +18,9 @@ const (
 
 	// DefaultMCPMaxListPages 防止死循环拉取 tools/list 的最大分页数限制。
 	DefaultMCPMaxListPages = 10
+
+	// DefaultMaxToolCallIterations 单轮对话中大模型最多连续调用工具的迭代次数。
+	DefaultMaxToolCallIterations = 5
 )
 
 // 哨兵错误。
