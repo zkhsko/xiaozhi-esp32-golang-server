@@ -208,18 +208,12 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		return nil
 	}
 
-	for iter := 0; iter < DefaultMaxToolCallIterations; iter++ {
+	for iter := 0; ; iter++ {
 		if ctx.Err() != nil || s.Generation() > gen {
 			return
 		}
 
-		// 最后一轮迭代若仍未结束，强制禁用工具以生成最终自然语言回复
-		currentTools := tools
-		if iter == DefaultMaxToolCallIterations-1 {
-			currentTools = nil
-		}
-
-		llmStream, err := s.llmClient.CreateStream(ctx, messages, currentTools)
+		llmStream, err := s.llmClient.CreateStream(ctx, messages, tools)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return
