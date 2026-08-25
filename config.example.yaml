@@ -19,6 +19,7 @@ session:
   downlink_opus_queue_capacity: 100
   max_history_turns: 6
   system_prompt: "你是小智，一个智能语音助手。请用简明、友好的中文回答，回答适合直接语音朗读。"
+  listen_prompt_enabled: true
 
 ai:
   bailian:

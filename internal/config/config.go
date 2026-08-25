@@ -113,6 +113,7 @@ type SessionConfig struct {
 	DownlinkOpusQueueCapacity int           `yaml:"downlink_opus_queue_capacity"`
 	MaxHistoryTurns           int           `yaml:"max_history_turns"`
 	SystemPrompt              string        `yaml:"system_prompt"`
+	ListenPromptEnabled       bool          `yaml:"listen_prompt_enabled"`
 }
 
 // BailianConfig 定义阿里云百炼 ASR、LLM 与 TTS 模型及超时配置。

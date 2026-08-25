@@ -10,6 +10,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/audio"
+	"xiaozhi-esp32-golang-server/internal/config"
 )
 
 // waitForStream 等待 mock ASR Client 创建出最新的流。
@@ -572,5 +576,241 @@ func TestAutoMode_ConcurrentAudioAndASRFinal_Race(t *testing.T) {
 
 	if sess.State() != StateProcessing {
 		t.Errorf("expected final state to be PROCESSING, got %v", sess.State())
+	}
+}
+
+// createTestSessionWithPrompt 创建支持提示音开关的测试会话。
+func createTestSessionWithPrompt(ctx context.Context, asrClient ai.ASRClient, promptEnabled bool) (*Session, *fakeWSConn, *Writer) {
+	fakeConn := &fakeWSConn{}
+	writer := NewWriter(ctx, fakeConn, 100, nil)
+	cfg := &config.Config{
+		Session: config.SessionConfig{
+			HelloTimeout:        5 * time.Second,
+			MaxOpusPacketBytes:  1024,
+			ListenPromptEnabled: promptEnabled,
+		},
+	}
+	info := &ClientHeaderInfo{
+		DeviceID:     "test-device",
+		ClientID:     "test-client",
+		SerialNumber: "test-sn",
+	}
+	fastTickerFactory := func(d time.Duration) Ticker {
+		return &realTicker{ticker: time.NewTicker(1 * time.Millisecond)}
+	}
+	sess := NewSession(ctx, Options{
+		Writer:        writer,
+		ClientInfo:    info,
+		Config:        cfg,
+		ASRClient:     asrClient,
+		TickerFactory: fastTickerFactory,
+	})
+	return sess, fakeConn, writer
+}
+
+// TestAutoMode_PromptSound_FirstListenStartFlow 验证首次 auto 模式 listen.start 下发独立提示音并在设备二次请求后进入 LISTENING。
+func TestAutoMode_PromptSound_FirstListenStartFlow(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	asrClient := newMockSessionASRClient()
+	sess, fakeConn, _ := createTestSessionWithPrompt(ctx, asrClient, true)
+	go func() { _ = sess.Run() }()
+	defer sess.Close()
+
+	// 握手 -> READY
+	validHello := []byte(`{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`)
+	sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHello})
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	// 1. 发送首条 listen.start(mode=auto) -> 进入 SPEAKING 播放独立提示音
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
+	waitState(t, sess, StateSpeaking, 2*time.Second)
+
+	// 提示音快速播放完毕后，自动迁移回 READY
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	// 断言在提示音期间未创建 ASR 流
+	if asrClient.StreamCount() != 0 {
+		t.Fatalf("expected 0 ASR stream created during prompt, got %d", asrClient.StreamCount())
+	}
+
+	// 验证下发的消息：首条 hello, 第二条 tts.start, 接着 N 个二进制包, 随后 tts.stop
+	msgs := fakeConn.Messages()
+	var textMsgs []string
+	var binaryCount int
+	for _, m := range msgs {
+		if m.typ == websocket.MessageBinary {
+			binaryCount++
+		} else {
+			textMsgs = append(textMsgs, string(m.payload))
+		}
+	}
+
+	expectedPromptFrames, _ := audio.GetListenPromptFrameCount()
+	if binaryCount != expectedPromptFrames || binaryCount == 0 {
+		t.Errorf("expected %d prompt opus packets, got %d", expectedPromptFrames, binaryCount)
+	}
+
+	// 验证包含 tts.start 和 tts.stop
+	var hasTTSStart, hasTTSStop bool
+	for _, txt := range textMsgs {
+		var base struct {
+			Type  string `json:"type"`
+			State string `json:"state"`
+		}
+		if err := json.Unmarshal([]byte(txt), &base); err == nil && base.Type == "tts" {
+			if base.State == "start" {
+				hasTTSStart = true
+			} else if base.State == "stop" {
+				hasTTSStop = true
+			}
+		}
+	}
+	if !hasTTSStart || !hasTTSStop {
+		t.Errorf("expected both tts.start and tts.stop, got start=%v, stop=%v", hasTTSStart, hasTTSStop)
+	}
+
+	// 2. 模拟设备播放完提示音后发送第二条 listen.start(mode=auto) -> 直接进入 LISTENING
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
+	waitState(t, sess, StateListening, 2*time.Second)
+
+	// 此时正式创建了 1 个 ASR 流
+	stream := waitForStream(t, asrClient, 2*time.Second)
+	if stream == nil {
+		t.Fatal("expected ASR stream to be created after second listen.start")
+	}
+
+	// 发送正常麦克风语音 -> ASR 返回结果 -> 进入 PROCESSING
+	packet := encodeSineOpusPacket(t, 440.0)
+	sess.PostClientAudio(packet)
+	stream.SetResult("你好小智", nil)
+	waitState(t, sess, StateProcessing, 2*time.Second)
+}
+
+// TestAutoMode_PromptSound_DiscardUplinkAudioDuringPrompt 验证在提示音播放期间上行音频被安全丢弃。
+func TestAutoMode_PromptSound_DiscardUplinkAudioDuringPrompt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	asrClient := newMockSessionASRClient()
+	sess, _, _ := createTestSessionWithPrompt(ctx, asrClient, true)
+	go func() { _ = sess.Run() }()
+	defer sess.Close()
+
+	// 握手 -> READY
+	validHello := []byte(`{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`)
+	sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHello})
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
+	waitState(t, sess, StateSpeaking, 2*time.Second)
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	// 在 READY 状态下发送上行残留音频包
+	for i := 0; i < 5; i++ {
+		packet := encodeSineOpusPacket(t, 440.0)
+		sess.PostClientAudio(packet)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	// 会话未崩溃且保持 READY 状态
+	if sess.State() != StateReady {
+		t.Fatalf("expected state to remain READY, got %v", sess.State())
+	}
+	if asrClient.StreamCount() != 0 {
+		t.Fatalf("expected 0 ASR streams, got %d", asrClient.StreamCount())
+	}
+}
+
+// TestAutoMode_PromptSound_AppendToTurnTail 验证问答结束时尾部追加提示音，并在下一轮无缝进入 LISTENING。
+func TestAutoMode_PromptSound_AppendToTurnTail(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	asrClient := newMockSessionASRClient()
+	sess, fakeConn, _ := createTestSessionWithPrompt(ctx, asrClient, true)
+	go func() { _ = sess.Run() }()
+	defer sess.Close()
+
+	// 握手 -> READY
+	validHello := []byte(`{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`)
+	sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHello})
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	// 首次 listen.start(auto) -> 提示音 -> READY -> 第二次 listen.start(auto) -> LISTENING
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
+	waitState(t, sess, StateSpeaking, 2*time.Second)
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
+	waitState(t, sess, StateListening, 2*time.Second)
+
+	gen := sess.Generation()
+	// ASR 识别结果 -> PROCESSING
+	sess.PostASRFinal(gen, "测试问题")
+	waitState(t, sess, StateProcessing, 2*time.Second)
+
+	// 模拟播报开始 -> SPEAKING
+	sess.PostTTSStarted(gen)
+	waitState(t, sess, StateSpeaking, 2*time.Second)
+
+	sess.PostTurnFinished(gen, "用户问题", "助手回答")
+
+	// 轮次结束回到 READY
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	// 收到设备的下一轮 listen.start(auto) -> 直接进入 LISTENING，不再播放独立提示音
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
+	waitState(t, sess, StateListening, 2*time.Second)
+
+	_ = fakeConn
+}
+
+// TestAutoMode_PromptSound_AbortDuringPrompting 验证在播放提示音时收到 abort 能够安全复位到 READY。
+func TestAutoMode_PromptSound_AbortDuringPrompting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	asrClient := newMockSessionASRClient()
+	// 使用带阻塞的 ticker 控制 prompt 停留
+	manualTick := newManualTicker()
+	fakeConn := &fakeWSConn{}
+	writer := NewWriter(ctx, fakeConn, 100, nil)
+	cfg := &config.Config{
+		Session: config.SessionConfig{
+			HelloTimeout:        5 * time.Second,
+			MaxOpusPacketBytes:  1024,
+			ListenPromptEnabled: true,
+		},
+	}
+	sess := NewSession(ctx, Options{
+		Writer:     writer,
+		ClientInfo: &ClientHeaderInfo{DeviceID: "d", ClientID: "c", SerialNumber: "s"},
+		Config:     cfg,
+		ASRClient:  asrClient,
+		TickerFactory: func(d time.Duration) Ticker {
+			return manualTick
+		},
+	})
+	go func() { _ = sess.Run() }()
+	defer sess.Close()
+
+	// 握手 -> READY
+	validHello := []byte(`{"type":"hello","version":1,"transport":"websocket","audio_params":{"format":"opus","sample_rate":16000,"channels":1,"frame_duration":60}}`)
+	sess.postEvent(event{kind: eventKindClientHello, rawBytes: validHello})
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	// listen.start -> 进入 SPEAKING 播放提示音
+	sess.PostClientText(&ClientMessage{Kind: KindListenStart, Mode: ListenModeAuto})
+	waitState(t, sess, StateSpeaking, 2*time.Second)
+
+	// 中途 abort
+	sess.PostAbort("user_cancel")
+	waitState(t, sess, StateReady, 2*time.Second)
+
+	// 验证会话回到 READY 且代次递增
+	if sess.Generation() != 2 {
+		t.Errorf("expected generation 2 after abort, got %d", sess.Generation())
 	}
 }

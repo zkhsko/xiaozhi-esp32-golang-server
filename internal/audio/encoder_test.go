@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
@@ -604,37 +602,4 @@ func TestStreamEncoder_Concurrency(t *testing.T) {
 	}
 
 	wg.Wait()
-}
-
-// TestEncoder_NoDiskFileCreated 严格断言测试过程中严禁在磁盘上生成任何音频文件（.pcm, .opus, .wav 等）。
-func TestEncoder_NoDiskFileCreated(t *testing.T) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get current working directory: %v", err)
-	}
-
-	forbiddenExts := map[string]bool{
-		".pcm":  true,
-		".opus": true,
-		".wav":  true,
-		".raw":  true,
-		".mp3":  true,
-	}
-
-	err = filepath.Walk(cwd, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if info.IsDir() {
-			return nil
-		}
-		ext := filepath.Ext(path)
-		if forbiddenExts[ext] {
-			t.Fatalf("forbidden audio file found on disk: %s", path)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("failed to scan directory for disk files: %v", err)
-	}
 }

@@ -103,6 +103,7 @@ type Session struct {
 	generation         uint64
 	sessionID          string
 	manualStopReceived bool
+	promptPlayed       bool
 	history            []ai.Message
 
 	turnCtx    context.Context
@@ -650,22 +651,42 @@ func (s *Session) handleClientTextEvent(ev event) {
 			if mode == "" {
 				mode = ListenModeAuto
 			}
-			s.mu.Lock()
-			s.state = StateListening
-			s.mode = mode
-			s.manualStopReceived = false
-			s.generation++
-			gen := s.generation
-			s.turnCtx, s.turnCancel = context.WithCancel(s.ctx)
-			s.mu.Unlock()
+			if mode == ListenModeAuto && s.cfg != nil && s.cfg.Session.ListenPromptEnabled && !s.promptPlayed {
+				s.mu.Lock()
+				s.promptPlayed = true
+				s.state = StateSpeaking
+				s.mode = mode
+				s.manualStopReceived = false
+				s.generation++
+				gen := s.generation
+				s.turnCtx, s.turnCancel = context.WithCancel(s.ctx)
+				s.mu.Unlock()
 
-			s.startListeningTimer(gen)
-			s.startASRStream(gen, mode)
-			s.logger.Info("session entered listening state",
-				"session_id", s.SessionID(),
-				"generation", gen,
-				"mode", mode,
-			)
+				s.playListenPrompt(gen)
+				s.logger.Info("session playing listen prompt",
+					"session_id", s.SessionID(),
+					"generation", gen,
+					"mode", mode,
+				)
+			} else {
+				s.mu.Lock()
+				s.promptPlayed = false
+				s.state = StateListening
+				s.mode = mode
+				s.manualStopReceived = false
+				s.generation++
+				gen := s.generation
+				s.turnCtx, s.turnCancel = context.WithCancel(s.ctx)
+				s.mu.Unlock()
+
+				s.startListeningTimer(gen)
+				s.startASRStream(gen, mode)
+				s.logger.Info("session entered listening state",
+					"session_id", s.SessionID(),
+					"generation", gen,
+					"mode", mode,
+				)
+			}
 
 		case StateListening:
 			s.logDiag("duplicate listen.start ignored in listening state",
@@ -986,6 +1007,9 @@ func (s *Session) handleTurnFinishedEvent(ev event) {
 		s.turnCancel()
 		s.turnCancel = nil
 	}
+	if s.mode == ListenModeAuto && s.cfg != nil && s.cfg.Session.ListenPromptEnabled {
+		s.promptPlayed = true
+	}
 	s.state = StateReady
 	s.mu.Unlock()
 
@@ -1009,6 +1033,7 @@ func (s *Session) handleAbortEvent(reason string) {
 		s.turnCancel()
 		s.turnCancel = nil
 	}
+	s.promptPlayed = false
 	wasSpeaking := (s.state == StateSpeaking)
 	s.state = StateReady
 	s.mu.Unlock()
@@ -1370,6 +1395,53 @@ func (s *Session) stopASRResultTimer() {
 		s.asrResultTimer.Stop()
 		s.asrResultTimer = nil
 	}
+}
+
+// playListenPrompt 启动独立提示音播放流程。
+func (s *Session) playListenPrompt(gen uint64) {
+	pkts, err := audio.GetListenPromptOpusPackets()
+	if err != nil {
+		s.logger.Error("failed to get listen prompt opus packets",
+			"error", err,
+			"session_id", s.SessionID(),
+			"generation", gen,
+		)
+		s.postEvent(event{
+			kind:       eventKindError,
+			generation: gen,
+			err:        err,
+			fatal:      true,
+		})
+		return
+	}
+
+	queueCap := DefaultWriteQueueCapacity
+	if s.cfg != nil && s.cfg.Session.DownlinkOpusQueueCapacity > 0 {
+		queueCap = s.cfg.Session.DownlinkOpusQueueCapacity
+	}
+
+	s.mu.RLock()
+	factory := s.tickerFactory
+	s.mu.RUnlock()
+
+	pacer := NewDownlinkPacer(s.TurnContext(), s, gen, queueCap, factory)
+	s.mu.Lock()
+	s.pacer = pacer
+	s.mu.Unlock()
+
+	go pacer.Run()
+
+	go func() {
+		for _, pkt := range pkts {
+			if s.Generation() > gen {
+				return
+			}
+			if err := pacer.Enqueue(pkt); err != nil {
+				return
+			}
+		}
+		pacer.FinishInput()
+	}()
 }
 
 // sendTextMessage 向写队列发送文本消息。

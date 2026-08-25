@@ -18,7 +18,7 @@ const (
 	// StateProcessing 收到 ASR 最终识别文本，已下发 STT，LLM 处理中。
 	StateProcessing
 
-	// StateSpeaking 已发送 tts.start，正在按句下发 TTS 音频。
+	// StateSpeaking 已发送 tts.start，正在按句下发 TTS 音频或独立提示音。
 	StateSpeaking
 
 	// StateClosed 连接已关闭或会话终止。

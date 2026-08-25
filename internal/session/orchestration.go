@@ -493,6 +493,41 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 				if ctx.Err() != nil || s.Generation() > gen {
 					return
 				}
+				// 若为 auto 模式且启用了提示音，在 TTS 语音末尾追加提示音 PCM，通过同一编码器连续编码
+				if s.Mode() == ListenModeAuto && s.cfg != nil && s.cfg.Session.ListenPromptEnabled {
+					promptPCM, pErr := audio.GetListenPromptPCM()
+					if pErr != nil {
+						consumeErr = pErr
+						s.logger.Warn("failed to get listen prompt pcm for turn tail",
+							"error", pErr,
+							"session_id", sessionID,
+							"generation", gen,
+						)
+					} else if len(promptPCM) > 0 {
+						promptPackets, pEncodeErr := streamEncoder.Feed(promptPCM)
+						if pEncodeErr != nil {
+							consumeErr = pEncodeErr
+							s.logger.Warn("failed to encode prompt pcm to opus",
+								"error", pEncodeErr,
+								"session_id", sessionID,
+								"generation", gen,
+							)
+						} else {
+							for _, pkt := range promptPackets {
+								if s.Generation() > gen {
+									return
+								}
+								s.handleEncodedOpusPacket(gen, pkt)
+								if pacer != nil {
+									if err := pacer.Enqueue(pkt); err != nil {
+										return
+									}
+								}
+							}
+						}
+					}
+				}
+
 				// TTS PCM 流正常结束，刷新尾帧（若有残余数据，补静音输出最后一帧 Opus；若无残余则不输出多余包）
 				packets, flushErr := streamEncoder.Flush()
 				if flushErr != nil {
