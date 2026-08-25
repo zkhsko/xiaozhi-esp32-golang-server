@@ -348,3 +348,68 @@ func (s *Session) getMCPTools() []ai.Tool {
 	copy(copied, s.mcpTools)
 	return copied
 }
+
+// DeviceControlInstruction 相关控制提示词模板常量。
+const (
+	// DeviceControlInstructionHeader 设备控制提示词引导头。
+	DeviceControlInstructionHeader = "当用户需要控制设备或查询设备状态时，请务必直接调用对应的工具（Tool Call），不要拒绝："
+
+	// DeviceControlInstructionFooter 设备控制提示词反馈指导尾。
+	DeviceControlInstructionFooter = "当用户表达控制意图时，必须立即调用对应的工具，执行完成后根据返回结果简要向用户反馈。"
+)
+
+// FormatDeviceToolsPrompt 将控制提示词和设备上报的工具列表（原样 JSON）整理为合理的提示词段落。
+func FormatDeviceToolsPrompt(tools []ai.Tool) string {
+	if len(tools) == 0 {
+		return ""
+	}
+
+	mcpToolsList := make([]MCPTool, 0, len(tools))
+	for _, t := range tools {
+		mcpToolsList = append(mcpToolsList, MCPTool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.Parameters,
+		})
+	}
+
+	toolsJSON, err := json.MarshalIndent(mcpToolsList, "", "  ")
+	if err != nil {
+		toolsJSON, _ = json.Marshal(mcpToolsList)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(DeviceControlInstructionHeader)
+	sb.WriteString("\n")
+	sb.Write(toolsJSON)
+	sb.WriteString("\n")
+	sb.WriteString(DeviceControlInstructionFooter)
+
+	return sb.String()
+}
+
+// buildSystemPromptLocked 在持有锁的前提下计算当前会话实际生效的系统提示词。
+// 若设备上报了工具列表，将控制提示词与工具列表整理为段落追加到基础系统提示词最后。
+func (s *Session) buildSystemPromptLocked() string {
+	var basePrompt string
+	if s.cfg != nil {
+		basePrompt = s.cfg.Session.SystemPrompt
+	}
+
+	if len(s.mcpTools) == 0 {
+		return basePrompt
+	}
+
+	toolsPrompt := FormatDeviceToolsPrompt(s.mcpTools)
+	if basePrompt == "" {
+		return toolsPrompt
+	}
+	return basePrompt + "\n\n" + toolsPrompt
+}
+
+// SystemPrompt 返回当前会话实际生效的完整系统提示词（含根据设备上报工具追加的控制指令）。
+func (s *Session) SystemPrompt() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.buildSystemPromptLocked()
+}

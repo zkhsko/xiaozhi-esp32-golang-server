@@ -16,17 +16,19 @@ func (s *Session) buildLLMMessages(userText string) []ai.Message {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	sysPrompt := s.buildSystemPromptLocked()
+
 	capacity := 1 + len(s.history)
-	if s.cfg != nil && s.cfg.Session.SystemPrompt != "" {
+	if sysPrompt != "" {
 		capacity++
 	}
 
 	messages := make([]ai.Message, 0, capacity)
 
-	if s.cfg != nil && s.cfg.Session.SystemPrompt != "" {
+	if sysPrompt != "" {
 		messages = append(messages, ai.Message{
 			Role:    ai.RoleSystem,
-			Content: s.cfg.Session.SystemPrompt,
+			Content: sysPrompt,
 		})
 	}
 

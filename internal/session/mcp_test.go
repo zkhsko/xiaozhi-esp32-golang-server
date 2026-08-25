@@ -858,3 +858,275 @@ func TestMCP_MultiStepToolCallVolumeControl(t *testing.T) {
 		t.Fatalf("expected TTS sentences from final round, got none")
 	}
 }
+
+// TestMCP_FormatDeviceToolsPrompt 验证格式化设备控制提示词与工具列表段落。
+func TestMCP_FormatDeviceToolsPrompt(t *testing.T) {
+	t.Run("empty tools", func(t *testing.T) {
+		res := FormatDeviceToolsPrompt(nil)
+		if res != "" {
+			t.Errorf("expected empty string for nil tools, got %q", res)
+		}
+		res2 := FormatDeviceToolsPrompt([]ai.Tool{})
+		if res2 != "" {
+			t.Errorf("expected empty string for empty slice, got %q", res2)
+		}
+	})
+
+	t.Run("raw json tools formatting", func(t *testing.T) {
+		tools := []ai.Tool{
+			{
+				Name:        "self.audio_speaker.set_volume",
+				Description: "设置音量",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"volume": map[string]any{
+							"type":    "integer",
+							"minimum": 0,
+							"maximum": 100,
+						},
+					},
+				},
+			},
+			{
+				Name:        "self.lamp.turn_on",
+				Description: "打开灯光",
+			},
+		}
+
+		res := FormatDeviceToolsPrompt(tools)
+
+		if !strings.HasPrefix(res, "当用户需要控制设备或查询设备状态时，请务必直接调用对应的工具（Tool Call），不要拒绝：") {
+			t.Errorf("missing header in:\n%s", res)
+		}
+		if !strings.HasSuffix(res, "当用户表达控制意图时，必须立即调用对应的工具，执行完成后根据返回结果简要向用户反馈。") {
+			t.Errorf("missing footer in:\n%s", res)
+		}
+		if !strings.Contains(res, `"name": "self.audio_speaker.set_volume"`) {
+			t.Errorf("missing tool name in json:\n%s", res)
+		}
+		if !strings.Contains(res, `"description": "设置音量"`) {
+			t.Errorf("missing tool description in json:\n%s", res)
+		}
+		if !strings.Contains(res, `"name": "self.lamp.turn_on"`) {
+			t.Errorf("missing second tool in json:\n%s", res)
+		}
+	})
+}
+
+// TestMCP_SystemPromptWithAndWithoutTools 验证 Session.SystemPrompt 与 buildLLMMessages 的组合表现。
+func TestMCP_SystemPromptWithAndWithoutTools(t *testing.T) {
+	t.Run("no base prompt and no tools", func(t *testing.T) {
+		sess := NewSession(context.Background(), Options{Logger: slog.Default()})
+		if p := sess.SystemPrompt(); p != "" {
+			t.Errorf("expected empty prompt, got %q", p)
+		}
+		msgs := sess.buildLLMMessages("你好")
+		if len(msgs) != 1 || msgs[0].Role != ai.RoleUser {
+			t.Errorf("expected only user message, got %+v", msgs)
+		}
+	})
+
+	t.Run("with base prompt and no tools", func(t *testing.T) {
+		cfg := &config.Config{
+			Session: config.SessionConfig{
+				SystemPrompt: "你是基础智能助手。",
+			},
+		}
+		sess := NewSession(context.Background(), Options{Config: cfg, Logger: slog.Default()})
+		if p := sess.SystemPrompt(); p != "你是基础智能助手。" {
+			t.Errorf("prompt mismatch: got %q", p)
+		}
+		msgs := sess.buildLLMMessages("你好")
+		if len(msgs) != 2 || msgs[0].Role != ai.RoleSystem || msgs[0].Content != "你是基础智能助手。" {
+			t.Errorf("messages mismatch: %+v", msgs)
+		}
+	})
+
+	t.Run("no base prompt with tools", func(t *testing.T) {
+		sess := NewSession(context.Background(), Options{Logger: slog.Default()})
+		sess.mu.Lock()
+		sess.mcpTools = []ai.Tool{
+			{Name: "self.screen.set_brightness", Description: "设置屏幕亮度"},
+		}
+		sess.mu.Unlock()
+
+		p := sess.SystemPrompt()
+		if !strings.HasPrefix(p, "当用户需要控制设备或查询设备状态时") {
+			t.Errorf("expected tools prompt as whole system prompt, got %q", p)
+		}
+		if !strings.Contains(p, `"name": "self.screen.set_brightness"`) {
+			t.Errorf("missing tool in prompt: %q", p)
+		}
+		msgs := sess.buildLLMMessages("你好")
+		if len(msgs) != 2 || msgs[0].Role != ai.RoleSystem || msgs[0].Content != p {
+			t.Errorf("messages mismatch: %+v", msgs)
+		}
+	})
+
+	t.Run("with base prompt and tools", func(t *testing.T) {
+		cfg := &config.Config{
+			Session: config.SessionConfig{
+				SystemPrompt: "你是基础智能助手。",
+			},
+		}
+		sess := NewSession(context.Background(), Options{Config: cfg, Logger: slog.Default()})
+		sess.mu.Lock()
+		sess.mcpTools = []ai.Tool{
+			{Name: "self.audio_speaker.set_volume", Description: "设置音量"},
+		}
+		sess.mu.Unlock()
+
+		p := sess.SystemPrompt()
+		expectedPrefix := "你是基础智能助手。\n\n当用户需要控制设备或查询设备状态时"
+		if !strings.HasPrefix(p, expectedPrefix) {
+			t.Errorf("expected prompt to start with %q, got %q", expectedPrefix, p)
+		}
+		if !strings.Contains(p, `"name": "self.audio_speaker.set_volume"`) {
+			t.Errorf("missing tool in prompt: %q", p)
+		}
+		msgs := sess.buildLLMMessages("调小音量")
+		if len(msgs) != 2 || msgs[0].Role != ai.RoleSystem || msgs[0].Content != p {
+			t.Errorf("messages mismatch: %+v", msgs)
+		}
+	})
+}
+
+// TestMCP_LLMSystemPromptInOrchestration 验证编排调度中发送给 LLM 的系统消息包含追加后的设备控制指令与工具列表。
+func TestMCP_LLMSystemPromptInOrchestration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn := newHistoryWSConn()
+	writer := NewWriter(ctx, conn, 100, slog.Default())
+
+	stream := newMockMCPLLMStream([]string{"已经为你打开灯光。"}, nil)
+	llmClient := &mockMCPLLMClient{
+		streams: []ai.LLMStream{stream},
+	}
+	ttsClient := newMockTTSStream(nil)
+	ttsClientWrapper := newMockTTSClient(ttsClient, nil)
+
+	cfg := &config.Config{
+		Session: config.SessionConfig{
+			SystemPrompt: "你是小智语音助手。",
+		},
+	}
+	sess := NewSession(ctx, Options{
+		Writer:    writer,
+		Config:    cfg,
+		LLMClient: llmClient,
+		TTSClient: ttsClientWrapper,
+		Logger:    slog.Default(),
+	})
+	defer sess.Close()
+	go func() { _ = sess.Run() }()
+
+	sess.mu.Lock()
+	sess.sessionID = "test-prompt-orchestration"
+	sess.mcpTools = []ai.Tool{
+		{Name: "self.lamp.turn_on", Description: "打开灯光"},
+	}
+	sess.mu.Unlock()
+
+	sess.orchestrateLLMAndTTS(ctx, 1, "开灯")
+
+	if len(llmClient.lastMessages) != 1 {
+		t.Fatalf("expected 1 LLM call, got %d", len(llmClient.lastMessages))
+	}
+
+	msgs := llmClient.lastMessages[0]
+	if len(msgs) < 2 || msgs[0].Role != ai.RoleSystem {
+		t.Fatalf("expected first message to be system, got %+v", msgs)
+	}
+
+	sysContent := msgs[0].Content
+	if !strings.Contains(sysContent, "你是小智语音助手。") {
+		t.Errorf("expected base prompt in system content, got %s", sysContent)
+	}
+	if !strings.Contains(sysContent, "当用户需要控制设备或查询设备状态时，请务必直接调用对应的工具（Tool Call），不要拒绝：") {
+		t.Errorf("expected control prompt in system content, got %s", sysContent)
+	}
+	if !strings.Contains(sysContent, `"name": "self.lamp.turn_on"`) {
+		t.Errorf("expected tool list in system content, got %s", sysContent)
+	}
+	if !strings.Contains(sysContent, "当用户表达控制意图时，必须立即调用对应的工具，执行完成后根据返回结果简要向用户反馈。") {
+		t.Errorf("expected control footer in system content, got %s", sysContent)
+	}
+}
+
+// TestMCP_HelloHandshakeMCPDiscoveryPromptIntegration 端到端验证：握手阶段通过 MCP 发现工具后，Session 系统提示词自动集成。
+func TestMCP_HelloHandshakeMCPDiscoveryPromptIntegration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn := newHistoryWSConn()
+	writer := NewWriter(ctx, conn, 100, slog.Default())
+
+	cfg := &config.Config{
+		Session: config.SessionConfig{
+			SystemPrompt: "你是测试语音助手。",
+		},
+	}
+	sess := NewSession(ctx, Options{
+		Writer: writer,
+		Config: cfg,
+		Logger: slog.Default(),
+	})
+	defer sess.Close()
+	go func() { _ = sess.Run() }()
+
+	// 模拟设备响应 initialize 和 tools/list
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			rawMsgs := conn.TextMessages()
+			for _, m := range rawMsgs {
+				var req struct {
+					Type    string `json:"type"`
+					Payload struct {
+						JSONRPC string `json:"jsonrpc"`
+						ID      int64  `json:"id"`
+						Method  string `json:"method"`
+					} `json:"payload"`
+				}
+				if err := json.Unmarshal(m, &req); err == nil && req.Type == MessageTypeMCP {
+					if req.Payload.Method == "initialize" {
+						resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"serverInfo":{"name":"test-board","version":"1.0"}}}`, req.Payload.ID)
+						sess.PostClientText(&ClientMessage{
+							Kind:       KindMCP,
+							MCPPayload: json.RawMessage(resp),
+						})
+					} else if req.Payload.Method == "tools/list" {
+						resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"tools":[{"name":"self.screen.set_theme","description":"设置屏幕主题","inputSchema":{"type":"object"}}]}}`, req.Payload.ID)
+						sess.PostClientText(&ClientMessage{
+							Kind:       KindMCP,
+							MCPPayload: json.RawMessage(resp),
+						})
+					}
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	// 执行 MCP 工具发现
+	sess.discoverMCPTools(ctx)
+
+	// 验证系统提示词已自动包含发现的工具
+	sysPrompt := sess.SystemPrompt()
+	if !strings.Contains(sysPrompt, "你是测试语音助手。") {
+		t.Errorf("missing base prompt in %s", sysPrompt)
+	}
+	if !strings.Contains(sysPrompt, "当用户需要控制设备或查询设备状态时，请务必直接调用对应的工具（Tool Call），不要拒绝：") {
+		t.Errorf("missing device control instructions in %s", sysPrompt)
+	}
+	if !strings.Contains(sysPrompt, `"name": "self.screen.set_theme"`) {
+		t.Errorf("missing discovered tool in %s", sysPrompt)
+	}
+}
