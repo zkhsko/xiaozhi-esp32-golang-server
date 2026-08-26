@@ -259,8 +259,8 @@ func TestMCP_ToolCallExecutionAndLLMFeedback(t *testing.T) {
 	}
 
 	// 第一次调用带有 tools（包含服务端默认工具与已授权设备工具）
-	if len(llmClient.lastTools[0]) != 2 {
-		t.Errorf("first LLM call tools count mismatch: expected 2, got %+v", llmClient.lastTools[0])
+	if len(llmClient.lastTools[0]) != 3 {
+		t.Errorf("first LLM call tools count mismatch: expected 3, got %+v", llmClient.lastTools[0])
 	}
 
 	// 第二次调用上下文包含 RoleAssistant(ToolCalls) 和 RoleTool(执行结果)
@@ -818,8 +818,8 @@ func TestMCP_MultiStepToolCallVolumeControl(t *testing.T) {
 	}
 
 	// 验证前两次调用均携带了 tools（包含服务端默认工具与设备工具）
-	if len(llmClient.lastTools[0]) != 3 || len(llmClient.lastTools[1]) != 3 {
-		t.Errorf("expected 3 tools present in first and second calls, got %+v and %+v", llmClient.lastTools[0], llmClient.lastTools[1])
+	if len(llmClient.lastTools[0]) != 4 || len(llmClient.lastTools[1]) != 4 {
+		t.Errorf("expected 4 tools present in first and second calls, got %+v and %+v", llmClient.lastTools[0], llmClient.lastTools[1])
 	}
 
 	// 验证第三次 LLM 调用包含两次 Tool 的请求与响应

@@ -13,6 +13,7 @@ import (
 // 服务端工具名称常量。
 const (
 	ServerToolGetCurrentTime = "server.get_current_time"
+	ServerToolCloseSession   = "server.close_session"
 )
 
 // 哨兵错误。
@@ -31,12 +32,26 @@ func DefaultServerTools() []ai.Tool {
 				"properties": map[string]any{},
 			},
 		},
+		{
+			Name:        ServerToolCloseSession,
+			Description: "关闭当前会话并断开连接。当用户表示想要结束对话、退下、去睡觉、断开连接、再见或不再需要交互时调用此工具",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"reason": map[string]any{
+						"type":        "string",
+						"description": "关闭会话的原因（可选）",
+					},
+				},
+			},
+		},
 	}
 }
 
 // isServerTool 检查指定名称是否为启用的服务端工具。
 func isServerTool(name string) bool {
-	return name == ServerToolGetCurrentTime
+	return name == ServerToolGetCurrentTime ||
+		name == ServerToolCloseSession
 }
 
 // executeServerTool 执行指定名称的服务端工具。
@@ -48,9 +63,24 @@ func executeServerTool(ctx context.Context, name string, _ string) (string, erro
 	switch name {
 	case ServerToolGetCurrentTime:
 		return executeGetCurrentTime()
+	case ServerToolCloseSession:
+		return executeCloseSession()
 	default:
 		return "", fmt.Errorf("%w: %s", ErrServerToolNotFound, name)
 	}
+}
+
+// executeCloseSession 执行会话关闭工具逻辑，返回格式化确认 JSON。
+func executeCloseSession() (string, error) {
+	data := map[string]any{
+		"status":  "success",
+		"message": "session will be closed after this turn",
+	}
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		return "", fmt.Errorf("marshal close session result: %w", err)
+	}
+	return string(bytes), nil
 }
 
 // executeGetCurrentTime 获取服务端系统当前日期、时间、星期、时区及 UTC 偏移。
@@ -120,6 +150,12 @@ func (s *Session) executeTool(ctx context.Context, gen uint64, tc ai.ToolCall) s
 			"generation", gen,
 			"tool_name", tc.Name,
 		)
+
+		if tc.Name == ServerToolCloseSession {
+			s.mu.Lock()
+			s.closeAfterTurn = true
+			s.mu.Unlock()
+		}
 
 		resultText, err := executeServerTool(ctx, tc.Name, tc.Arguments)
 		if err != nil {

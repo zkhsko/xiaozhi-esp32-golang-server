@@ -104,6 +104,7 @@ type Session struct {
 	sessionID          string
 	manualStopReceived bool
 	promptPlayed       bool
+	closeAfterTurn     bool
 	history            []ai.Message
 
 	turnCtx    context.Context
@@ -1010,8 +1011,19 @@ func (s *Session) handleTurnFinishedEvent(ev event) {
 	if s.mode == ListenModeAuto && s.cfg != nil && s.cfg.Session.ListenPromptEnabled {
 		s.promptPlayed = true
 	}
+	shouldClose := s.closeAfterTurn
+	s.closeAfterTurn = false
 	s.state = StateReady
 	s.mu.Unlock()
+
+	if shouldClose {
+		s.logger.Info("closing session after turn finished as requested by server tool",
+			"session_id", s.SessionID(),
+			"generation", ev.generation,
+		)
+		s.closeWithReason(websocket.StatusNormalClosure, "session closed by user command")
+		return
+	}
 
 	s.logger.Info("session returned to ready state",
 		"session_id", s.SessionID(),
@@ -1034,6 +1046,7 @@ func (s *Session) handleAbortEvent(reason string) {
 		s.turnCancel = nil
 	}
 	s.promptPlayed = false
+	s.closeAfterTurn = false
 	wasSpeaking := (s.state == StateSpeaking)
 	s.state = StateReady
 	s.mu.Unlock()
