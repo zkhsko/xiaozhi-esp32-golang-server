@@ -292,7 +292,6 @@ func (s *Session) callMCPTool(ctx context.Context, name string, argumentsJSON st
 	s.logger.Info("executing mcp tool call",
 		"session_id", s.SessionID(),
 		"tool_name", name,
-		"arguments", argumentsJSON,
 	)
 
 	resp, err := s.sendMCPRequest(ctx, "tools/call", callParams)
@@ -330,7 +329,6 @@ func (s *Session) callMCPTool(ctx context.Context, name string, argumentsJSON st
 	s.logger.Info("mcp tool call executed successfully",
 		"session_id", s.SessionID(),
 		"tool_name", name,
-		"result", resultText,
 	)
 
 	return resultText, nil

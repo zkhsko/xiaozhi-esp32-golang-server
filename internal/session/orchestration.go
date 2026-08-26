@@ -180,7 +180,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 
 	// 3. 构造上下文消息并启动多轮工具调用与流式回复循环 (Agent Loop)
 	messages := s.buildLLMMessages(userText)
-	tools := s.getMCPTools()
+	tools := s.availableTools()
 	splitter := NewSentenceSplitter()
 	var assistantText strings.Builder
 	sessionID := s.SessionID()
@@ -307,32 +307,12 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 				ToolCalls: toolCalls,
 			})
 
-			// 逐一校验并执行 MCP Tool，将结果注入上下文
+			// 逐一校验并执行工具（服务端工具或设备 MCP 工具），将结果注入上下文
 			for _, tc := range toolCalls {
 				if ctx.Err() != nil || s.Generation() > gen {
 					return
 				}
-				var resultText string
-				if !s.isMCPToolAllowed(tc.Name) {
-					s.logger.Warn("mcp tool call rejected: tool not authorized in session",
-						"tool_name", tc.Name,
-						"session_id", sessionID,
-						"generation", gen,
-					)
-					resultText = fmt.Sprintf("Error: tool %q is not authorized in current session", tc.Name)
-				} else {
-					var err error
-					resultText, err = s.callMCPTool(ctx, tc.Name, tc.Arguments)
-					if err != nil {
-						s.logger.Warn("mcp tool call failed during turn",
-							"tool_name", tc.Name,
-							"error", err,
-							"session_id", sessionID,
-							"generation", gen,
-						)
-						resultText = fmt.Sprintf("Error: %v", err)
-					}
-				}
+				resultText := s.executeTool(ctx, gen, tc)
 				messages = append(messages, ai.Message{
 					Role:       ai.RoleTool,
 					Content:    resultText,
