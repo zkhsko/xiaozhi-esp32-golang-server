@@ -11,13 +11,14 @@ import (
 // handleOTASerialNumber 处理包含 SerialNumber 的设备 OTA 检查/配置发现请求。
 // 业务流程：
 // 1. 若配置了数据库且包含 SerialNumber，查询 device_activation 表激活状态：
-//   - 若设备存在且正常激活：下发可用 WebSocket 连接配置及服务器时间；
 //   - 若设备被冻结或撤销：拒绝访问并返回 403 Forbidden；
-//   - 若设备未找到：继续下发 6 位随机激活码与 challenge；
+//   - 若设备存在且正常激活：
+//   - 进一步查询 device_user_ref 表用户绑定关系：
+//   - 若未绑定用户：生成 6 位随机激活码，返回 code 和 message；
+//   - 若已绑定用户：下发可用 WebSocket 连接配置及服务器时间，正常返回；
+//   - 若设备未找到（激活表中不存在记录）：生成 Challenge 挑战值，仅返回 challenge；
 //
-// 2. 若设备不存在或未配置数据库：
-//   - 引入 ttlcache/v3 缓存待激活信息；
-//   - 返回 6 位数字激活码、Challenge 挑战值与绑定提示信息。
+// 2. 若未配置数据库：按未激活处理，生成 Challenge 挑战值，仅返回 challenge。
 func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Request, headers DeviceHeaders, body []byte) {
 	if h.db != nil && headers.SerialNumber != "" {
 		act, err := h.db.FindDeviceActivationBySerialNumber(r.Context(), headers.SerialNumber)
@@ -30,7 +31,7 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
 			}
-			h.logger.Info("device activation not found, issuing activation code",
+			h.logger.Info("device activation not found, issuing challenge only",
 				"serial_number", logger.TruncateString(headers.SerialNumber),
 				"device_id", logger.TruncateString(headers.DeviceID),
 			)
@@ -44,10 +45,61 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 				return
 			}
 
-			h.logger.Info("device activation found",
+			// 查询设备与用户绑定关系
+			userRef, err := h.db.FindDeviceUserRefBySerialNumber(r.Context(), headers.SerialNumber)
+			if err != nil {
+				if !errors.Is(err, database.ErrBindingNotFound) {
+					h.logger.Error("failed to query device user binding by serial number",
+						"serial_number", logger.TruncateString(headers.SerialNumber),
+						"error", err,
+					)
+					http.Error(w, "internal server error", http.StatusInternalServerError)
+					return
+				}
+
+				// 设备已激活但未绑定用户：生成 6 位激活码并返回 code 和 message
+				deviceID := headers.DeviceID
+				if deviceID == "" {
+					deviceID = act.DeviceID
+				}
+				clientID := headers.ClientID
+				if clientID == "" {
+					clientID = act.ClientID
+				}
+
+				pending, err := h.createPendingActivation(headers.SerialNumber, deviceID, clientID)
+				if err != nil {
+					h.logger.Error("failed to create pending binding code",
+						"serial_number", logger.TruncateString(headers.SerialNumber),
+						"error", err,
+					)
+					http.Error(w, "internal server error", http.StatusInternalServerError)
+					return
+				}
+
+				h.logger.Info("device activated but unbound to user, issuing binding code",
+					"serial_number", logger.TruncateString(headers.SerialNumber),
+					"device_id", logger.TruncateString(deviceID),
+					"code", logger.TruncateString(pending.Code),
+				)
+
+				resp := Response{
+					ServerTime: currentServerTime(),
+					Activation: &ActivationInfo{
+						Code:    pending.Code,
+						Message: DefaultActivationMessage,
+					},
+				}
+
+				writeJSON(w, http.StatusOK, resp)
+				return
+			}
+
+			// 设备已激活且已绑定用户：正常返回 WebSocket 配置
+			h.logger.Info("device activation and user binding verified",
 				"serial_number", logger.TruncateString(act.SerialNumber),
 				"device_id", logger.TruncateString(act.DeviceID),
-				"client_id", logger.TruncateString(act.ClientID),
+				"user_id", userRef.UserID,
 				"activation_status", act.ActivationStatus,
 				"activated_at", act.ActivatedAt,
 			)
@@ -72,10 +124,10 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	// 设备不存在（未激活）或未配置数据库时，生成新的 6 位激活码并写入内存缓存
+	// 设备未激活（激活表中不存在记录）或未配置数据库：生成 challenge 挑战值并仅返回 challenge
 	pending, err := h.createPendingActivation(headers.SerialNumber, headers.DeviceID, headers.ClientID)
 	if err != nil {
-		h.logger.Error("failed to create pending activation",
+		h.logger.Error("failed to create pending challenge",
 			"serial_number", logger.TruncateString(headers.SerialNumber),
 			"error", err,
 		)
@@ -86,9 +138,7 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 	resp := Response{
 		ServerTime: currentServerTime(),
 		Activation: &ActivationInfo{
-			Code:      pending.Code,
 			Challenge: pending.Challenge,
-			Message:   DefaultActivationMessage,
 		},
 	}
 

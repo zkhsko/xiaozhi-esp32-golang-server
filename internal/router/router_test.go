@@ -85,6 +85,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 		wantAllowHeader    string
 		wantExactWS        bool
 		wantActivation     bool
+		wantChallengeOnly  bool
 		wantEmptyBodyError bool
 	}{
 		{
@@ -102,7 +103,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 			wantActivation: true,
 		},
 		{
-			name:   "GET request with Serial-Number returns activation code when unactivated",
+			name:   "GET request with Serial-Number returns challenge only when unactivated",
 			method: http.MethodGet,
 			path:   "/xiaozhi/ota/",
 			headers: map[string]string{
@@ -112,12 +113,12 @@ func TestRouter_OTATableDriven(t *testing.T) {
 				"Activation-Version": "2",
 				"User-Agent":         "xiaozhi-esp32/2.0.0",
 			},
-			body:           "",
-			wantStatusCode: http.StatusOK,
-			wantActivation: true,
+			body:              "",
+			wantStatusCode:    http.StatusOK,
+			wantChallengeOnly: true,
 		},
 		{
-			name:   "POST request with Serial-Number and json body returns activation code when unactivated",
+			name:   "POST request with Serial-Number and json body returns challenge only when unactivated",
 			method: http.MethodPost,
 			path:   "/xiaozhi/ota/",
 			headers: map[string]string{
@@ -126,9 +127,9 @@ func TestRouter_OTATableDriven(t *testing.T) {
 				"Serial-Number":      "SN-DEVICE-12345678",
 				"Activation-Version": "2",
 			},
-			body:           `{"version":2,"mac_address":"AA:BB:CC:DD:EE:FF","uuid":"uuid-device-client-123"}`,
-			wantStatusCode: http.StatusOK,
-			wantActivation: true,
+			body:              `{"version":2,"mac_address":"AA:BB:CC:DD:EE:FF","uuid":"uuid-device-client-123"}`,
+			wantStatusCode:    http.StatusOK,
+			wantChallengeOnly: true,
 		},
 		{
 			name:   "GET request without trailing slash returns activation code when unactivated",
@@ -418,6 +419,75 @@ func TestRouter_OTATableDriven(t *testing.T) {
 				}
 			}
 
+			if tt.wantChallengeOnly {
+				contentType := rec.Header().Get("Content-Type")
+				if !strings.Contains(contentType, "application/json") {
+					t.Errorf("expected Content-Type to contain application/json, got %q", contentType)
+				}
+
+				var resp Response
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("failed to unmarshal response: %v", err)
+				}
+
+				if resp.WebSocket != nil {
+					t.Errorf("expected WebSocket to be nil in challenge-only response, got: %+v", resp.WebSocket)
+				}
+				if resp.Activation == nil {
+					t.Fatalf("expected Activation to be non-nil")
+				}
+				if len(resp.Activation.Challenge) != 64 {
+					t.Errorf("expected 64-character challenge, got %q", resp.Activation.Challenge)
+				}
+				for _, c := range resp.Activation.Challenge {
+					if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+						t.Errorf("expected valid hex characters in challenge, got %q", resp.Activation.Challenge)
+						break
+					}
+				}
+				if resp.Activation.Code != "" {
+					t.Errorf("expected empty Code in challenge-only response, got %q", resp.Activation.Code)
+				}
+				if resp.Activation.Message != "" {
+					t.Errorf("expected empty Message in challenge-only response, got %q", resp.Activation.Message)
+				}
+				if resp.ServerTime == nil {
+					t.Fatalf("expected ServerTime to be non-nil")
+				}
+
+				var rawMap map[string]json.RawMessage
+				if err := json.Unmarshal(rec.Body.Bytes(), &rawMap); err != nil {
+					t.Fatalf("failed to unmarshal raw map: %v", err)
+				}
+
+				if len(rawMap) != 2 {
+					t.Errorf("expected exactly 2 top-level fields (activation, server_time), got %d fields: %+v", len(rawMap), rawMap)
+				}
+				if _, ok := rawMap["activation"]; !ok {
+					t.Errorf("missing top-level 'activation' field in response")
+				}
+				if _, ok := rawMap["server_time"]; !ok {
+					t.Errorf("missing top-level 'server_time' field in response")
+				}
+				if _, exists := rawMap["websocket"]; exists {
+					t.Errorf("response contains unwanted field 'websocket'")
+				}
+
+				var actMap map[string]any
+				if err := json.Unmarshal(rawMap["activation"], &actMap); err != nil {
+					t.Fatalf("failed to unmarshal activation map: %v", err)
+				}
+				if _, ok := actMap["challenge"]; !ok {
+					t.Errorf("missing 'challenge' field in activation object")
+				}
+				if _, ok := actMap["code"]; ok {
+					t.Errorf("unwanted 'code' field present in activation object: %+v", actMap)
+				}
+				if _, ok := actMap["message"]; ok {
+					t.Errorf("unwanted 'message' field present in activation object: %+v", actMap)
+				}
+			}
+
 			// 日志安全性断言：绝不泄露敏感 Token
 			logOutput := logBuf.String()
 			if strings.Contains(logOutput, testToken) {
@@ -534,7 +604,7 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	// 插入预置激活记录
+	// 插入预置激活记录并绑定用户
 	activatedSN := "SN-ACTIVATED-001"
 	deviceID := "DEV-ESP32-AA-BB-CC"
 	clientID := "CLIENT-UUID-12345"
@@ -548,8 +618,11 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 	if err := db.CreateDeviceActivation(ctx, actRecord); err != nil {
 		t.Fatalf("failed to create seed device activation: %v", err)
 	}
+	if _, err := db.BindDevice(ctx, activatedSN, 1001); err != nil {
+		t.Fatalf("failed to bind seed device to user: %v", err)
+	}
 
-	t.Run("with SN and found in database outputs activation info", func(t *testing.T) {
+	t.Run("with SN and found in database and bound to user outputs websocket config", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
 		req.Header.Set("Device-Id", deviceID)
 		req.Header.Set("Client-Id", clientID)
@@ -574,18 +647,18 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 			t.Fatalf("failed to unmarshal response: %v", err)
 		}
 		if resp.WebSocket == nil {
-			t.Fatalf("expected WebSocket config to be non-nil for activated device")
+			t.Fatalf("expected WebSocket config to be non-nil for activated and bound device")
 		}
 		if resp.WebSocket.URL != testWsURL {
 			t.Errorf("expected WebSocket URL %q, got %q", testWsURL, resp.WebSocket.URL)
 		}
 		if resp.Activation != nil {
-			t.Errorf("expected Activation to be nil for activated device, got: %+v", resp.Activation)
+			t.Errorf("expected Activation to be nil for activated and bound device, got: %+v", resp.Activation)
 		}
 
 		logOutput := logBuf.String()
-		if !strings.Contains(logOutput, "device activation found") {
-			t.Errorf("expected log to contain 'device activation found', got: %s", logOutput)
+		if !strings.Contains(logOutput, "device activation and user binding verified") {
+			t.Errorf("expected log to contain 'device activation and user binding verified', got: %s", logOutput)
 		}
 		if !strings.Contains(logOutput, activatedSN) {
 			t.Errorf("expected log to contain serial number %q, got: %s", activatedSN, logOutput)
@@ -595,7 +668,85 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 		}
 	})
 
-	t.Run("with SN and not found in database outputs not found and returns 6-digit code in ttlcache", func(t *testing.T) {
+	t.Run("with SN and found in database but unbound to user returns code and message", func(t *testing.T) {
+		unboundSN := "SN-ACTIVATED-UNBOUND-002"
+		unboundDevID := "DEV-UNBOUND-002"
+		unboundCliID := "CLI-UNBOUND-002"
+		unboundRecord := &database.DeviceActivation{
+			SerialNumber:     unboundSN,
+			DeviceID:         unboundDevID,
+			ClientID:         unboundCliID,
+			ActivationStatus: database.ActivationStatusActive,
+			ActivatedAt:      time.Now().Truncate(time.Millisecond),
+		}
+		if err := db.CreateDeviceActivation(ctx, unboundRecord); err != nil {
+			t.Fatalf("failed to create unbound device activation: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req.Header.Set("Device-Id", unboundDevID)
+		req.Header.Set("Client-Id", unboundCliID)
+		req.Header.Set("Serial-Number", unboundSN)
+
+		rec := httptest.NewRecorder()
+		var logBuf bytes.Buffer
+		testLogger := logger.New(&logBuf, slog.LevelDebug)
+
+		otaHandler := NewOTAHandler(cfg, db, testLogger)
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status code %d, got %d, body: %s", http.StatusOK, rec.Code, rec.Body.String())
+		}
+
+		var resp Response
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+		if resp.WebSocket != nil {
+			t.Errorf("expected WebSocket config to be nil for unbound device, got: %+v", resp.WebSocket)
+		}
+		if resp.Activation == nil {
+			t.Fatalf("expected Activation to be non-nil for unbound device")
+		}
+		if len(resp.Activation.Code) != 6 {
+			t.Errorf("expected 6-digit activation code, got %q", resp.Activation.Code)
+		}
+		for _, c := range resp.Activation.Code {
+			if c < '0' || c > '9' {
+				t.Errorf("expected code to contain only digits, got %q", resp.Activation.Code)
+				break
+			}
+		}
+		if resp.Activation.Message != DefaultActivationMessage {
+			t.Errorf("expected activation message %q, got %q", DefaultActivationMessage, resp.Activation.Message)
+		}
+		if resp.Activation.Challenge != "" {
+			t.Errorf("expected empty challenge for activated unbound device, got %q", resp.Activation.Challenge)
+		}
+
+		// 验证 ttlcache 中根据激活码成功保存了待绑定信息
+		pending, ok := otaHandler.FindPendingActivationByCode(resp.Activation.Code)
+		if !ok {
+			t.Fatalf("expected pending activation to be found in ttlcache by code %q", resp.Activation.Code)
+		}
+		if pending.SerialNumber != unboundSN {
+			t.Errorf("expected pending SerialNumber %q, got %q", unboundSN, pending.SerialNumber)
+		}
+		if pending.DeviceID != unboundDevID {
+			t.Errorf("expected pending DeviceID %q, got %q", unboundDevID, pending.DeviceID)
+		}
+
+		logOutput := logBuf.String()
+		if !strings.Contains(logOutput, "device activated but unbound to user") {
+			t.Errorf("expected log to contain 'device activated but unbound to user', got: %s", logOutput)
+		}
+	})
+
+	t.Run("with SN and not found in database outputs not found and returns challenge only in ttlcache", func(t *testing.T) {
 		unactivatedSN := "SN-UNACTIVATED-999"
 		unactivatedDevID := "DEV-OTHER"
 		unactivatedCliID := "CLI-OTHER"
@@ -628,14 +779,11 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 		if resp.Activation == nil {
 			t.Fatalf("expected Activation to be non-nil for unactivated device")
 		}
-		if len(resp.Activation.Code) != 6 {
-			t.Errorf("expected 6-digit activation code, got %q", resp.Activation.Code)
+		if resp.Activation.Code != "" {
+			t.Errorf("expected empty Code in challenge-only response, got %q", resp.Activation.Code)
 		}
-		for _, c := range resp.Activation.Code {
-			if c < '0' || c > '9' {
-				t.Errorf("expected code to contain only digits, got %q", resp.Activation.Code)
-				break
-			}
+		if resp.Activation.Message != "" {
+			t.Errorf("expected empty Message in challenge-only response, got %q", resp.Activation.Message)
 		}
 		if len(resp.Activation.Challenge) != 64 {
 			t.Errorf("expected 64-hex-character challenge (256-bit), got %q", resp.Activation.Challenge)
@@ -646,41 +794,23 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 				break
 			}
 		}
-		if resp.Activation.Message != DefaultActivationMessage {
-			t.Errorf("expected activation message %q, got %q", DefaultActivationMessage, resp.Activation.Message)
-		}
 
-		// 验证 ttlcache 中根据激活码成功保存了该待激活记录
-		pending, ok := otaHandler.FindPendingActivationByCode(resp.Activation.Code)
-		if !ok {
-			t.Fatalf("expected pending activation to be found in ttlcache by code %q", resp.Activation.Code)
-		}
-		if pending.Challenge != resp.Activation.Challenge {
-			t.Errorf("expected pending Challenge %q, got %q", resp.Activation.Challenge, pending.Challenge)
-		}
-		if pending.SerialNumber != unactivatedSN {
-			t.Errorf("expected pending SerialNumber %q, got %q", unactivatedSN, pending.SerialNumber)
-		}
-		if pending.DeviceID != unactivatedDevID {
-			t.Errorf("expected pending DeviceID %q, got %q", unactivatedDevID, pending.DeviceID)
-		}
-		if pending.ClientID != unactivatedCliID {
-			t.Errorf("expected pending ClientID %q, got %q", unactivatedCliID, pending.ClientID)
-		}
-
-		// 验证 ttlcache 中根据 Challenge 同样成功索引该待激活记录
+		// 验证 ttlcache 中根据 Challenge 成功索引该待激活记录
 		pendingByChallenge, ok := otaHandler.FindPendingActivationByChallenge(resp.Activation.Challenge)
 		if !ok {
 			t.Fatalf("expected pending activation to be found in ttlcache by challenge %q", resp.Activation.Challenge)
 		}
-		if pendingByChallenge.Code != resp.Activation.Code {
-			t.Errorf("expected pending code %q, got %q", resp.Activation.Code, pendingByChallenge.Code)
-		}
 		if pendingByChallenge.SerialNumber != unactivatedSN {
 			t.Errorf("expected pending SerialNumber %q, got %q", unactivatedSN, pendingByChallenge.SerialNumber)
 		}
+		if pendingByChallenge.DeviceID != unactivatedDevID {
+			t.Errorf("expected pending DeviceID %q, got %q", unactivatedDevID, pendingByChallenge.DeviceID)
+		}
+		if pendingByChallenge.ClientID != unactivatedCliID {
+			t.Errorf("expected pending ClientID %q, got %q", unactivatedCliID, pendingByChallenge.ClientID)
+		}
 
-		// 验证再次请求时生成新的激活码和 Challenge 并存入 ttlcache
+		// 验证再次请求时生成新的 Challenge 并存入 ttlcache
 		req2 := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
 		req2.Header.Set("Device-Id", unactivatedDevID)
 		req2.Header.Set("Client-Id", unactivatedCliID)
@@ -695,8 +825,8 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 		if resp2.Activation == nil {
 			t.Fatalf("expected second activation response to be non-nil")
 		}
-		if len(resp2.Activation.Code) != 6 {
-			t.Errorf("expected 6-digit activation code on second request, got %q", resp2.Activation.Code)
+		if resp2.Activation.Code != "" {
+			t.Errorf("expected empty Code on second request, got %q", resp2.Activation.Code)
 		}
 		if len(resp2.Activation.Challenge) != 64 {
 			t.Errorf("expected 64-hex-character challenge on second request, got %q", resp2.Activation.Challenge)
@@ -704,15 +834,12 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 		if resp2.Activation.Challenge == resp.Activation.Challenge {
 			t.Errorf("expected different challenge on second request, got identical %q", resp2.Activation.Challenge)
 		}
-		pending2, ok := otaHandler.FindPendingActivationByCode(resp2.Activation.Code)
+		pending2, ok := otaHandler.FindPendingActivationByChallenge(resp2.Activation.Challenge)
 		if !ok {
-			t.Fatalf("expected pending activation for second code %q in ttlcache", resp2.Activation.Code)
+			t.Fatalf("expected pending activation for second challenge %q in ttlcache", resp2.Activation.Challenge)
 		}
 		if pending2.SerialNumber != unactivatedSN {
 			t.Errorf("expected pending2 SerialNumber %q, got %q", unactivatedSN, pending2.SerialNumber)
-		}
-		if pending2.Challenge != resp2.Activation.Challenge {
-			t.Errorf("expected pending2 Challenge %q, got %q", resp2.Activation.Challenge, pending2.Challenge)
 		}
 
 		logOutput := logBuf.String()
@@ -964,8 +1091,11 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 		if resp.Activation == nil {
 			t.Fatalf("expected Activation to be non-nil for nil database with SN")
 		}
-		if len(resp.Activation.Code) != 6 {
-			t.Errorf("expected 6-digit code, got %q", resp.Activation.Code)
+		if resp.Activation.Code != "" {
+			t.Errorf("expected empty Code for nil database with SN, got %q", resp.Activation.Code)
+		}
+		if resp.Activation.Message != "" {
+			t.Errorf("expected empty Message for nil database with SN, got %q", resp.Activation.Message)
 		}
 		if len(resp.Activation.Challenge) != 64 {
 			t.Errorf("expected 64-character challenge for nil database with SN, got %q", resp.Activation.Challenge)
@@ -983,7 +1113,7 @@ func TestRouter_OTA_SerialNumberChallenge(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	t.Run("unactivated device with serial number receives valid challenge in activation response", func(t *testing.T) {
+	t.Run("unactivated device with serial number receives valid challenge only in activation response", func(t *testing.T) {
 		const (
 			testSN       = "SN-CHALLENGE-TEST-001"
 			testDeviceID = "DEV-CHALLENGE-001"
@@ -1021,6 +1151,12 @@ func TestRouter_OTA_SerialNumberChallenge(t *testing.T) {
 		if resp.Activation.Challenge == "" {
 			t.Fatalf("expected Challenge to be non-empty in activation response")
 		}
+		if resp.Activation.Code != "" {
+			t.Errorf("expected Code to be empty in unactivated challenge-only response, got: %q", resp.Activation.Code)
+		}
+		if resp.Activation.Message != "" {
+			t.Errorf("expected Message to be empty in unactivated challenge-only response, got: %q", resp.Activation.Message)
+		}
 		if len(resp.Activation.Challenge) != 64 {
 			t.Fatalf("expected 64-hex-character (256-bit) challenge, got %d characters (%q)", len(resp.Activation.Challenge), resp.Activation.Challenge)
 		}
@@ -1047,9 +1183,6 @@ func TestRouter_OTA_SerialNumberChallenge(t *testing.T) {
 		if pending.Challenge != resp.Activation.Challenge {
 			t.Errorf("expected Challenge %q, got %q", resp.Activation.Challenge, pending.Challenge)
 		}
-		if pending.Code != resp.Activation.Code {
-			t.Errorf("expected Code %q, got %q", resp.Activation.Code, pending.Code)
-		}
 
 		// 验证不存在的 challenge 返回 false
 		_, notFound := otaHandler.FindPendingActivationByChallenge("non-existent-challenge-hex")
@@ -1058,7 +1191,7 @@ func TestRouter_OTA_SerialNumberChallenge(t *testing.T) {
 		}
 	})
 
-	t.Run("activated device with serial number does not return activation or challenge", func(t *testing.T) {
+	t.Run("activated and bound device with serial number does not return activation or challenge", func(t *testing.T) {
 		const (
 			activeSN       = "SN-ALREADY-ACTIVATED-001"
 			activeDeviceID = "DEV-ALREADY-ACTIVATED-001"
@@ -1074,6 +1207,9 @@ func TestRouter_OTA_SerialNumberChallenge(t *testing.T) {
 		}
 		if err := db.CreateDeviceActivation(ctx, act); err != nil {
 			t.Fatalf("failed to create seed activation: %v", err)
+		}
+		if _, err := db.BindDevice(ctx, activeSN, 1002); err != nil {
+			t.Fatalf("failed to bind device to user: %v", err)
 		}
 
 		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
@@ -1102,6 +1238,70 @@ func TestRouter_OTA_SerialNumberChallenge(t *testing.T) {
 		}
 		if resp.Activation != nil {
 			t.Fatalf("expected Activation to be nil for active device, got: %+v", resp.Activation)
+		}
+	})
+
+	t.Run("activated but unbound device with serial number returns code and message only", func(t *testing.T) {
+		const (
+			unboundSN       = "SN-ACTIVATED-NO-USER-001"
+			unboundDeviceID = "DEV-ACTIVATED-NO-USER-001"
+			unboundClientID = "CLI-ACTIVATED-NO-USER-001"
+		)
+
+		act := &database.DeviceActivation{
+			SerialNumber:     unboundSN,
+			DeviceID:         unboundDeviceID,
+			ClientID:         unboundClientID,
+			ActivationStatus: database.ActivationStatusActive,
+			ActivatedAt:      time.Now(),
+		}
+		if err := db.CreateDeviceActivation(ctx, act); err != nil {
+			t.Fatalf("failed to create seed activation: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req.Header.Set("Serial-Number", unboundSN)
+		req.Header.Set("Device-Id", unboundDeviceID)
+		req.Header.Set("Client-Id", unboundClientID)
+
+		rec := httptest.NewRecorder()
+		otaHandler := NewOTAHandler(cfg, db, slog.Default())
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status code 200, got %d", rec.Code)
+		}
+
+		var resp Response
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if resp.WebSocket != nil {
+			t.Fatalf("expected WebSocket config to be nil for unbound device")
+		}
+		if resp.Activation == nil {
+			t.Fatalf("expected Activation to be present for unbound device")
+		}
+		if len(resp.Activation.Code) != 6 {
+			t.Errorf("expected 6-digit code, got %q", resp.Activation.Code)
+		}
+		if resp.Activation.Message != DefaultActivationMessage {
+			t.Errorf("expected activation message %q, got %q", DefaultActivationMessage, resp.Activation.Message)
+		}
+		if resp.Activation.Challenge != "" {
+			t.Errorf("expected empty challenge for activated unbound device, got %q", resp.Activation.Challenge)
+		}
+
+		pending, ok := otaHandler.FindPendingActivationByCode(resp.Activation.Code)
+		if !ok {
+			t.Fatalf("expected to find pending activation by code %q", resp.Activation.Code)
+		}
+		if pending.SerialNumber != unboundSN {
+			t.Errorf("expected SerialNumber %q, got %q", unboundSN, pending.SerialNumber)
 		}
 	})
 }
