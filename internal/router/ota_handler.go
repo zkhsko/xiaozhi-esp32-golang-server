@@ -9,22 +9,25 @@ import (
 	"net/http"
 
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 // OTAHandler 处理设备 OTA 配置发现及版本检查。
 type OTAHandler struct {
 	cfg    *config.Config
+	db     *database.Database
 	logger *slog.Logger
 }
 
 // NewOTAHandler 创建 OTA 处理器实例。
-func NewOTAHandler(cfg *config.Config, l *slog.Logger) *OTAHandler {
+func NewOTAHandler(cfg *config.Config, db *database.Database, l *slog.Logger) *OTAHandler {
 	if l == nil {
 		l = slog.Default()
 	}
 	return &OTAHandler{
 		cfg:    cfg,
+		db:     db,
 		logger: l,
 	}
 }

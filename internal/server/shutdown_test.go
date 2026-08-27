@@ -20,7 +20,7 @@ import (
 
 // newTestRouter 使用统一标准装配测试路由，隔离具体的 router.Options 细节。
 func newTestRouter(cfg *config.Config, websocketSessionHandler *session.Handler) http.Handler {
-	otaHandler := router.NewOTAHandler(cfg, nil)
+	otaHandler := router.NewOTAHandler(cfg, nil, nil)
 	return router.NewRouter(router.Options{
 		OTA:              otaHandler,
 		WebsocketSession: websocketSessionHandler,

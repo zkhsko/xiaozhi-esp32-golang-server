@@ -1,16 +1,41 @@
 package router
 
 import (
+	"errors"
 	"net/http"
+
+	"xiaozhi-esp32-golang-server/internal/database"
 )
 
 // handleOTASerialNumber 处理包含 SerialNumber 的设备 OTA 检查/配置发现请求框架。
-// 业务流程（待接入具体业务）：
-// 1. 校验请求参数（SerialNumber, Device-Id, Client-Id 等）；
-// 2. 根据 SerialNumber 查询 device_hmac_credential 凭证记录并校验状态（不可用/未激活时下发 challenge 挑战字符串）；
-// 3. 按权威 SN 加锁查询 device_activation 绑定记录，校验 device_id / client_id 绑定关系；
-// 4. 已激活设备返回 WebSocket 连接配置及固件升级信息。
+// 业务流程：
+// 1. 若配置了数据库且包含 SerialNumber，查询 device_activation 表激活状态并输出；
+// 2. 当前下发可用 WebSocket 连接配置及服务器时间。
 func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Request, headers DeviceHeaders, body []byte) {
+	if h.db != nil && headers.SerialNumber != "" {
+		act, err := h.db.FindDeviceActivationBySerialNumber(r.Context(), headers.SerialNumber)
+		if err != nil {
+			if errors.Is(err, database.ErrActivationNotFound) {
+				h.logger.Info("device activation not found",
+					"serial_number", headers.SerialNumber,
+				)
+			} else {
+				h.logger.Error("failed to query device activation by serial number",
+					"serial_number", headers.SerialNumber,
+					"error", err,
+				)
+			}
+		} else {
+			h.logger.Info("device activation found",
+				"serial_number", act.SerialNumber,
+				"device_id", act.DeviceID,
+				"client_id", act.ClientID,
+				"activation_status", act.ActivationStatus,
+				"activated_at", act.ActivatedAt,
+			)
+		}
+	}
+
 	// 框架占位：当前默认返回可用 WebSocket 配置及服务器时间
 	var wsURL, token string
 	if h.cfg != nil {

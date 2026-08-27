@@ -2,19 +2,53 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/logger"
 	"xiaozhi-esp32-golang-server/internal/session"
 )
+
+func setupTestDB(t *testing.T) *database.Database {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "ota_router_test.db")
+	dsn := "file:" + dbPath + "?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000"
+
+	cfg := config.DatabaseConfig{
+		Driver:                "sqlite",
+		MaxOpenConns:          1,
+		MaxIdleConns:          1,
+		ConnectionMaxLifetime: 0,
+		ConnectionMaxIdleTime: 0,
+		PingTimeout:           3 * time.Second,
+		DSN:                   dsn,
+	}
+
+	db, err := database.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("failed to close test database: %v", err)
+		}
+	})
+
+	return db
+}
 
 func newTestConfig(token string, wsURL string) *config.Config {
 	return &config.Config{
@@ -245,7 +279,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 			var logBuf bytes.Buffer
 			testLogger := logger.New(&logBuf, slog.LevelDebug)
 
-			otaHandler := NewOTAHandler(cfg, testLogger)
+			otaHandler := NewOTAHandler(cfg, nil, testLogger)
 			r := NewRouter(Options{
 				OTA: otaHandler,
 			})
@@ -356,7 +390,7 @@ func TestRouter_PayloadTooLarge(t *testing.T) {
 	var logBuf bytes.Buffer
 	testLogger := logger.New(&logBuf, slog.LevelDebug)
 
-	otaHandler := NewOTAHandler(cfg, testLogger)
+	otaHandler := NewOTAHandler(cfg, nil, testLogger)
 	r := NewRouter(Options{
 		OTA: otaHandler,
 	})
@@ -391,7 +425,7 @@ func TestRouter_TotalHeadersTooLarge(t *testing.T) {
 	var logBuf bytes.Buffer
 	testLogger := logger.New(&logBuf, slog.LevelDebug)
 
-	otaHandler := NewOTAHandler(cfg, testLogger)
+	otaHandler := NewOTAHandler(cfg, nil, testLogger)
 	r := NewRouter(Options{
 		OTA: otaHandler,
 	})
@@ -435,4 +469,136 @@ func TestRouter_SessionEndpointRouting(t *testing.T) {
 	if recUnmounted.Code != http.StatusNotFound {
 		t.Errorf("expected 404 when session handler is nil in Options, got %d", recUnmounted.Code)
 	}
+}
+
+func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
+	const (
+		testToken = "secret-token-act-test"
+		testWsURL = "wss://test.example.com/xiaozhi/v1/"
+	)
+
+	cfg := newTestConfig(testToken, testWsURL)
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	// 插入预置激活记录
+	activatedSN := "SN-ACTIVATED-001"
+	deviceID := "DEV-ESP32-AA-BB-CC"
+	clientID := "CLIENT-UUID-12345"
+	actRecord := &database.DeviceActivation{
+		SerialNumber:     activatedSN,
+		DeviceID:         deviceID,
+		ClientID:         clientID,
+		ActivationStatus: database.ActivationStatusActive,
+		ActivatedAt:      time.Now().Truncate(time.Millisecond),
+	}
+	if err := db.CreateDeviceActivation(ctx, actRecord); err != nil {
+		t.Fatalf("failed to create seed device activation: %v", err)
+	}
+
+	t.Run("with SN and found in database outputs activation info", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req.Header.Set("Device-Id", deviceID)
+		req.Header.Set("Client-Id", clientID)
+		req.Header.Set("Serial-Number", activatedSN)
+
+		rec := httptest.NewRecorder()
+		var logBuf bytes.Buffer
+		testLogger := logger.New(&logBuf, slog.LevelDebug)
+
+		otaHandler := NewOTAHandler(cfg, db, testLogger)
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status code %d, got %d, body: %s", http.StatusOK, rec.Code, rec.Body.String())
+		}
+
+		logOutput := logBuf.String()
+		if !strings.Contains(logOutput, "device activation found") {
+			t.Errorf("expected log to contain 'device activation found', got: %s", logOutput)
+		}
+		if !strings.Contains(logOutput, activatedSN) {
+			t.Errorf("expected log to contain serial number %q, got: %s", activatedSN, logOutput)
+		}
+		if !strings.Contains(logOutput, deviceID) {
+			t.Errorf("expected log to contain device ID %q, got: %s", deviceID, logOutput)
+		}
+	})
+
+	t.Run("with SN and not found in database outputs not found", func(t *testing.T) {
+		unactivatedSN := "SN-UNACTIVATED-999"
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req.Header.Set("Device-Id", "DEV-OTHER")
+		req.Header.Set("Client-Id", "CLI-OTHER")
+		req.Header.Set("Serial-Number", unactivatedSN)
+
+		rec := httptest.NewRecorder()
+		var logBuf bytes.Buffer
+		testLogger := logger.New(&logBuf, slog.LevelDebug)
+
+		otaHandler := NewOTAHandler(cfg, db, testLogger)
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status code %d, got %d, body: %s", http.StatusOK, rec.Code, rec.Body.String())
+		}
+
+		logOutput := logBuf.String()
+		if !strings.Contains(logOutput, "device activation not found") {
+			t.Errorf("expected log to contain 'device activation not found', got: %s", logOutput)
+		}
+		if !strings.Contains(logOutput, unactivatedSN) {
+			t.Errorf("expected log to contain serial number %q, got: %s", unactivatedSN, logOutput)
+		}
+	})
+
+	t.Run("without SN does not query activation by SN", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req.Header.Set("Device-Id", "DEV-LEGACY-001")
+		req.Header.Set("Client-Id", "CLI-LEGACY-001")
+
+		rec := httptest.NewRecorder()
+		var logBuf bytes.Buffer
+		testLogger := logger.New(&logBuf, slog.LevelDebug)
+
+		otaHandler := NewOTAHandler(cfg, db, testLogger)
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status code %d, got %d, body: %s", http.StatusOK, rec.Code, rec.Body.String())
+		}
+
+		logOutput := logBuf.String()
+		if strings.Contains(logOutput, "device activation found") || strings.Contains(logOutput, "device activation not found") {
+			t.Errorf("expected log not to contain device activation query output for legacy device, got: %s", logOutput)
+		}
+	})
+
+	t.Run("nil database does not panic and succeeds", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req.Header.Set("Serial-Number", "SN-ANY-1234")
+
+		rec := httptest.NewRecorder()
+		var logBuf bytes.Buffer
+		testLogger := logger.New(&logBuf, slog.LevelDebug)
+
+		otaHandler := NewOTAHandler(cfg, nil, testLogger)
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status code %d, got %d", http.StatusOK, rec.Code)
+		}
+	})
 }

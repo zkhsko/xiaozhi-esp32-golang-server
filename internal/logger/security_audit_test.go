@@ -313,7 +313,7 @@ func TestSecurityAudit_HTTPErrorResponsesNoInternalLeak(t *testing.T) {
 		Limiter: session.NewSessionLimiter(1),
 		Logger:  auditLogger,
 	})
-	otaHandler := router.NewOTAHandler(cfg, auditLogger)
+	otaHandler := router.NewOTAHandler(cfg, nil, auditLogger)
 	httpRouter := router.NewRouter(router.Options{
 		OTA:              otaHandler,
 		WebsocketSession: websocketSessionHandler,
