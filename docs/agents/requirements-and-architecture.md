@@ -73,7 +73,7 @@
 | 文本到语音 | LLM 增量文本按句送入一个回答级 TTS 流 |
 | 中断 | 支持设备显式 `abort`；不支持全双工说话抢断 |
 | 对话上下文 | 仅保存当前 WebSocket 会话的有限内存上下文 |
-| 设备认证 | 所有设备共用一个由环境变量注入的 Bearer Token |
+| 设备认证 | 基于数据库 device_access_token 表查询校验 Bearer Token |
 | 持久化 | 不使用数据库，不持久化设备、消息或音频 |
 | 并发 | 不承诺固定容量；部署时必须配置正整数保护上限 |
 | 部署交付 | 开发机可直接启动；首期不交付容器和多架构镜像 |
@@ -471,7 +471,7 @@ ai:
 
 YAML 必须严格映射到明确 struct（启用未知字段检查 `Decoder.KnownFields(true)`）。以下情况启动校验必须直接返回错误并拒绝启动：
 - 包含未在 struct 中定义的未知 YAML 字段。
-- 缺失必需环境变量（`DASHSCOPE_API_KEY`、`DEVICE_SHARED_TOKEN`）。
+- 缺失必需环境变量（`DASHSCOPE_API_KEY`、`DATABASE_DSN`）。
 - 缺失必填字段（如 `max_concurrent_sessions`）或字段值为非正数（<= 0）。
 - 任何数值或时长超出第 10.1 节定义的合法范围。
 - 超时逻辑矛盾（如 `llm_overall_timeout <= llm_first_token_timeout`）。
@@ -483,7 +483,7 @@ YAML 必须严格映射到明确 struct（启用未知字段检查 `Decoder.Know
 敏感值只允许通过环境变量注入：
 
 - `DASHSCOPE_API_KEY`：百炼 ASR、LLM、TTS 共用的当前有效 Key。
-- `DEVICE_SHARED_TOKEN`：配置发现返回且 WebSocket 握手校验的共享设备 Token。
+- `DATABASE_DSN`：数据库连接串（支持 SQLite / MySQL / PostgreSQL）。
 
 不得把真实值写入源码、YAML、测试数据、文档、日志、错误响应或命令示例。任何曾出现在聊天、日志或仓库中的 Key 都视为已泄露，必须撤销并重新生成后才能使用。
 
@@ -516,7 +516,7 @@ YAML 必须严格映射到明确 struct（启用未知字段检查 `Decoder.Know
 ### 14.1 单元测试
 
 - 配置严格解析：未知字段报错、缺失 `max_concurrent_sessions` 报错、数值超出合法范围报错、`llm_overall_timeout <= llm_first_token_timeout` 矛盾报错。
-- 环境变量注入：缺失 `DASHSCOPE_API_KEY` 或 `DEVICE_SHARED_TOKEN` 报错，空字符串报错。
+- 环境变量注入：缺失 `DASHSCOPE_API_KEY` 或 `DATABASE_DSN` 报错，空字符串报错。
 - HTTP 发现与边界：超大请求体（>64 KiB）返回 413、超长请求头（>1024 字符）返回 400/431、合法请求返回正确 200 JSON。
 - WebSocket 协议与消息边界：超大文本消息（>32 KiB）关闭连接（1009）、超大 Opus 包（>1024 字节）或空包关闭连接（1003/1008）、未知扩展消息限频与忽略。
 - 编解码与音频边界：16 kHz Opus 解码为 1920 字节 PCM 帧、24 kHz PCM 组 1440 采样点编码为 60 ms Opus 帧。

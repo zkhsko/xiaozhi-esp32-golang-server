@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -13,10 +14,53 @@ import (
 	"github.com/coder/websocket"
 
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/router"
 	"xiaozhi-esp32-golang-server/internal/server"
 	"xiaozhi-esp32-golang-server/internal/session"
 )
+
+func setupTestDB(t *testing.T) *database.Database {
+	t.Helper()
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "server_shutdown_test.db")
+	dsn := "file:" + dbPath + "?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000"
+
+	cfg := config.DatabaseConfig{
+		Driver:                "sqlite",
+		MaxOpenConns:          1,
+		MaxIdleConns:          1,
+		ConnectionMaxLifetime: 0,
+		ConnectionMaxIdleTime: 0,
+		PingTimeout:           3 * time.Second,
+		DSN:                   dsn,
+	}
+
+	db, err := database.Open(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("failed to open test database: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("failed to close test database: %v", err)
+		}
+	})
+
+	return db
+}
+
+func seedDeviceToken(t *testing.T, db *database.Database, sn, token string) {
+	t.Helper()
+	err := db.CreateDeviceAccessToken(context.Background(), &database.DeviceAccessToken{
+		SerialNumber: sn,
+		AccessToken:  token,
+		IssuedAt:     time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("failed to seed device token: %v", err)
+	}
+}
 
 // newTestRouter 使用统一标准装配测试路由，隔离具体的 router.Options 细节。
 func newTestRouter(cfg *config.Config, websocketSessionHandler *session.Handler) http.Handler {
@@ -50,7 +94,6 @@ func createServerTestConfig(maxSessions int, shutdownTimeout time.Duration) *con
 			DownlinkOpusQueueCapacity: 50,
 			MaxHistoryTurns:           6,
 		},
-		DeviceSharedToken: "test-device-token",
 	}
 }
 
@@ -99,11 +142,13 @@ func performClientHello(t *testing.T, ctx context.Context, conn *websocket.Conn)
 
 // TestServer_Shutdown_WithActiveWebSockets 验证服务停机时活跃 WebSocket 连接被正确取消且名额精确归零。
 func TestServer_Shutdown_WithActiveWebSockets(t *testing.T) {
+	db := setupTestDB(t)
 	cfg := createServerTestConfig(10, 2*time.Second)
 	limiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	registry := session.NewRegistry(limiter, nil)
 	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
 		Config:   cfg,
+		DB:       db,
 		Registry: registry,
 	})
 
@@ -128,8 +173,12 @@ func TestServer_Shutdown_WithActiveWebSockets(t *testing.T) {
 	conns := make([]*websocket.Conn, sessionCount)
 	clientCloseErrs := make(chan error, sessionCount)
 	for i := 0; i < sessionCount; i++ {
+		sn := fmt.Sprintf("sn-dev-%d", i)
+		tok := fmt.Sprintf("token-dev-%d", i)
+		seedDeviceToken(t, db, sn, tok)
+
 		dialCtx, dialCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		conn := dialTestWebSocket(t, dialCtx, addr, cfg.DeviceSharedToken, fmt.Sprintf("dev-%d", i))
+		conn := dialTestWebSocket(t, dialCtx, addr, tok, fmt.Sprintf("dev-%d", i))
 		performClientHello(t, dialCtx, conn)
 		dialCancel()
 		conns[i] = conn
@@ -190,11 +239,15 @@ func TestServer_Shutdown_WithActiveWebSockets(t *testing.T) {
 
 // TestServer_Shutdown_DuringActiveConversation 验证在会话收音交互中停服时连接优雅断开且资源释放。
 func TestServer_Shutdown_DuringActiveConversation(t *testing.T) {
+	db := setupTestDB(t)
+	seedDeviceToken(t, db, "sn-dev-conv", "token-dev-conv")
+
 	cfg := createServerTestConfig(5, 2*time.Second)
 	limiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	registry := session.NewRegistry(limiter, nil)
 	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
 		Config:   cfg,
+		DB:       db,
 		Registry: registry,
 	})
 
@@ -215,7 +268,7 @@ func TestServer_Shutdown_DuringActiveConversation(t *testing.T) {
 	addr := waitForServerReady(t, srv, 2*time.Second)
 
 	dialCtx, dialCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	conn := dialTestWebSocket(t, dialCtx, addr, cfg.DeviceSharedToken, "dev-conv")
+	conn := dialTestWebSocket(t, dialCtx, addr, "token-dev-conv", "dev-conv")
 	performClientHello(t, dialCtx, conn)
 	dialCancel()
 
@@ -322,11 +375,15 @@ func TestServer_Shutdown_TimeoutBranchWithHooks(t *testing.T) {
 
 // TestServer_UpgradeFailure_QuotaReleased 验证握手认证失败时准入名额立即释放。
 func TestServer_UpgradeFailure_QuotaReleased(t *testing.T) {
+	db := setupTestDB(t)
+	seedDeviceToken(t, db, "sn-dev-valid", "token-dev-valid")
+
 	cfg := createServerTestConfig(1, 2*time.Second)
 	limiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	registry := session.NewRegistry(limiter, nil)
 	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
 		Config:   cfg,
+		DB:       db,
 		Registry: registry,
 	})
 
@@ -376,7 +433,7 @@ func TestServer_UpgradeFailure_QuotaReleased(t *testing.T) {
 
 	// 3. 发送合法连接验证可成功准入与握手
 	validDialCtx, validDialCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	validConn := dialTestWebSocket(t, validDialCtx, addr, cfg.DeviceSharedToken, "dev-valid")
+	validConn := dialTestWebSocket(t, validDialCtx, addr, "token-dev-valid", "dev-valid")
 	performClientHello(t, validDialCtx, validConn)
 	validDialCancel()
 
@@ -399,11 +456,18 @@ func TestServer_UpgradeFailure_QuotaReleased(t *testing.T) {
 
 // TestServer_HighConcurrency_RegistrationAndShutdown 验证高并发建连与停服竞态安全。
 func TestServer_HighConcurrency_RegistrationAndShutdown(t *testing.T) {
+	db := setupTestDB(t)
+	concurrency := 15
+	for i := 0; i < concurrency; i++ {
+		seedDeviceToken(t, db, fmt.Sprintf("sn-conc-%d", i), fmt.Sprintf("token-conc-%d", i))
+	}
+
 	cfg := createServerTestConfig(10, 2*time.Second)
 	limiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	registry := session.NewRegistry(limiter, nil)
 	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
 		Config:   cfg,
+		DB:       db,
 		Registry: registry,
 	})
 
@@ -423,7 +487,6 @@ func TestServer_HighConcurrency_RegistrationAndShutdown(t *testing.T) {
 
 	addr := waitForServerReady(t, srv, 2*time.Second)
 
-	concurrency := 15
 	var wg sync.WaitGroup
 
 	for i := 0; i < concurrency; i++ {
@@ -436,7 +499,7 @@ func TestServer_HighConcurrency_RegistrationAndShutdown(t *testing.T) {
 			wsURL := fmt.Sprintf("ws://%s%s", addr, session.WebSocketPath)
 			dialOpts := &websocket.DialOptions{
 				HTTPHeader: http.Header{
-					"Authorization":    []string{"Bearer " + cfg.DeviceSharedToken},
+					"Authorization":    []string{fmt.Sprintf("Bearer token-conc-%d", idx)},
 					"Protocol-Version": []string{"1"},
 					"Device-Id":        []string{fmt.Sprintf("dev-conc-%d", idx)},
 					"Serial-Number":    []string{fmt.Sprintf("sn-conc-%d", idx)},

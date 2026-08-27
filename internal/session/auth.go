@@ -1,13 +1,16 @@
 package session
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
+	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
@@ -37,6 +40,11 @@ var (
 	ErrInvalidToken           = errors.New("invalid authorization token")
 	ErrInvalidProtocolVersion = errors.New("invalid or missing protocol version")
 )
+
+// TokenFinder 定义根据 Access Token 查询设备 Token 记录的接口。
+type TokenFinder interface {
+	FindDeviceAccessTokenByAccessToken(ctx context.Context, accessToken string) (*database.DeviceAccessToken, error)
+}
 
 // ClientHeaderInfo 包含握手请求中提取并脱敏的客户端设备诊断信息。
 type ClientHeaderInfo struct {
@@ -112,9 +120,9 @@ func ValidateHeaders(headers http.Header, maxSingle, maxTotal int) error {
 	return nil
 }
 
-// AuthenticateUpgrade 执行 WebSocket 升级前的请求头校验、协议版本检查与 Token 认证。
+// AuthenticateUpgrade 执行 WebSocket 升级前的请求头校验、协议版本检查与数据库 Token 认证。
 // 校验失败时返回附带 HTTP 状态码的 AuthError；成功时返回提取的客户端诊断信息。
-func AuthenticateUpgrade(r *http.Request, sharedToken string, maxHeaderBytes int) (*ClientHeaderInfo, error) {
+func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int) (*ClientHeaderInfo, error) {
 	if r == nil {
 		return nil, &AuthError{
 			StatusCode: http.StatusBadRequest,
@@ -143,7 +151,7 @@ func AuthenticateUpgrade(r *http.Request, sharedToken string, maxHeaderBytes int
 		}
 	}
 
-	// 3. Authorization Bearer Token 提取与常量时间比对
+	// 3. Authorization Bearer Token 提取
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		return nil, &AuthError{
@@ -168,7 +176,23 @@ func AuthenticateUpgrade(r *http.Request, sharedToken string, maxHeaderBytes int
 		}
 	}
 
-	if sharedToken == "" {
+	if finder == nil {
+		return nil, &AuthError{
+			StatusCode: http.StatusUnauthorized,
+			Err:        ErrInvalidToken,
+		}
+	}
+
+	// 4. 从数据库查询 Access Token 并校验其有效性
+	tok, err := finder.FindDeviceAccessTokenByAccessToken(r.Context(), token)
+	if err != nil {
+		return nil, &AuthError{
+			StatusCode: http.StatusUnauthorized,
+			Err:        ErrInvalidToken,
+		}
+	}
+
+	if !tok.IsValid(time.Now()) {
 		return nil, &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidToken,
@@ -176,7 +200,7 @@ func AuthenticateUpgrade(r *http.Request, sharedToken string, maxHeaderBytes int
 	}
 
 	tokenHash := sha256.Sum256([]byte(token))
-	expectedHash := sha256.Sum256([]byte(sharedToken))
+	expectedHash := sha256.Sum256([]byte(tok.AccessToken))
 	if subtle.ConstantTimeCompare(tokenHash[:], expectedHash[:]) != 1 {
 		return nil, &AuthError{
 			StatusCode: http.StatusUnauthorized,
@@ -184,8 +208,18 @@ func AuthenticateUpgrade(r *http.Request, sharedToken string, maxHeaderBytes int
 		}
 	}
 
-	// 4. 提取客户端设备标识
+	// 5. 提取客户端设备标识并比对 Serial-Number
 	serialNum := strings.TrimSpace(r.Header.Get("Serial-Number"))
+	if serialNum != "" && serialNum != tok.SerialNumber {
+		return nil, &AuthError{
+			StatusCode: http.StatusUnauthorized,
+			Err:        ErrInvalidToken,
+		}
+	}
+	if serialNum == "" {
+		serialNum = tok.SerialNumber
+	}
+
 	deviceID := strings.TrimSpace(r.Header.Get("Device-Id"))
 	clientID := strings.TrimSpace(r.Header.Get("Client-Id"))
 

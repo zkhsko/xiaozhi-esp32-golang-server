@@ -14,9 +14,8 @@ import (
 
 // 敏感配置所需的环境变量名称。
 const (
-	EnvDashScopeAPIKey   = "DASHSCOPE_API_KEY"
-	EnvDeviceSharedToken = "DEVICE_SHARED_TOKEN"
-	EnvDatabaseDSN       = "DATABASE_DSN"
+	EnvDashScopeAPIKey = "DASHSCOPE_API_KEY"
+	EnvDatabaseDSN     = "DATABASE_DSN"
 )
 
 // 合法取值区间边界常量定义。
@@ -164,8 +163,7 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"`
 
 	// 敏感凭据从环境变量注入，不出现在 YAML 配置文件中
-	DashScopeAPIKey   string `yaml:"-"`
-	DeviceSharedToken string `yaml:"-"`
+	DashScopeAPIKey string `yaml:"-"`
 }
 
 // Load 从指定路径的 YAML 文件加载非敏感配置，合并环境变量中的敏感凭据并完成校验。
@@ -189,7 +187,6 @@ func LoadFromReader(r io.Reader) (*Config, error) {
 	}
 
 	cfg.DashScopeAPIKey = os.Getenv(EnvDashScopeAPIKey)
-	cfg.DeviceSharedToken = os.Getenv(EnvDeviceSharedToken)
 	cfg.Database.DSN = os.Getenv(EnvDatabaseDSN)
 
 	if err := cfg.Validate(); err != nil {
@@ -387,9 +384,6 @@ func (c *Config) validateDatabase() error {
 func (c *Config) validateCredentials() error {
 	if strings.TrimSpace(c.DashScopeAPIKey) == "" {
 		return fmt.Errorf("dashscope api key is required (environment variable %s)", EnvDashScopeAPIKey)
-	}
-	if strings.TrimSpace(c.DeviceSharedToken) == "" {
-		return fmt.Errorf("device shared token is required (environment variable %s)", EnvDeviceSharedToken)
 	}
 	return nil
 }

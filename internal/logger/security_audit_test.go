@@ -302,7 +302,6 @@ func TestSecurityAudit_HTTPErrorResponsesNoInternalLeak(t *testing.T) {
 			MaxHTTPBodyBytes:      1024,
 			MaxHTTPHeaderBytes:    256,
 		},
-		DeviceSharedToken: "correct-secret-shared-token",
 	}
 
 	var logBuf bytes.Buffer

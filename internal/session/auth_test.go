@@ -2,31 +2,94 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 const (
-	testSharedToken = "secret-token-123456"
-	testDeviceID    = "dev-device-001"
-	testClientID    = "client-app-002"
-	testSerialNum   = "SN-20260819-ABCD"
-	testUserAgent   = "xiaozhi-esp32-firmware/1.0"
+	testValidToken = "secret-token-123456"
+	testRevokedTok = "revoked-token-111"
+	testExpiredTok = "expired-token-222"
+	testDeviceID   = "dev-device-001"
+	testClientID   = "client-app-002"
+	testSerialNum  = "SN-20260819-ABCD"
+	testUserAgent  = "xiaozhi-esp32-firmware/1.0"
 )
 
-// TestAuthenticateUpgrade_TokenValidation 验证 Token 各种缺失、格式错误、内容错误与正确情况下的认证行为。
+// fakeTokenFinder 实现 TokenFinder 接口，用于测试。
+type fakeTokenFinder struct {
+	tokens map[string]*database.DeviceAccessToken
+	err    error
+}
+
+func (f *fakeTokenFinder) FindDeviceAccessTokenByAccessToken(ctx context.Context, accessToken string) (*database.DeviceAccessToken, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.tokens == nil {
+		return nil, database.ErrAccessTokenNotFound
+	}
+	tok, ok := f.tokens[accessToken]
+	if !ok {
+		return nil, database.ErrAccessTokenNotFound
+	}
+	return tok, nil
+}
+
+func newTestTokenFinder() *fakeTokenFinder {
+	past := time.Now().Add(-1 * time.Hour)
+	future := time.Now().Add(1 * time.Hour)
+
+	return &fakeTokenFinder{
+		tokens: map[string]*database.DeviceAccessToken{
+			testValidToken: {
+				ID:           1,
+				SerialNumber: testSerialNum,
+				AccessToken:  testValidToken,
+				IssuedAt:     time.Now().Add(-10 * time.Minute),
+			},
+			testRevokedTok: {
+				ID:           2,
+				SerialNumber: testSerialNum,
+				AccessToken:  testRevokedTok,
+				IssuedAt:     time.Now().Add(-10 * time.Minute),
+				RevokedAt:    &past,
+			},
+			testExpiredTok: {
+				ID:           3,
+				SerialNumber: testSerialNum,
+				AccessToken:  testExpiredTok,
+				IssuedAt:     time.Now().Add(-10 * time.Minute),
+				ExpiresAt:    &past,
+			},
+			"future-valid-token": {
+				ID:           4,
+				SerialNumber: testSerialNum,
+				AccessToken:  "future-valid-token",
+				IssuedAt:     time.Now().Add(-10 * time.Minute),
+				ExpiresAt:    &future,
+			},
+		},
+	}
+}
+
+// TestAuthenticateUpgrade_TokenValidation 验证 Token 各种缺失、格式错误、内容错误、状态错误与正确情况下的认证行为。
 func TestAuthenticateUpgrade_TokenValidation(t *testing.T) {
 	tests := []struct {
 		name            string
 		authHeader      string
 		setAuthHeader   bool
-		sharedToken     string
+		reqSN           string
+		finder          TokenFinder
 		expectedErr     error
 		expectedStatus  int
 		expectedSuccess bool
@@ -34,7 +97,7 @@ func TestAuthenticateUpgrade_TokenValidation(t *testing.T) {
 		{
 			name:            "缺失 Authorization 头",
 			setAuthHeader:   false,
-			sharedToken:     testSharedToken,
+			finder:          newTestTokenFinder(),
 			expectedErr:     ErrMissingToken,
 			expectedStatus:  http.StatusUnauthorized,
 			expectedSuccess: false,
@@ -43,7 +106,7 @@ func TestAuthenticateUpgrade_TokenValidation(t *testing.T) {
 			name:            "Authorization 头为空字符串",
 			authHeader:      "",
 			setAuthHeader:   true,
-			sharedToken:     testSharedToken,
+			finder:          newTestTokenFinder(),
 			expectedErr:     ErrMissingToken,
 			expectedStatus:  http.StatusUnauthorized,
 			expectedSuccess: false,
@@ -52,7 +115,7 @@ func TestAuthenticateUpgrade_TokenValidation(t *testing.T) {
 			name:            "Bearer 后 Token 为空",
 			authHeader:      "Bearer ",
 			setAuthHeader:   true,
-			sharedToken:     testSharedToken,
+			finder:          newTestTokenFinder(),
 			expectedErr:     ErrInvalidTokenFormat,
 			expectedStatus:  http.StatusUnauthorized,
 			expectedSuccess: false,
@@ -61,61 +124,109 @@ func TestAuthenticateUpgrade_TokenValidation(t *testing.T) {
 			name:            "Bearer 后仅含空格",
 			authHeader:      "Bearer    ",
 			setAuthHeader:   true,
-			sharedToken:     testSharedToken,
+			finder:          newTestTokenFinder(),
 			expectedErr:     ErrInvalidTokenFormat,
 			expectedStatus:  http.StatusUnauthorized,
 			expectedSuccess: false,
 		},
 		{
 			name:            "错误的前缀 Basic",
-			authHeader:      "Basic " + testSharedToken,
+			authHeader:      "Basic " + testValidToken,
 			setAuthHeader:   true,
-			sharedToken:     testSharedToken,
+			finder:          newTestTokenFinder(),
 			expectedErr:     ErrInvalidTokenFormat,
 			expectedStatus:  http.StatusUnauthorized,
 			expectedSuccess: false,
 		},
 		{
 			name:            "小写前缀 bearer",
-			authHeader:      "bearer " + testSharedToken,
+			authHeader:      "bearer " + testValidToken,
 			setAuthHeader:   true,
-			sharedToken:     testSharedToken,
+			finder:          newTestTokenFinder(),
 			expectedErr:     ErrInvalidTokenFormat,
 			expectedStatus:  http.StatusUnauthorized,
 			expectedSuccess: false,
 		},
 		{
 			name:            "无 Bearer 前缀直接为 Token",
-			authHeader:      testSharedToken,
+			authHeader:      testValidToken,
 			setAuthHeader:   true,
-			sharedToken:     testSharedToken,
+			finder:          newTestTokenFinder(),
 			expectedErr:     ErrInvalidTokenFormat,
 			expectedStatus:  http.StatusUnauthorized,
 			expectedSuccess: false,
 		},
 		{
-			name:            "错误的 Token 内容",
-			authHeader:      "Bearer wrong-token-content",
+			name:            "数据库中不存在的 Token",
+			authHeader:      "Bearer non-existent-token",
 			setAuthHeader:   true,
-			sharedToken:     testSharedToken,
+			finder:          newTestTokenFinder(),
 			expectedErr:     ErrInvalidToken,
 			expectedStatus:  http.StatusUnauthorized,
 			expectedSuccess: false,
 		},
 		{
-			name:            "服务端共享 Token 为空时拒绝所有请求",
-			authHeader:      "Bearer " + testSharedToken,
+			name:            "TokenFinder 为 nil 时拒绝所有请求",
+			authHeader:      "Bearer " + testValidToken,
 			setAuthHeader:   true,
-			sharedToken:     "",
+			finder:          nil,
 			expectedErr:     ErrInvalidToken,
 			expectedStatus:  http.StatusUnauthorized,
 			expectedSuccess: false,
 		},
 		{
-			name:            "正确的 Bearer Token 认证成功",
-			authHeader:      "Bearer " + testSharedToken,
+			name:            "已撤销的 Token 拒绝连接",
+			authHeader:      "Bearer " + testRevokedTok,
 			setAuthHeader:   true,
-			sharedToken:     testSharedToken,
+			finder:          newTestTokenFinder(),
+			expectedErr:     ErrInvalidToken,
+			expectedStatus:  http.StatusUnauthorized,
+			expectedSuccess: false,
+		},
+		{
+			name:            "已过期的 Token 拒绝连接",
+			authHeader:      "Bearer " + testExpiredTok,
+			setAuthHeader:   true,
+			finder:          newTestTokenFinder(),
+			expectedErr:     ErrInvalidToken,
+			expectedStatus:  http.StatusUnauthorized,
+			expectedSuccess: false,
+		},
+		{
+			name:            "数据库查询发生系统错误时拒绝连接",
+			authHeader:      "Bearer " + testValidToken,
+			setAuthHeader:   true,
+			finder:          &fakeTokenFinder{err: errors.New("db connection pool exhausted")},
+			expectedErr:     ErrInvalidToken,
+			expectedStatus:  http.StatusUnauthorized,
+			expectedSuccess: false,
+		},
+		{
+			name:            "请求头中 Serial-Number 与数据库 Token 记录不匹配时拒绝",
+			authHeader:      "Bearer " + testValidToken,
+			setAuthHeader:   true,
+			reqSN:           "SN-MISMATCH-999",
+			finder:          newTestTokenFinder(),
+			expectedErr:     ErrInvalidToken,
+			expectedStatus:  http.StatusUnauthorized,
+			expectedSuccess: false,
+		},
+		{
+			name:            "正确的 Bearer Token 且 SN 匹配认证成功",
+			authHeader:      "Bearer " + testValidToken,
+			setAuthHeader:   true,
+			reqSN:           testSerialNum,
+			finder:          newTestTokenFinder(),
+			expectedErr:     nil,
+			expectedStatus:  http.StatusOK,
+			expectedSuccess: true,
+		},
+		{
+			name:            "未过期的带有效期 Token 认证成功",
+			authHeader:      "Bearer future-valid-token",
+			setAuthHeader:   true,
+			reqSN:           testSerialNum,
+			finder:          newTestTokenFinder(),
 			expectedErr:     nil,
 			expectedStatus:  http.StatusOK,
 			expectedSuccess: true,
@@ -126,12 +237,16 @@ func TestAuthenticateUpgrade_TokenValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 			req.Header.Set("Protocol-Version", "1")
-			req.Header.Set("Serial-Number", testSerialNum)
+			if tc.reqSN != "" {
+				req.Header.Set("Serial-Number", tc.reqSN)
+			} else {
+				req.Header.Set("Serial-Number", testSerialNum)
+			}
 			if tc.setAuthHeader {
 				req.Header.Set("Authorization", tc.authHeader)
 			}
 
-			info, err := AuthenticateUpgrade(req, tc.sharedToken, 0)
+			info, err := AuthenticateUpgrade(req, tc.finder, 0)
 			if tc.expectedSuccess {
 				if err != nil {
 					t.Fatalf("expected success, got error: %v", err)
@@ -156,6 +271,7 @@ func TestAuthenticateUpgrade_TokenValidation(t *testing.T) {
 
 // TestAuthenticateUpgrade_ProtocolVersionValidation 验证 Protocol-Version 请求头的严格校验。
 func TestAuthenticateUpgrade_ProtocolVersionValidation(t *testing.T) {
+	finder := newTestTokenFinder()
 	tests := []struct {
 		name            string
 		versionHeader   string
@@ -240,13 +356,13 @@ func TestAuthenticateUpgrade_ProtocolVersionValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
-			req.Header.Set("Authorization", "Bearer "+testSharedToken)
+			req.Header.Set("Authorization", "Bearer "+testValidToken)
 			req.Header.Set("Serial-Number", testSerialNum)
 			if tc.setVersion {
 				req.Header.Set("Protocol-Version", tc.versionHeader)
 			}
 
-			info, err := AuthenticateUpgrade(req, testSharedToken, 0)
+			info, err := AuthenticateUpgrade(req, finder, 0)
 			if tc.expectedSuccess {
 				if err != nil {
 					t.Fatalf("expected success, got error: %v", err)
@@ -271,6 +387,7 @@ func TestAuthenticateUpgrade_ProtocolVersionValidation(t *testing.T) {
 
 // TestAuthenticateUpgrade_HeaderSizeLimits 验证请求头单项与总计长度超限校验。
 func TestAuthenticateUpgrade_HeaderSizeLimits(t *testing.T) {
+	finder := newTestTokenFinder()
 	tests := []struct {
 		name            string
 		setupReq        func(r *http.Request)
@@ -339,13 +456,13 @@ func TestAuthenticateUpgrade_HeaderSizeLimits(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 			req.Header.Set("Protocol-Version", "1")
-			req.Header.Set("Authorization", "Bearer "+testSharedToken)
+			req.Header.Set("Authorization", "Bearer "+testValidToken)
 			req.Header.Set("Serial-Number", testSerialNum)
 			if tc.setupReq != nil {
 				tc.setupReq(req)
 			}
 
-			info, err := AuthenticateUpgrade(req, testSharedToken, tc.maxHeaderBytes)
+			info, err := AuthenticateUpgrade(req, finder, tc.maxHeaderBytes)
 			if tc.expectedSuccess {
 				if err != nil {
 					t.Fatalf("expected success, got error: %v", err)
@@ -368,17 +485,19 @@ func TestAuthenticateUpgrade_HeaderSizeLimits(t *testing.T) {
 	}
 }
 
-// TestAuthenticateUpgrade_ClientHeaderExtraction 验证客户端诊断头信息的提取校验。
+// TestAuthenticateUpgrade_ClientHeaderExtraction 验证客户端诊断头信息的提取校验与 SN 自动推导。
 func TestAuthenticateUpgrade_ClientHeaderExtraction(t *testing.T) {
-	t.Run("缺失 Serial-Number 但携带 Device-Id 握手成功", func(t *testing.T) {
+	finder := newTestTokenFinder()
+
+	t.Run("缺失 Serial-Number 但携带 Device-Id 时握手成功且自动填充 Serial-Number", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 		req.Header.Set("Protocol-Version", "1")
-		req.Header.Set("Authorization", "Bearer "+testSharedToken)
+		req.Header.Set("Authorization", "Bearer "+testValidToken)
 		req.Header.Set("Device-Id", testDeviceID)
 		req.Header.Set("Client-Id", testClientID)
 		req.Header.Set("User-Agent", testUserAgent)
 
-		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
+		info, err := AuthenticateUpgrade(req, finder, 0)
 		if err != nil {
 			t.Fatalf("unexpected error for client without Serial-Number: %v", err)
 		}
@@ -391,53 +510,53 @@ func TestAuthenticateUpgrade_ClientHeaderExtraction(t *testing.T) {
 		if info.ClientID != testClientID {
 			t.Errorf("expected ClientID %q, got %q", testClientID, info.ClientID)
 		}
-		if info.SerialNumber != "" {
-			t.Errorf("expected empty SerialNumber, got %q", info.SerialNumber)
+		if info.SerialNumber != testSerialNum {
+			t.Errorf("expected SerialNumber %q from database token, got %q", testSerialNum, info.SerialNumber)
 		}
 		if info.ProtocolVersion != "1" {
 			t.Errorf("expected ProtocolVersion '1', got %q", info.ProtocolVersion)
 		}
 	})
 
-	t.Run("Serial-Number 为空字符串握手成功", func(t *testing.T) {
+	t.Run("Serial-Number 为空字符串握手成功且自动填充 Serial-Number", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 		req.Header.Set("Protocol-Version", "1")
-		req.Header.Set("Authorization", "Bearer "+testSharedToken)
+		req.Header.Set("Authorization", "Bearer "+testValidToken)
 		req.Header.Set("Device-Id", testDeviceID)
 		req.Header.Set("Serial-Number", "")
 
-		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
+		info, err := AuthenticateUpgrade(req, finder, 0)
 		if err != nil {
 			t.Fatalf("unexpected error for empty Serial-Number: %v", err)
 		}
-		if info.SerialNumber != "" {
-			t.Errorf("expected empty SerialNumber, got %q", info.SerialNumber)
+		if info.SerialNumber != testSerialNum {
+			t.Errorf("expected SerialNumber %q from token record, got %q", testSerialNum, info.SerialNumber)
 		}
 	})
 
 	t.Run("Serial-Number 仅包含空格修剪为空且握手成功", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 		req.Header.Set("Protocol-Version", "1")
-		req.Header.Set("Authorization", "Bearer "+testSharedToken)
+		req.Header.Set("Authorization", "Bearer "+testValidToken)
 		req.Header.Set("Device-Id", testDeviceID)
 		req.Header.Set("Serial-Number", "   ")
 
-		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
+		info, err := AuthenticateUpgrade(req, finder, 0)
 		if err != nil {
 			t.Fatalf("unexpected error for whitespace Serial-Number: %v", err)
 		}
-		if info.SerialNumber != "" {
-			t.Errorf("expected empty SerialNumber, got %q", info.SerialNumber)
+		if info.SerialNumber != testSerialNum {
+			t.Errorf("expected SerialNumber %q from token record, got %q", testSerialNum, info.SerialNumber)
 		}
 	})
 
-	t.Run("携带合法 Serial-Number 接入成功", func(t *testing.T) {
+	t.Run("携带合法且匹配的 Serial-Number 接入成功", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 		req.Header.Set("Protocol-Version", "1")
-		req.Header.Set("Authorization", "Bearer "+testSharedToken)
+		req.Header.Set("Authorization", "Bearer "+testValidToken)
 		req.Header.Set("Serial-Number", testSerialNum)
 
-		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
+		info, err := AuthenticateUpgrade(req, finder, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -455,13 +574,13 @@ func TestAuthenticateUpgrade_ClientHeaderExtraction(t *testing.T) {
 	t.Run("携带完整 Device-Id / Client-Id / Serial-Number 接入成功", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
 		req.Header.Set("Protocol-Version", "1")
-		req.Header.Set("Authorization", "Bearer "+testSharedToken)
+		req.Header.Set("Authorization", "Bearer "+testValidToken)
 		req.Header.Set("Device-Id", testDeviceID)
 		req.Header.Set("Client-Id", testClientID)
 		req.Header.Set("Serial-Number", testSerialNum)
 		req.Header.Set("User-Agent", testUserAgent)
 
-		info, err := AuthenticateUpgrade(req, testSharedToken, 0)
+		info, err := AuthenticateUpgrade(req, finder, 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -479,7 +598,8 @@ func TestAuthenticateUpgrade_ClientHeaderExtraction(t *testing.T) {
 
 // TestAuthenticateUpgrade_NilRequest 验证传入 nil 请求时的边界处理。
 func TestAuthenticateUpgrade_NilRequest(t *testing.T) {
-	info, err := AuthenticateUpgrade(nil, testSharedToken, 0)
+	finder := newTestTokenFinder()
+	info, err := AuthenticateUpgrade(nil, finder, 0)
 	if err == nil {
 		t.Fatal("expected error for nil request, got nil")
 	}
@@ -493,7 +613,8 @@ func TestAuthenticateUpgrade_NilRequest(t *testing.T) {
 
 // TestAuthenticateUpgrade_LogSecurity 验证在认证成功与失败的诊断日志中严禁出现 Token 与 Authorization 明文。
 func TestAuthenticateUpgrade_LogSecurity(t *testing.T) {
-	secretToken := "super-confidential-secret-token-9988"
+	finder := newTestTokenFinder()
+	secretToken := testValidToken
 
 	tests := []struct {
 		name       string
@@ -502,9 +623,9 @@ func TestAuthenticateUpgrade_LogSecurity(t *testing.T) {
 	}{
 		{
 			name:       "认证拒绝日志不得包含 Token 明文",
-			authHeader: "Bearer " + secretToken,
+			authHeader: "Bearer non-existent-secret-token",
 			action: func(l *slog.Logger, r *http.Request) {
-				_, err := AuthenticateUpgrade(r, "different-token", 0)
+				_, err := AuthenticateUpgrade(r, finder, 0)
 				LogAuthRejection(l, r, err)
 			},
 		},
@@ -512,7 +633,7 @@ func TestAuthenticateUpgrade_LogSecurity(t *testing.T) {
 			name:       "认证成功日志不得包含 Token 明文",
 			authHeader: "Bearer " + secretToken,
 			action: func(l *slog.Logger, r *http.Request) {
-				info, err := AuthenticateUpgrade(r, secretToken, 0)
+				info, err := AuthenticateUpgrade(r, finder, 0)
 				if err != nil {
 					t.Fatalf("unexpected auth error: %v", err)
 				}
@@ -521,9 +642,9 @@ func TestAuthenticateUpgrade_LogSecurity(t *testing.T) {
 		},
 		{
 			name:       "通过 RejectUpgrade 输出日志不得包含 Token 明文",
-			authHeader: "Bearer " + secretToken,
+			authHeader: "Bearer non-existent-secret-token",
 			action: func(l *slog.Logger, r *http.Request) {
-				_, err := AuthenticateUpgrade(r, "different-token", 0)
+				_, err := AuthenticateUpgrade(r, finder, 0)
 				rec := httptest.NewRecorder()
 				RejectUpgrade(rec, r, l, err)
 			},
@@ -557,10 +678,11 @@ func TestAuthenticateUpgrade_LogSecurity(t *testing.T) {
 
 // TestRejectUpgrade_PreUpgradeRejection 验证所有拒绝均发生在 WebSocket 协议升级之前，返回标准 HTTP 错误且无协议切换。
 func TestRejectUpgrade_PreUpgradeRejection(t *testing.T) {
+	finder := newTestTokenFinder()
+
 	tests := []struct {
 		name           string
 		reqSetup       func(r *http.Request)
-		sharedToken    string
 		expectedStatus int
 	}{
 		{
@@ -569,7 +691,6 @@ func TestRejectUpgrade_PreUpgradeRejection(t *testing.T) {
 				r.Header.Set("Protocol-Version", "1")
 				r.Header.Set("Serial-Number", testSerialNum)
 			},
-			sharedToken:    testSharedToken,
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
@@ -579,28 +700,25 @@ func TestRejectUpgrade_PreUpgradeRejection(t *testing.T) {
 				r.Header.Set("Authorization", "Bearer wrong-token")
 				r.Header.Set("Serial-Number", testSerialNum)
 			},
-			sharedToken:    testSharedToken,
 			expectedStatus: http.StatusUnauthorized,
 		},
 		{
 			name: "协议版本非法返回 400 且不执行升级",
 			reqSetup: func(r *http.Request) {
 				r.Header.Set("Protocol-Version", "99")
-				r.Header.Set("Authorization", "Bearer "+testSharedToken)
+				r.Header.Set("Authorization", "Bearer "+testValidToken)
 				r.Header.Set("Serial-Number", testSerialNum)
 			},
-			sharedToken:    testSharedToken,
 			expectedStatus: http.StatusBadRequest,
 		},
 		{
 			name: "Header 超长返回 400 且不执行升级",
 			reqSetup: func(r *http.Request) {
 				r.Header.Set("Protocol-Version", "1")
-				r.Header.Set("Authorization", "Bearer "+testSharedToken)
+				r.Header.Set("Authorization", "Bearer "+testValidToken)
 				r.Header.Set("Serial-Number", testSerialNum)
 				r.Header.Set("Device-Id", strings.Repeat("x", 2000))
 			},
-			sharedToken:    testSharedToken,
 			expectedStatus: http.StatusBadRequest,
 		},
 	}
@@ -618,7 +736,7 @@ func TestRejectUpgrade_PreUpgradeRejection(t *testing.T) {
 			var logBuf bytes.Buffer
 			testLogger := logger.New(&logBuf, slog.LevelDebug)
 
-			_, err := AuthenticateUpgrade(req, tc.sharedToken, 0)
+			_, err := AuthenticateUpgrade(req, finder, 0)
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}

@@ -39,7 +39,6 @@ server:
 在终端设置环境变量（敏感凭据不写入配置文件）：
 ```bash
 export DASHSCOPE_API_KEY="sk-your-dashscope-api-key"
-export DEVICE_SHARED_TOKEN="your-device-token"
 
 # 数据库连接串（支持 sqlite / mysql / postgres）：
 # SQLite:
@@ -93,7 +92,7 @@ curl http://127.0.0.1:8080/xiaozhi/ota/
 ## 常见排查
 
 - **设备连不上**：检查防火墙是否放行 `8080` 端口；确认 `websocket_url` 是实际局域网 IP（不能是 `127.0.0.1`）；
-- **报 401 错误**：检查终端是否导出 `DEVICE_SHARED_TOKEN`；
+- **报 401 错误**：检查设备是否已完成用户绑定并获取到有效 Access Token；数据库中 Token 是否已过期或被撤销；
 - **无声音或超时**：检查 `DASHSCOPE_API_KEY` 是否有效且有余额；
 - **编译报 opus 缺失**：macOS 运行 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"`。
 

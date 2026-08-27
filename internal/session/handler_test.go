@@ -19,6 +19,7 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
@@ -41,7 +42,7 @@ func (s *safeBuffer) String() string {
 }
 
 // createTestConfig 创建测试用的服务端配置对象。
-func createTestConfig(token string, maxSessions int) *config.Config {
+func createTestConfig(maxSessions int) *config.Config {
 	return &config.Config{
 		Server: config.ServerConfig{
 			ListenAddr:            ":8080",
@@ -53,8 +54,31 @@ func createTestConfig(token string, maxSessions int) *config.Config {
 			HelloTimeout:          10 * time.Second,
 			MaxWSTextMessageBytes: 32768,
 		},
-		DeviceSharedToken: token,
 	}
+}
+
+func newSingleTokenDB(token, sn string) TokenFinder {
+	return &fakeTokenFinder{
+		tokens: map[string]*database.DeviceAccessToken{
+			token: {
+				SerialNumber: sn,
+				AccessToken:  token,
+				IssuedAt:     time.Now(),
+			},
+		},
+	}
+}
+
+func newMultiTokenDB(tokenMap map[string]string) TokenFinder {
+	tokens := make(map[string]*database.DeviceAccessToken, len(tokenMap))
+	for tok, sn := range tokenMap {
+		tokens[tok] = &database.DeviceAccessToken{
+			SerialNumber: sn,
+			AccessToken:  tok,
+			IssuedAt:     time.Now(),
+		}
+	}
+	return &fakeTokenFinder{tokens: tokens}
 }
 
 // dialWebSocketHelper 辅助创建带认证信息的 WebSocket 客户端连接。
@@ -91,7 +115,7 @@ func waitQuotaReleased(t *testing.T, limiter *SessionLimiter, timeout time.Durat
 
 // TestHandler_PathNotFound 验证访问非 WebSocketPath 时直接返回 404。
 func TestHandler_PathNotFound(t *testing.T) {
-	cfg := createTestConfig("valid-token", 5)
+	cfg := createTestConfig(5)
 	h := NewHandler(HandlerOptions{Config: cfg})
 
 	req := httptest.NewRequest(http.MethodGet, "/other/path", nil)
@@ -109,10 +133,12 @@ func TestHandler_AuthRejectionBeforeLimiter(t *testing.T) {
 	var buf safeBuffer
 	testLogger := logger.New(&buf, slog.LevelInfo)
 
-	cfg := createTestConfig("correct-token", 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
+	db := newSingleTokenDB("correct-token", "test-sn")
 	h := NewHandler(HandlerOptions{
 		Config:  cfg,
+		DB:      db,
 		Limiter: limiter,
 		Logger:  testLogger,
 	})
@@ -144,6 +170,13 @@ func TestHandler_AuthRejectionBeforeLimiter(t *testing.T) {
 			protoVer:       "99",
 			serialNum:      "test-sn",
 			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "Serial-Number 与 Token 记录不一致",
+			token:          "Bearer correct-token",
+			protoVer:       "1",
+			serialNum:      "mismatch-sn",
+			expectedStatus: http.StatusUnauthorized,
 		},
 	}
 
@@ -178,11 +211,16 @@ func TestHandler_AuthRejectionBeforeLimiter(t *testing.T) {
 // TestHandler_MaxCapacityRejection_503 验证满载拒绝返回 503、未升级且连接关闭后名额可复用。
 func TestHandler_MaxCapacityRejection_503(t *testing.T) {
 	const maxSessions = 2
-	const token = "secret-token-pass"
+	tokenMap := map[string]string{
+		"token-client-1": "sn-client-1",
+		"token-client-2": "sn-client-2",
+		"token-client-3": "sn-client-3",
+	}
 
-	cfg := createTestConfig(token, maxSessions)
+	cfg := createTestConfig(maxSessions)
 	limiter := NewSessionLimiter(maxSessions)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newMultiTokenDB(tokenMap)
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -191,9 +229,9 @@ func TestHandler_MaxCapacityRejection_503(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + WebSocketPath
 
-	dialOpts := &websocket.DialOptions{
+	dialOpts1 := &websocket.DialOptions{
 		HTTPHeader: http.Header{
-			"Authorization":    []string{"Bearer " + token},
+			"Authorization":    []string{"Bearer token-client-1"},
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"device-client-1"},
 			"Serial-Number":    []string{"sn-client-1"},
@@ -204,7 +242,7 @@ func TestHandler_MaxCapacityRejection_503(t *testing.T) {
 	defer cancel()
 
 	// 1. 建立第 1 个连接
-	conn1, _, err := websocket.Dial(ctx, wsURL, dialOpts)
+	conn1, _, err := websocket.Dial(ctx, wsURL, dialOpts1)
 	if err != nil {
 		t.Fatalf("failed to dial conn1: %v", err)
 	}
@@ -217,7 +255,7 @@ func TestHandler_MaxCapacityRejection_503(t *testing.T) {
 	// 2. 建立第 2 个连接
 	dialOpts2 := &websocket.DialOptions{
 		HTTPHeader: http.Header{
-			"Authorization":    []string{"Bearer " + token},
+			"Authorization":    []string{"Bearer token-client-2"},
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"device-client-2"},
 			"Serial-Number":    []string{"sn-client-2"},
@@ -236,7 +274,7 @@ func TestHandler_MaxCapacityRejection_503(t *testing.T) {
 	// 3. 尝试建立第 3 个连接（超出并发容量，应当收到 503 拒绝）
 	dialOpts3 := &websocket.DialOptions{
 		HTTPHeader: http.Header{
-			"Authorization":    []string{"Bearer " + token},
+			"Authorization":    []string{"Bearer token-client-3"},
 			"Protocol-Version": []string{"1"},
 			"Device-Id":        []string{"device-client-3"},
 			"Serial-Number":    []string{"sn-client-3"},
@@ -284,9 +322,10 @@ func TestHandler_MaxCapacityRejection_503(t *testing.T) {
 // TestHandler_NonWebSocketRequestReleaseQuota 验证升级失败（非 WebSocket 请求）时名额恰好被释放。
 func TestHandler_NonWebSocketRequestReleaseQuota(t *testing.T) {
 	const token = "secret-token-test"
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, "test-sn")
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -321,9 +360,10 @@ func TestHandler_NonWebSocketRequestReleaseQuota(t *testing.T) {
 // TestHandler_CompressionDisabled 验证握手升级显式禁用压缩。
 func TestHandler_CompressionDisabled(t *testing.T) {
 	const token = "secret-token-comp"
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, "sn-comp-check")
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -362,11 +402,18 @@ func TestHandler_CompressionDisabled(t *testing.T) {
 func TestHandler_ConcurrentSessionsWithRace(t *testing.T) {
 	const maxSessions = 5
 	const concurrency = 25
-	const token = "secret-token-concurrent"
 
-	cfg := createTestConfig(token, maxSessions)
+	tokenMap := make(map[string]string, concurrency)
+	for i := 0; i < concurrency; i++ {
+		tok := fmt.Sprintf("token-concurrent-%d", i)
+		sn := fmt.Sprintf("sn-device-%d", i)
+		tokenMap[tok] = sn
+	}
+
+	cfg := createTestConfig(maxSessions)
 	limiter := NewSessionLimiter(maxSessions)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newMultiTokenDB(tokenMap)
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -379,8 +426,12 @@ func TestHandler_ConcurrentSessionsWithRace(t *testing.T) {
 	wg.Add(concurrency)
 
 	for i := 0; i < concurrency; i++ {
-		deviceID := fmt.Sprintf("device-%d", i)
-		go func(id string) {
+		idx := i
+		deviceID := fmt.Sprintf("device-%d", idx)
+		tok := fmt.Sprintf("token-concurrent-%d", idx)
+		sn := fmt.Sprintf("sn-device-%d", idx)
+
+		go func(id, token, sn string) {
 			defer wg.Done()
 
 			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
@@ -391,7 +442,7 @@ func TestHandler_ConcurrentSessionsWithRace(t *testing.T) {
 					"Authorization":    []string{"Bearer " + token},
 					"Protocol-Version": []string{"1"},
 					"Device-Id":        []string{id},
-					"Serial-Number":    []string{"sn-" + id},
+					"Serial-Number":    []string{sn},
 				},
 			}
 
@@ -414,7 +465,7 @@ func TestHandler_ConcurrentSessionsWithRace(t *testing.T) {
 
 			// 保持短暂连接后退出
 			time.Sleep(20 * time.Millisecond)
-		}(deviceID)
+		}(deviceID, tok, sn)
 	}
 
 	wg.Wait()
@@ -433,9 +484,10 @@ func TestHandler_ConcurrentSessionsWithRace(t *testing.T) {
 // TestHandler_HelloHandshake_Success 验证合法客户端 hello 消息请求下，服务端下发正确且唯一的 hello 响应。
 func TestHandler_HelloHandshake_Success(t *testing.T) {
 	const token = "hello-test-token"
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, "test-serial-number")
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -532,9 +584,10 @@ func TestHandler_HelloHandshake_Success(t *testing.T) {
 // TestHandler_HelloHandshake_WithMCPDiscovery 验证客户端带有 features.mcp=true 时服务端发起 MCP 初始化与工具发现。
 func TestHandler_HelloHandshake_WithMCPDiscovery(t *testing.T) {
 	const token = "hello-mcp-test-token"
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, "test-serial-number")
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -636,11 +689,12 @@ func TestHandler_HelloHandshake_WithMCPDiscovery(t *testing.T) {
 // TestHandler_HelloHandshake_Timeout 验证升级后未在超时时间内发送 hello 则主动断开连接。
 func TestHandler_HelloHandshake_Timeout(t *testing.T) {
 	const token = "hello-timeout-token"
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	cfg.Session.HelloTimeout = 100 * time.Millisecond // 设置极短超时以加快测试
 
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, "test-serial-number")
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -671,9 +725,10 @@ func TestHandler_HelloHandshake_Timeout(t *testing.T) {
 // TestHandler_HelloHandshake_BinaryFirstMessage 验证首包发送二进制消息时直接关闭连接。
 func TestHandler_HelloHandshake_BinaryFirstMessage(t *testing.T) {
 	const token = "hello-binary-first-token"
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, "test-serial-number")
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -797,9 +852,10 @@ func TestHandler_HelloHandshake_FieldValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			const token = "field-validation-token"
-			cfg := createTestConfig(token, 2)
+			cfg := createTestConfig(2)
 			limiter := NewSessionLimiter(2)
-			handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+			db := newSingleTokenDB(token, "test-serial-number")
+			handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 			mux := http.NewServeMux()
 			mux.Handle(WebSocketPath, handler)
@@ -834,9 +890,10 @@ func TestHandler_HelloHandshake_FieldValidation(t *testing.T) {
 // TestHandler_HelloHandshake_MalformedJSON 验证首包为畸形 JSON 时服务端关闭连接。
 func TestHandler_HelloHandshake_MalformedJSON(t *testing.T) {
 	const token = "malformed-json-token"
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, "test-serial-number")
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -870,11 +927,12 @@ func TestHandler_HelloHandshake_MalformedJSON(t *testing.T) {
 // TestHandler_HelloHandshake_MessageTooBig 验证发送超限文本消息时连接被关闭。
 func TestHandler_HelloHandshake_MessageTooBig(t *testing.T) {
 	const token = "too-big-token"
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	cfg.Session.MaxWSTextMessageBytes = 4096 // 设置为 4 KiB 限制
 
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, "test-serial-number")
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -905,9 +963,10 @@ func TestHandler_HelloHandshake_MessageTooBig(t *testing.T) {
 // TestHandler_HelloHandshake_DuplicateHello 验证握手成功后重复收到 hello 消息主动关闭连接。
 func TestHandler_HelloHandshake_DuplicateHello(t *testing.T) {
 	const token = "dup-hello-token"
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, "test-serial-number")
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -971,10 +1030,12 @@ func TestHandler_HelloHandshake_NoAICalls(t *testing.T) {
 	testLogger := logger.New(&logBuf, slog.LevelDebug)
 
 	const token = "no-ai-token"
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
+	db := newSingleTokenDB(token, "test-serial-number")
 	handler := NewHandler(HandlerOptions{
 		Config:  cfg,
+		DB:      db,
 		Limiter: limiter,
 		Logger:  testLogger,
 	})
@@ -1048,7 +1109,7 @@ func (f *fakeTTSClientForTest) CreateStream(ctx context.Context) (ai.TTSStream, 
 
 // TestHandler_AIClientsInjection 验证 Handler 与 Session 正确持有注入的 ASRClient、LLMClient 与 TTSClient 依赖。
 func TestHandler_AIClientsInjection(t *testing.T) {
-	cfg := createTestConfig("token", 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
 	var fakeASR ai.ASRClient = &fakeASRClientForTest{}
 	var fakeLLM ai.LLMClient = &fakeLLMClientForTest{}
@@ -1095,9 +1156,10 @@ func TestHandler_DuplicateSerialNumber_EvictsOldConnectionE2E(t *testing.T) {
 	const token = "e2e-evict-token"
 	const serialNum = "SN-E2E-EVICT-001"
 
-	cfg := createTestConfig(token, 5)
+	cfg := createTestConfig(5)
 	limiter := NewSessionLimiter(5)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, serialNum)
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -1202,9 +1264,10 @@ func TestHandler_DuplicateSerialNumber_EvictsOldConnectionE2E(t *testing.T) {
 func TestHandler_WithoutSerialNumber_Succeeds(t *testing.T) {
 	const token = "no-sn-token"
 
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, "SN-AUTO-ASSIGNED")
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -1255,9 +1318,10 @@ func TestHandler_V1_DuplicateDeviceID_EvictsOldConnectionE2E(t *testing.T) {
 	const token = "v1-evict-token"
 	const deviceID = "90:70:69:17:c3:b0"
 
-	cfg := createTestConfig(token, 5)
+	cfg := createTestConfig(5)
 	limiter := NewSessionLimiter(5)
-	handler := NewHandler(HandlerOptions{Config: cfg, Limiter: limiter})
+	db := newSingleTokenDB(token, "SN-V1-EVICT")
+	handler := NewHandler(HandlerOptions{Config: cfg, DB: db, Limiter: limiter})
 
 	mux := http.NewServeMux()
 	mux.Handle(WebSocketPath, handler)
@@ -1358,10 +1422,12 @@ func TestHandler_ClientEOF_LoggedAsInfo(t *testing.T) {
 	var buf safeBuffer
 	testLogger := logger.New(&buf, slog.LevelInfo)
 
-	cfg := createTestConfig(token, 2)
+	cfg := createTestConfig(2)
 	limiter := NewSessionLimiter(2)
+	db := newSingleTokenDB(token, "test-serial-number")
 	handler := NewHandler(HandlerOptions{
 		Config:  cfg,
+		DB:      db,
 		Limiter: limiter,
 		Logger:  testLogger,
 	})

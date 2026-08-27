@@ -114,14 +114,12 @@ func newValidConfig() config.Config {
 			PingTimeout:           3 * time.Second,
 			DSN:                   "file:test.db",
 		},
-		DashScopeAPIKey:   "test-dashscope-api-key",
-		DeviceSharedToken: "test-device-shared-token",
+		DashScopeAPIKey: "test-dashscope-api-key",
 	}
 }
 
 func TestLoadFromReader_Valid(t *testing.T) {
 	t.Setenv(config.EnvDashScopeAPIKey, "test-dashscope-api-key")
-	t.Setenv(config.EnvDeviceSharedToken, "test-device-shared-token")
 	t.Setenv(config.EnvDatabaseDSN, "file:valid.db")
 
 	cfg, err := config.LoadFromReader(strings.NewReader(validYAML))
@@ -246,14 +244,10 @@ func TestLoadFromReader_Valid(t *testing.T) {
 	if cfg.DashScopeAPIKey != "test-dashscope-api-key" {
 		t.Errorf("expected DashScopeAPIKey match, got %s", cfg.DashScopeAPIKey)
 	}
-	if cfg.DeviceSharedToken != "test-device-shared-token" {
-		t.Errorf("expected DeviceSharedToken match, got %s", cfg.DeviceSharedToken)
-	}
 }
 
 func TestLoad_ExampleConfigFile(t *testing.T) {
 	t.Setenv(config.EnvDashScopeAPIKey, "test-dashscope-api-key")
-	t.Setenv(config.EnvDeviceSharedToken, "test-device-shared-token")
 	t.Setenv(config.EnvDatabaseDSN, "file:example.db")
 
 	examplePath := filepath.Join("..", "..", "config.example.yaml")
@@ -287,7 +281,6 @@ server:
 
 func TestLoadFromReader_MissingCredentials(t *testing.T) {
 	t.Setenv(config.EnvDashScopeAPIKey, "")
-	t.Setenv(config.EnvDeviceSharedToken, "")
 	t.Setenv(config.EnvDatabaseDSN, "file:valid.db")
 
 	_, err := config.LoadFromReader(strings.NewReader(validYAML))
@@ -301,7 +294,6 @@ func TestLoadFromReader_MissingCredentials(t *testing.T) {
 
 func TestLoadFromReader_MissingDatabaseDSN(t *testing.T) {
 	t.Setenv(config.EnvDashScopeAPIKey, "test-dashscope-api-key")
-	t.Setenv(config.EnvDeviceSharedToken, "test-device-shared-token")
 	t.Setenv(config.EnvDatabaseDSN, "")
 
 	_, err := config.LoadFromReader(strings.NewReader(validYAML))
@@ -458,20 +450,6 @@ func TestConfig_Validate_TableDriven(t *testing.T) {
 				c.DashScopeAPIKey = "   "
 			},
 			expectError: "dashscope api key is required",
-		},
-		{
-			name: "credentials device shared token empty",
-			modify: func(c *config.Config) {
-				c.DeviceSharedToken = ""
-			},
-			expectError: "device shared token is required",
-		},
-		{
-			name: "credentials device shared token whitespace only",
-			modify: func(c *config.Config) {
-				c.DeviceSharedToken = "   "
-			},
-			expectError: "device shared token is required",
 		},
 
 		// 2. 非法 URL 格式与 Scheme 校验
@@ -1056,13 +1034,11 @@ func TestConfig_Validate_TableDriven(t *testing.T) {
 func TestConfig_Validate_CredentialLeakSafety(t *testing.T) {
 	const (
 		sensitiveAPIKey = "super-secret-api-key-value-987654321"
-		sensitiveToken  = "super-secret-device-token-123456789"
 		sensitiveDSN    = "super-secret-database-dsn-xyz987"
 	)
 
 	cfg := newValidConfig()
 	cfg.DashScopeAPIKey = sensitiveAPIKey
-	cfg.DeviceSharedToken = sensitiveToken
 	cfg.Database.DSN = sensitiveDSN
 	// 触发某种校验失败
 	cfg.Server.ListenAddr = ""
@@ -1076,9 +1052,6 @@ func TestConfig_Validate_CredentialLeakSafety(t *testing.T) {
 	if strings.Contains(errMsg, sensitiveAPIKey) {
 		t.Fatalf("error message leaked sensitive api key: %s", errMsg)
 	}
-	if strings.Contains(errMsg, sensitiveToken) {
-		t.Fatalf("error message leaked sensitive token: %s", errMsg)
-	}
 	if strings.Contains(errMsg, sensitiveDSN) {
 		t.Fatalf("error message leaked sensitive database dsn: %s", errMsg)
 	}
@@ -1086,7 +1059,6 @@ func TestConfig_Validate_CredentialLeakSafety(t *testing.T) {
 
 func TestLoadFromReader_DatabaseDSNFromEnv(t *testing.T) {
 	t.Setenv(config.EnvDashScopeAPIKey, "test-dashscope-api-key")
-	t.Setenv(config.EnvDeviceSharedToken, "test-device-shared-token")
 	t.Setenv(config.EnvDatabaseDSN, "file:env-injected.db")
 
 	yamlContent := `

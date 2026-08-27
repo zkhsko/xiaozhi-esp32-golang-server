@@ -67,7 +67,6 @@ func newTestConfig(token string, wsURL string) *config.Config {
 			MaxHTTPBodyBytes:      65536,
 			MaxHTTPHeaderBytes:    8192,
 		},
-		DeviceSharedToken: token,
 	}
 }
 

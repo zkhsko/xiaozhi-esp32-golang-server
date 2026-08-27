@@ -15,6 +15,7 @@ import (
 // Handler 处理 WebSocket 协议升级、会话准入控制与连接生命周期。
 type Handler struct {
 	cfg       *config.Config
+	db        TokenFinder
 	registry  *Registry
 	asrClient ai.ASRClient
 	llmClient ai.LLMClient
@@ -25,6 +26,7 @@ type Handler struct {
 // HandlerOptions 聚合创建 WebSocket HTTP 升级处理器的依赖与配置。
 type HandlerOptions struct {
 	Config    *config.Config
+	DB        TokenFinder
 	Limiter   *SessionLimiter
 	Registry  *Registry
 	ASRClient ai.ASRClient
@@ -55,6 +57,7 @@ func NewHandler(opts HandlerOptions) *Handler {
 
 	return &Handler{
 		cfg:       opts.Config,
+		db:        opts.DB,
 		registry:  reg,
 		asrClient: opts.ASRClient,
 		llmClient: opts.LLMClient,
@@ -112,17 +115,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. 升级前认证与请求头校验
-	sharedToken := ""
+	// 2. 升级前认证与请求头校验（从数据库查询 Token 鉴权）
 	maxHeaderBytes := MaxSingleHeaderBytes
-	if h.cfg != nil {
-		sharedToken = h.cfg.DeviceSharedToken
-		if h.cfg.Server.MaxHTTPHeaderBytes > 0 {
-			maxHeaderBytes = h.cfg.Server.MaxHTTPHeaderBytes
-		}
+	if h.cfg != nil && h.cfg.Server.MaxHTTPHeaderBytes > 0 {
+		maxHeaderBytes = h.cfg.Server.MaxHTTPHeaderBytes
 	}
 
-	clientInfo, err := AuthenticateUpgrade(r, sharedToken, maxHeaderBytes)
+	clientInfo, err := AuthenticateUpgrade(r, h.db, maxHeaderBytes)
 	if err != nil {
 		RejectUpgrade(w, r, h.logger, err)
 		return

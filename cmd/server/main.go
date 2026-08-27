@@ -81,6 +81,7 @@ func main() {
 	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
 		Config:    cfg,
+		DB:        db,
 		Limiter:   sessionLimiter,
 		ASRClient: asrClient,
 		LLMClient: llmClient,
