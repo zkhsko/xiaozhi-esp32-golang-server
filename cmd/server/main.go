@@ -89,8 +89,10 @@ func main() {
 	})
 
 	otaHandler := router.NewOTAHandler(cfg, db, slog.Default())
+	userHandler := router.NewUserHandler(cfg, db, otaHandler, slog.Default())
 	httpRouter := router.NewRouter(router.Options{
 		OTA:              otaHandler,
+		User:             userHandler,
 		WebsocketSession: websocketSessionHandler,
 	})
 

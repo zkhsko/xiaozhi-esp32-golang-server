@@ -283,3 +283,53 @@ func (d *Database) TransferDeviceBinding(ctx context.Context, serialNumber strin
 
 	return nil
 }
+
+// UpsertDeviceUserRef 插入或更新设备与用户的绑定关系。
+// 若设备已有绑定记录，则更新其绑定的用户 ID；若无绑定记录，则创建新的绑定记录。
+func (d *Database) UpsertDeviceUserRef(ctx context.Context, serialNumber string, userID uint64) (*DeviceUserRef, error) {
+	if d == nil || d.gormDB == nil {
+		return nil, ErrDatabaseInstanceRequired
+	}
+
+	trimmedSN := strings.TrimSpace(serialNumber)
+	if trimmedSN == "" {
+		return nil, ErrEmptySerialNumber
+	}
+	if userID == 0 {
+		return nil, ErrEmptyUserID
+	}
+
+	var ref DeviceUserRef
+	err := d.gormDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing DeviceUserRef
+		findErr := tx.Where("serial_number = ?", trimmedSN).Take(&existing).Error
+		if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("query device user ref: %w", findErr)
+		}
+
+		if errors.Is(findErr, gorm.ErrRecordNotFound) {
+			ref = DeviceUserRef{
+				SerialNumber: trimmedSN,
+				UserID:       userID,
+			}
+			if err := tx.Create(&ref).Error; err != nil {
+				return fmt.Errorf("create device user ref: %w", err)
+			}
+			return nil
+		}
+
+		if existing.UserID != userID {
+			if err := tx.Model(&existing).Update("user_id", userID).Error; err != nil {
+				return fmt.Errorf("update device user ref: %w", err)
+			}
+		}
+		ref = existing
+		ref.UserID = userID
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("upsert device user ref: %w", err)
+	}
+
+	return &ref, nil
+}

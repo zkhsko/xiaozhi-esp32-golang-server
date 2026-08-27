@@ -258,6 +258,60 @@ func TestDeviceUserRef_TransferDeviceBinding(t *testing.T) {
 	}
 }
 
+func TestDeviceUserRef_UpsertDeviceUserRef(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	sn := "SN-UPSERT-USER-REF-001"
+	var user1 uint64 = 80001
+	var user2 uint64 = 80002
+
+	// 1. 不存在时创建
+	ref1, err := db.UpsertDeviceUserRef(ctx, sn, user1)
+	if err != nil {
+		t.Fatalf("failed to upsert new device user ref: %v", err)
+	}
+	if ref1.SerialNumber != sn || ref1.UserID != user1 {
+		t.Errorf("unexpected ref1: %+v", ref1)
+	}
+
+	// 2. 再次 upsert 相同用户 -> 幂等
+	ref1Same, err := db.UpsertDeviceUserRef(ctx, sn, user1)
+	if err != nil {
+		t.Fatalf("failed to upsert same device user ref: %v", err)
+	}
+	if ref1Same.UserID != user1 {
+		t.Errorf("expected user_id %d, got %d", user1, ref1Same.UserID)
+	}
+
+	// 3. 存在时更新为新用户
+	ref2, err := db.UpsertDeviceUserRef(ctx, sn, user2)
+	if err != nil {
+		t.Fatalf("failed to update device user ref to user2: %v", err)
+	}
+	if ref2.UserID != user2 {
+		t.Errorf("expected updated user_id %d, got %d", user2, ref2.UserID)
+	}
+
+	found, err := db.FindDeviceUserRefBySerialNumber(ctx, sn)
+	if err != nil {
+		t.Fatalf("failed to find device user ref after upsert: %v", err)
+	}
+	if found.UserID != user2 {
+		t.Errorf("expected found user_id %d, got %d", user2, found.UserID)
+	}
+
+	// 4. 参数校验
+	_, err = db.UpsertDeviceUserRef(ctx, "", user1)
+	if !errors.Is(err, database.ErrEmptySerialNumber) {
+		t.Errorf("expected ErrEmptySerialNumber, got: %v", err)
+	}
+	_, err = db.UpsertDeviceUserRef(ctx, sn, 0)
+	if !errors.Is(err, database.ErrEmptyUserID) {
+		t.Errorf("expected ErrEmptyUserID, got: %v", err)
+	}
+}
+
 func TestDeviceUserRef_DuplicateSerialNumber_Fails(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()

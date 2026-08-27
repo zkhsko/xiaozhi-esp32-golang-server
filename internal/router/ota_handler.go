@@ -135,6 +135,16 @@ func (h *OTAHandler) FindPendingActivationByChallenge(challenge string) (Pending
 	return item.Value(), true
 }
 
+// DeletePendingActivation 根据 Code 和/或 Challenge 清理待激活内存缓存。
+func (h *OTAHandler) DeletePendingActivation(code, challenge string) {
+	if h.codeCache != nil && code != "" {
+		h.codeCache.Delete(code)
+	}
+	if h.challengeCache != nil && challenge != "" {
+		h.challengeCache.Delete(challenge)
+	}
+}
+
 // generateActivationCode 使用 crypto/rand 生成 6 位随机数字字符串（000000 - 999999）。
 func generateActivationCode() (string, error) {
 	n, err := rand.Int(rand.Reader, big.NewInt(1000000))

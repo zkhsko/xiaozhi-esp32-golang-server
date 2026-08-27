@@ -12,6 +12,7 @@ import (
 // Options 聚合顶层路由依赖的各个业务模块 Handler。
 type Options struct {
 	OTA              *OTAHandler
+	User             *UserHandler
 	WebsocketSession *session.Handler
 }
 
@@ -31,6 +32,10 @@ func NewRouter(opts Options) http.Handler {
 			})
 		}
 	})
+
+	if opts.User != nil {
+		r.Mount("/user-api", opts.User.Routes())
+	}
 
 	return r
 }
