@@ -64,6 +64,82 @@ func (DeviceActivation) TableName() string {
 	return "device_activation"
 }
 
+// ActivateDeviceBySerialNumber 完成有序列号设备的激活或重新激活操作。
+// 业务流程（在事务中执行）：
+//  1. 根据 serialNumber 查询 device_activation 表；
+//  2. 若未激活过（记录不存在）：创建新的激活记录（status=active, activated_at=now）；
+//  3. 若已激活过（记录已存在）：更新 device_id、client_id、activation_status=active；
+//     并删除 device_user_ref 表中该 serialNumber 绑定的旧用户记录（保证重新激活后需重新绑定用户）。
+func (d *Database) ActivateDeviceBySerialNumber(ctx context.Context, serialNumber, deviceID, clientID string) (*DeviceActivation, error) {
+	if d == nil || d.gormDB == nil {
+		return nil, ErrDatabaseInstanceRequired
+	}
+
+	trimmedSN := strings.TrimSpace(serialNumber)
+	if trimmedSN == "" {
+		return nil, ErrEmptySerialNumber
+	}
+	trimmedDeviceID := strings.TrimSpace(deviceID)
+	trimmedClientID := strings.TrimSpace(clientID)
+
+	var act DeviceActivation
+	err := d.gormDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing DeviceActivation
+		findErr := tx.Where("serial_number = ?", trimmedSN).Take(&existing).Error
+		if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("query device activation: %w", findErr)
+		}
+
+		now := time.Now()
+		if errors.Is(findErr, gorm.ErrRecordNotFound) {
+			act = DeviceActivation{
+				SerialNumber:     trimmedSN,
+				DeviceID:         trimmedDeviceID,
+				ClientID:         trimmedClientID,
+				ActivationStatus: ActivationStatusActive,
+				ActivatedAt:      now,
+			}
+			if err := tx.Create(&act).Error; err != nil {
+				return fmt.Errorf("create device activation: %w", err)
+			}
+			return nil
+		}
+
+		updates := map[string]any{
+			"activation_status": ActivationStatusActive,
+		}
+		if trimmedDeviceID != "" {
+			updates["device_id"] = trimmedDeviceID
+		}
+		if trimmedClientID != "" {
+			updates["client_id"] = trimmedClientID
+		}
+
+		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+			return fmt.Errorf("update device activation: %w", err)
+		}
+
+		if err := tx.Where("serial_number = ?", trimmedSN).Delete(&DeviceUserRef{}).Error; err != nil {
+			return fmt.Errorf("delete device user ref on reactivate: %w", err)
+		}
+
+		act = existing
+		if trimmedDeviceID != "" {
+			act.DeviceID = trimmedDeviceID
+		}
+		if trimmedClientID != "" {
+			act.ClientID = trimmedClientID
+		}
+		act.ActivationStatus = ActivationStatusActive
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("activate device: %w", err)
+	}
+
+	return &act, nil
+}
+
 // IsActive 判断设备激活状态当前是否可用。
 func (a *DeviceActivation) IsActive() bool {
 	if a == nil {

@@ -12,6 +12,7 @@ func (h *OTAHandler) Routes() http.Handler {
 
 	r.Get("/", h.handleOTA)
 	r.Post("/", h.handleOTA)
+	r.Post("/activate", h.handleActivate)
 
 	return r
 }

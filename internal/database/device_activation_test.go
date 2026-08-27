@@ -480,3 +480,80 @@ func TestDeviceActivation_IsActiveHelper(t *testing.T) {
 		t.Error("expected revoked.IsActive() to be false")
 	}
 }
+
+func TestDeviceActivation_ActivateDeviceBySerialNumber_NewAndReactivate(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	sn := "SN-ACTIVATE-TEST-001"
+	deviceID1 := "DEV-ESP32-INITIAL"
+	clientID1 := "CLI-UUID-INITIAL"
+
+	// 1. 首次激活（记录不存在）：直接插入新激活记录
+	act1, err := db.ActivateDeviceBySerialNumber(ctx, sn, deviceID1, clientID1)
+	if err != nil {
+		t.Fatalf("failed to activate new device: %v", err)
+	}
+	if act1.SerialNumber != sn {
+		t.Errorf("expected SN %q, got %q", sn, act1.SerialNumber)
+	}
+	if act1.DeviceID != deviceID1 {
+		t.Errorf("expected DeviceID %q, got %q", deviceID1, act1.DeviceID)
+	}
+	if act1.ClientID != clientID1 {
+		t.Errorf("expected ClientID %q, got %q", clientID1, act1.ClientID)
+	}
+	if act1.ActivationStatus != database.ActivationStatusActive {
+		t.Errorf("expected status %q, got %q", database.ActivationStatusActive, act1.ActivationStatus)
+	}
+	if act1.ActivatedAt.IsZero() {
+		t.Error("expected non-zero ActivatedAt")
+	}
+
+	// 绑定用户
+	userID := uint64(999)
+	if _, err := db.BindDevice(ctx, sn, userID); err != nil {
+		t.Fatalf("failed to bind device to user: %v", err)
+	}
+
+	// 确认绑定存在
+	userRef, err := db.FindDeviceUserRefBySerialNumber(ctx, sn)
+	if err != nil || userRef.UserID != userID {
+		t.Fatalf("failed to verify user binding before reactivation: %v", err)
+	}
+
+	// 2. 再次激活（记录已存在）：更新数据并删除用户绑定记录
+	deviceID2 := "DEV-ESP32-UPDATED"
+	clientID2 := "CLI-UUID-UPDATED"
+	act2, err := db.ActivateDeviceBySerialNumber(ctx, sn, deviceID2, clientID2)
+	if err != nil {
+		t.Fatalf("failed to reactivate existing device: %v", err)
+	}
+	if act2.DeviceID != deviceID2 {
+		t.Errorf("expected updated DeviceID %q, got %q", deviceID2, act2.DeviceID)
+	}
+	if act2.ClientID != clientID2 {
+		t.Errorf("expected updated ClientID %q, got %q", clientID2, act2.ClientID)
+	}
+	if act2.ActivationStatus != database.ActivationStatusActive {
+		t.Errorf("expected status %q, got %q", database.ActivationStatusActive, act2.ActivationStatus)
+	}
+
+	// 验证用户绑定已被删除
+	_, err = db.FindDeviceUserRefBySerialNumber(ctx, sn)
+	if !errors.Is(err, database.ErrBindingNotFound) {
+		t.Errorf("expected user binding to be deleted on reactivation, got err: %v", err)
+	}
+
+	// 3. 校验入参错误
+	_, err = db.ActivateDeviceBySerialNumber(ctx, "", deviceID1, clientID1)
+	if !errors.Is(err, database.ErrEmptySerialNumber) {
+		t.Errorf("expected ErrEmptySerialNumber, got %v", err)
+	}
+
+	var nilDB *database.Database
+	_, err = nilDB.ActivateDeviceBySerialNumber(ctx, sn, deviceID1, clientID1)
+	if !errors.Is(err, database.ErrDatabaseInstanceRequired) {
+		t.Errorf("expected ErrDatabaseInstanceRequired, got %v", err)
+	}
+}

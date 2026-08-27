@@ -3,7 +3,11 @@ package router
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -1302,6 +1306,354 @@ func TestRouter_OTA_SerialNumberChallenge(t *testing.T) {
 		}
 		if pending.SerialNumber != unboundSN {
 			t.Errorf("expected SerialNumber %q, got %q", unboundSN, pending.SerialNumber)
+		}
+	})
+}
+
+func TestRouter_OTA_Activate(t *testing.T) {
+	const (
+		testToken = "secret-token-activate-test"
+		testWsURL = "wss://test.example.com/xiaozhi/v1/"
+	)
+
+	cfg := newTestConfig(testToken, testWsURL)
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	// 帮助函数：计算 HMAC-SHA256 十六进制字符串
+	calcHMAC := func(key []byte, challenge string) string {
+		mac := hmac.New(sha256.New, key)
+		mac.Write([]byte(challenge))
+		return hex.EncodeToString(mac.Sum(nil))
+	}
+
+	t.Run("1. First time activation: verifies credential hmac, inserts new activation record and clears challenge cache", func(t *testing.T) {
+		sn := "SN-ACT-NEW-001"
+		key := []byte("secret-efuse-hmac-key-001")
+		deviceID := "DEV-ESP32-NEW-001"
+		clientID := "CLI-UUID-NEW-001"
+
+		// 预置凭证表（enabled 状态）
+		cred := &database.DeviceHmacCredential{
+			SerialNumber:      sn,
+			AuthMethod:        database.AuthMethodEfuseHMAC,
+			HMACKeyCiphertext: key,
+			CredentialStatus:  database.CredentialStatusEnabled,
+		}
+		if err := db.CreateDeviceHmacCredential(ctx, cred); err != nil {
+			t.Fatalf("failed to create seed credential: %v", err)
+		}
+
+		var logBuf bytes.Buffer
+		testLogger := logger.New(&logBuf, slog.LevelDebug)
+		otaHandler := NewOTAHandler(cfg, db, testLogger)
+		r := NewRouter(Options{OTA: otaHandler})
+
+		// 第一步：设备请求 OTA 获得 Challenge
+		otaReq := httptest.NewRequest(http.MethodPost, "/xiaozhi/ota/", strings.NewReader(`{}`))
+		otaReq.Header.Set("Serial-Number", sn)
+		otaReq.Header.Set("Device-Id", deviceID)
+		otaReq.Header.Set("Client-Id", clientID)
+		otaReq.Header.Set("Activation-Version", "2")
+		otaRec := httptest.NewRecorder()
+		r.ServeHTTP(otaRec, otaReq)
+		if otaRec.Code != http.StatusOK {
+			t.Fatalf("expected OTA check status 200, got %d", otaRec.Code)
+		}
+
+		var otaResp Response
+		if err := json.Unmarshal(otaRec.Body.Bytes(), &otaResp); err != nil {
+			t.Fatalf("failed to unmarshal ota response: %v", err)
+		}
+		challenge := otaResp.Activation.Challenge
+		if challenge == "" {
+			t.Fatalf("expected challenge in OTA response")
+		}
+
+		// 第二步：设备计算 HMAC 并请求 POST /xiaozhi/ota/activate
+		hmacHex := calcHMAC(key, challenge)
+		actPayload := ActivateRequest{
+			Algorithm:    "hmac-sha256",
+			SerialNumber: sn,
+			Challenge:    challenge,
+			HMAC:         hmacHex,
+		}
+		payloadBytes, _ := json.Marshal(actPayload)
+
+		actReq := httptest.NewRequest(http.MethodPost, "/xiaozhi/ota/activate", bytes.NewReader(payloadBytes))
+		actReq.Header.Set("Serial-Number", sn)
+		actReq.Header.Set("Device-Id", deviceID)
+		actReq.Header.Set("Client-Id", clientID)
+		actReq.Header.Set("Activation-Version", "2")
+		actReq.Header.Set("Content-Type", "application/json")
+		actRec := httptest.NewRecorder()
+		r.ServeHTTP(actRec, actReq)
+
+		if actRec.Code != http.StatusOK {
+			t.Fatalf("expected activate status 200, got %d, body: %s", actRec.Code, actRec.Body.String())
+		}
+
+		var actResp Response
+		if err := json.Unmarshal(actRec.Body.Bytes(), &actResp); err != nil {
+			t.Fatalf("failed to unmarshal activate response: %v", err)
+		}
+		if actResp.ServerTime == nil || actResp.ServerTime.Timestamp <= 0 {
+			t.Errorf("expected valid ServerTime in activate response, got: %+v", actResp.ServerTime)
+		}
+
+		// 验证数据库 device_activation 表已插入
+		actRecord, err := db.FindDeviceActivationBySerialNumber(ctx, sn)
+		if err != nil {
+			t.Fatalf("expected device activation record to exist: %v", err)
+		}
+		if actRecord.SerialNumber != sn || actRecord.DeviceID != deviceID || actRecord.ClientID != clientID {
+			t.Errorf("unexpected activation record: %+v", actRecord)
+		}
+		if actRecord.ActivationStatus != database.ActivationStatusActive {
+			t.Errorf("expected active status, got %s", actRecord.ActivationStatus)
+		}
+
+		// 验证凭证表状态已更新为 activated
+		updatedCred, err := db.FindDeviceHmacCredentialBySerialNumber(ctx, sn)
+		if err != nil {
+			t.Fatalf("failed to query credential: %v", err)
+		}
+		if updatedCred.CredentialStatus != database.CredentialStatusActivated {
+			t.Errorf("expected credential status 'activated', got %q", updatedCred.CredentialStatus)
+		}
+
+		// 验证 challenge 缓存已被清理（不能重放）
+		_, foundPending := otaHandler.FindPendingActivationByChallenge(challenge)
+		if foundPending {
+			t.Errorf("expected challenge cache to be cleared after activation")
+		}
+
+		// 验证日志中不包含敏感明文
+		logStr := logBuf.String()
+		if strings.Contains(logStr, string(key)) || strings.Contains(logStr, hmacHex) {
+			t.Errorf("log leaked sensitive HMAC or key data: %s", logStr)
+		}
+	})
+
+	t.Run("2. Reactivation: updates activation record and deletes user binding", func(t *testing.T) {
+		sn := "SN-REACT-002"
+		key := []byte("secret-efuse-hmac-key-002")
+		oldDeviceID := "DEV-OLD-002"
+		oldClientID := "CLI-OLD-002"
+		newDeviceID := "DEV-NEW-002"
+		newClientID := "CLI-NEW-002"
+
+		// 预置凭证表、激活表和用户绑定表
+		cred := &database.DeviceHmacCredential{
+			SerialNumber:      sn,
+			AuthMethod:        database.AuthMethodEfuseHMAC,
+			HMACKeyCiphertext: key,
+			CredentialStatus:  database.CredentialStatusActivated,
+		}
+		if err := db.CreateDeviceHmacCredential(ctx, cred); err != nil {
+			t.Fatalf("failed to create seed credential: %v", err)
+		}
+
+		act := &database.DeviceActivation{
+			SerialNumber:     sn,
+			DeviceID:         oldDeviceID,
+			ClientID:         oldClientID,
+			ActivationStatus: database.ActivationStatusActive,
+			ActivatedAt:      time.Now(),
+		}
+		if err := db.CreateDeviceActivation(ctx, act); err != nil {
+			t.Fatalf("failed to create seed activation: %v", err)
+		}
+
+		if _, err := db.BindDevice(ctx, sn, 8888); err != nil {
+			t.Fatalf("failed to bind device to user: %v", err)
+		}
+
+		// 确认绑定存在
+		_, err := db.FindDeviceUserRefBySerialNumber(ctx, sn)
+		if err != nil {
+			t.Fatalf("expected user binding to exist before reactivate: %v", err)
+		}
+
+		otaHandler := NewOTAHandler(cfg, db, slog.Default())
+		r := NewRouter(Options{OTA: otaHandler})
+
+		challenge := "custom-random-challenge-reactivate-9999"
+		hmacHex := calcHMAC(key, challenge)
+
+		actPayload := ActivateRequest{
+			Algorithm:    "hmac-sha256",
+			SerialNumber: sn,
+			Challenge:    challenge,
+			HMAC:         hmacHex,
+		}
+		payloadBytes, _ := json.Marshal(actPayload)
+
+		actReq := httptest.NewRequest(http.MethodPost, "/xiaozhi/ota/activate", bytes.NewReader(payloadBytes))
+		actReq.Header.Set("Serial-Number", sn)
+		actReq.Header.Set("Device-Id", newDeviceID)
+		actReq.Header.Set("Client-Id", newClientID)
+		actRec := httptest.NewRecorder()
+		r.ServeHTTP(actRec, actReq)
+
+		if actRec.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d, body: %s", actRec.Code, actRec.Body.String())
+		}
+
+		// 验证 device_activation 已更新
+		updatedAct, err := db.FindDeviceActivationBySerialNumber(ctx, sn)
+		if err != nil {
+			t.Fatalf("failed to find updated activation: %v", err)
+		}
+		if updatedAct.DeviceID != newDeviceID || updatedAct.ClientID != newClientID {
+			t.Errorf("expected updated device_id and client_id, got %+v", updatedAct)
+		}
+
+		// 验证用户绑定关系已被删除
+		_, err = db.FindDeviceUserRefBySerialNumber(ctx, sn)
+		if !errors.Is(err, database.ErrBindingNotFound) {
+			t.Errorf("expected user binding to be deleted, got err: %v", err)
+		}
+	})
+
+	t.Run("3. HMAC verification failure returns 403 Forbidden", func(t *testing.T) {
+		sn := "SN-HMAC-FAIL-003"
+		key := []byte("secret-key-003")
+
+		cred := &database.DeviceHmacCredential{
+			SerialNumber:      sn,
+			AuthMethod:        database.AuthMethodEfuseHMAC,
+			HMACKeyCiphertext: key,
+			CredentialStatus:  database.CredentialStatusEnabled,
+		}
+		if err := db.CreateDeviceHmacCredential(ctx, cred); err != nil {
+			t.Fatalf("failed to create seed credential: %v", err)
+		}
+
+		otaHandler := NewOTAHandler(cfg, db, slog.Default())
+		r := NewRouter(Options{OTA: otaHandler})
+
+		actPayload := ActivateRequest{
+			Algorithm:    "hmac-sha256",
+			SerialNumber: sn,
+			Challenge:    "valid-challenge-123456",
+			HMAC:         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // 错误的 HMAC
+		}
+		payloadBytes, _ := json.Marshal(actPayload)
+
+		actReq := httptest.NewRequest(http.MethodPost, "/xiaozhi/ota/activate", bytes.NewReader(payloadBytes))
+		actRec := httptest.NewRecorder()
+		r.ServeHTTP(actRec, actReq)
+
+		if actRec.Code != http.StatusForbidden {
+			t.Fatalf("expected status 403 Forbidden on HMAC failure, got %d", actRec.Code)
+		}
+
+		// 数据库中不应插入激活记录
+		_, err := db.FindDeviceActivationBySerialNumber(ctx, sn)
+		if !errors.Is(err, database.ErrActivationNotFound) {
+			t.Errorf("expected no activation record to be created on HMAC mismatch, got: %v", err)
+		}
+	})
+
+	t.Run("4. Non-existent credential returns 403 Forbidden", func(t *testing.T) {
+		otaHandler := NewOTAHandler(cfg, db, slog.Default())
+		r := NewRouter(Options{OTA: otaHandler})
+
+		actPayload := ActivateRequest{
+			Algorithm:    "hmac-sha256",
+			SerialNumber: "SN-NOT-IN-CREDENTIAL-TABLE",
+			Challenge:    "some-challenge",
+			HMAC:         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		}
+		payloadBytes, _ := json.Marshal(actPayload)
+
+		actReq := httptest.NewRequest(http.MethodPost, "/xiaozhi/ota/activate", bytes.NewReader(payloadBytes))
+		actRec := httptest.NewRecorder()
+		r.ServeHTTP(actRec, actReq)
+
+		if actRec.Code != http.StatusForbidden {
+			t.Fatalf("expected status 403 Forbidden for non-existent credential, got %d", actRec.Code)
+		}
+	})
+
+	t.Run("5. Blocked or revoked credential returns 403 Forbidden", func(t *testing.T) {
+		snBlocked := "SN-BLOCKED-005"
+		key := []byte("secret-key-005")
+
+		cred := &database.DeviceHmacCredential{
+			SerialNumber:      snBlocked,
+			AuthMethod:        database.AuthMethodEfuseHMAC,
+			HMACKeyCiphertext: key,
+			CredentialStatus:  database.CredentialStatusBlocked,
+		}
+		if err := db.CreateDeviceHmacCredential(ctx, cred); err != nil {
+			t.Fatalf("failed to create blocked credential: %v", err)
+		}
+
+		otaHandler := NewOTAHandler(cfg, db, slog.Default())
+		r := NewRouter(Options{OTA: otaHandler})
+
+		challenge := "challenge-blocked-device"
+		actPayload := ActivateRequest{
+			Algorithm:    "hmac-sha256",
+			SerialNumber: snBlocked,
+			Challenge:    challenge,
+			HMAC:         calcHMAC(key, challenge),
+		}
+		payloadBytes, _ := json.Marshal(actPayload)
+
+		actReq := httptest.NewRequest(http.MethodPost, "/xiaozhi/ota/activate", bytes.NewReader(payloadBytes))
+		actRec := httptest.NewRecorder()
+		r.ServeHTTP(actRec, actReq)
+
+		if actRec.Code != http.StatusForbidden {
+			t.Fatalf("expected status 403 Forbidden for blocked credential, got %d", actRec.Code)
+		}
+	})
+
+	t.Run("6. Invalid request body and missing fields return 400 Bad Request", func(t *testing.T) {
+		otaHandler := NewOTAHandler(cfg, db, slog.Default())
+		r := NewRouter(Options{OTA: otaHandler})
+
+		tests := []struct {
+			name string
+			body string
+			sn   string
+		}{
+			{"empty body", "", ""},
+			{"invalid json", "not-json", ""},
+			{"missing serial number", `{"challenge":"ch","hmac":"hm"}`, ""},
+			{"missing challenge", `{"serial_number":"SN-1","hmac":"hm"}`, ""},
+			{"missing hmac", `{"serial_number":"SN-1","challenge":"ch"}`, ""},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, "/xiaozhi/ota/activate", strings.NewReader(tc.body))
+				if tc.sn != "" {
+					req.Header.Set("Serial-Number", tc.sn)
+				}
+				rec := httptest.NewRecorder()
+				r.ServeHTTP(rec, req)
+
+				if rec.Code != http.StatusBadRequest {
+					t.Errorf("expected status 400 Bad Request, got %d", rec.Code)
+				}
+			})
+		}
+	})
+
+	t.Run("7. GET method on /activate returns 405 Method Not Allowed", func(t *testing.T) {
+		otaHandler := NewOTAHandler(cfg, db, slog.Default())
+		r := NewRouter(Options{OTA: otaHandler})
+
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/activate", nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("expected status 405 for GET on /activate, got %d", rec.Code)
 		}
 	})
 }
