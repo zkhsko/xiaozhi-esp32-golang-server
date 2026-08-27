@@ -3,6 +3,7 @@ package router
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/logger"
@@ -57,7 +58,21 @@ func (h *OTAHandler) handleOTALegacy(w http.ResponseWriter, r *http.Request, hea
 			var wsURL, token string
 			if h.cfg != nil {
 				wsURL = h.cfg.Server.WebSocketURL
-				token = h.cfg.DeviceSharedToken
+			}
+
+			if act.SerialNumber != "" {
+				tok, err := h.db.FindDeviceAccessTokenBySerialNumber(r.Context(), act.SerialNumber)
+				if err == nil && tok != nil && tok.IsValid(time.Now()) {
+					if !tok.HasExposed {
+						token = tok.AccessToken
+						if markErr := h.db.UpdateDeviceAccessTokenHasExposed(r.Context(), act.SerialNumber, true); markErr != nil {
+							h.logger.Error("failed to mark device access token as exposed for legacy device",
+								"serial_number", logger.TruncateString(act.SerialNumber),
+								"error", markErr,
+							)
+						}
+					}
+				}
 			}
 
 			resp := Response{

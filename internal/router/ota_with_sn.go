@@ -3,6 +3,7 @@ package router
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/logger"
@@ -107,7 +108,20 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 			var wsURL, token string
 			if h.cfg != nil {
 				wsURL = h.cfg.Server.WebSocketURL
-				token = h.cfg.DeviceSharedToken
+			}
+
+			// 查询 device_access_token 表：若存在未展示过的 Token，则仅在第一次请求校验全部通过后展示一次，随后更新标记为已展示
+			tok, err := h.db.FindDeviceAccessTokenBySerialNumber(r.Context(), headers.SerialNumber)
+			if err == nil && tok != nil && tok.IsValid(time.Now()) {
+				if !tok.HasExposed {
+					token = tok.AccessToken
+					if markErr := h.db.UpdateDeviceAccessTokenHasExposed(r.Context(), headers.SerialNumber, true); markErr != nil {
+						h.logger.Error("failed to mark device access token as exposed",
+							"serial_number", logger.TruncateString(headers.SerialNumber),
+							"error", markErr,
+						)
+					}
+				}
 			}
 
 			resp := Response{

@@ -1657,3 +1657,33 @@ func TestRouter_OTA_Activate(t *testing.T) {
 		}
 	})
 }
+
+func TestGenerateDeviceAccessToken(t *testing.T) {
+	// 1. 验证生成 Token 长度为 64 字符
+	token1, err := GenerateDeviceAccessToken()
+	if err != nil {
+		t.Fatalf("failed to generate device access token: %v", err)
+	}
+	if len(token1) != 64 {
+		t.Fatalf("expected token length 64, got %d: %q", len(token1), token1)
+	}
+
+	// 2. 验证全部字符为有效十六进制小写字符 [0-9a-f]，不包含连字符 '-'
+	for i, c := range token1 {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			t.Errorf("character at index %d is not valid lowercase hex: %c", i, c)
+		}
+	}
+	if strings.Contains(token1, "-") {
+		t.Errorf("expected no hyphens in token: %q", token1)
+	}
+
+	// 3. 验证连续生成的两个 Token 不重复
+	token2, err := GenerateDeviceAccessToken()
+	if err != nil {
+		t.Fatalf("failed to generate second token: %v", err)
+	}
+	if token1 == token2 {
+		t.Errorf("expected generated tokens to be unique, got duplicate %q", token1)
+	}
+}

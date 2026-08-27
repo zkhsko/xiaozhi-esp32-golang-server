@@ -34,6 +34,7 @@ var (
 // - id: 自增主键。
 // - serial_number: 设备序列号，全局业务唯一，唯一索引 uk_serial_number。
 // - access_token: 设备 Access Token 明文，非空且全局唯一，唯一索引 uk_access_token。
+// - has_exposed: 是否已在 OTA 接口展示下发过（false: 待展示下发, true: 已展示下发）。
 // - issued_at: Token 签发时间。
 // - expires_at: Token 过期时间，可为空（为空表示无固定过期时间）。
 // - revoked_at: Token 撤销时间，可为空（为空表示未撤销）。
@@ -43,6 +44,7 @@ type DeviceAccessToken struct {
 	ID           uint64     `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	SerialNumber string     `gorm:"uniqueIndex:uk_serial_number;column:serial_number;size:64;not null" json:"serial_number"`
 	AccessToken  string     `gorm:"uniqueIndex:uk_access_token;column:access_token;size:128;not null" json:"access_token"`
+	HasExposed   bool       `gorm:"column:has_exposed;not null;default:false" json:"has_exposed"`
 	IssuedAt     time.Time  `gorm:"column:issued_at;not null" json:"issued_at"`
 	ExpiresAt    *time.Time `gorm:"column:expires_at" json:"expires_at,omitempty"`
 	RevokedAt    *time.Time `gorm:"column:revoked_at" json:"revoked_at,omitempty"`
@@ -176,7 +178,7 @@ func (d *Database) CreateDeviceAccessToken(ctx context.Context, token *DeviceAcc
 }
 
 // UpsertDeviceAccessToken 创建或覆盖更新指定设备的 Access Token。
-// 若该设备已存在 Token，则更新 AccessToken、IssuedAt、ExpiresAt 并清空 RevokedAt。
+// 若该设备已存在 Token，则更新 AccessToken、HasExposed、IssuedAt、ExpiresAt 并清空 RevokedAt。
 func (d *Database) UpsertDeviceAccessToken(ctx context.Context, token *DeviceAccessToken) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
@@ -218,6 +220,7 @@ func (d *Database) UpsertDeviceAccessToken(ctx context.Context, token *DeviceAcc
 
 	updates := map[string]any{
 		"access_token": trimmedToken,
+		"has_exposed":  token.HasExposed,
 		"issued_at":    token.IssuedAt,
 		"expires_at":   token.ExpiresAt,
 		"revoked_at":   token.RevokedAt,
@@ -231,6 +234,31 @@ func (d *Database) UpsertDeviceAccessToken(ctx context.Context, token *DeviceAcc
 	token.SerialNumber = existing.SerialNumber
 	token.AccessToken = trimmedToken
 	token.CreatedAt = existing.CreatedAt
+
+	return nil
+}
+
+// UpdateDeviceAccessTokenHasExposed 更新指定设备序列号的 Access Token 是否已展示下发标记。
+func (d *Database) UpdateDeviceAccessTokenHasExposed(ctx context.Context, serialNumber string, hasExposed bool) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+
+	trimmedSN := strings.TrimSpace(serialNumber)
+	if trimmedSN == "" {
+		return ErrEmptySerialNumber
+	}
+
+	result := d.gormDB.WithContext(ctx).
+		Model(&DeviceAccessToken{}).
+		Where("serial_number = ?", trimmedSN).
+		Update("has_exposed", hasExposed)
+	if result.Error != nil {
+		return fmt.Errorf("update device access token has_exposed for serial_number %q: %w", trimmedSN, result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("update device access token has_exposed for %q: %w", trimmedSN, ErrAccessTokenNotFound)
+	}
 
 	return nil
 }

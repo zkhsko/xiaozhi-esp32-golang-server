@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS device_access_token (
     id BIGSERIAL PRIMARY KEY,                                       -- Token 凭证内部自增主键
     serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
     access_token VARCHAR(128) NOT NULL,                                   -- 设备 Access Token 明文
+    has_exposed BOOLEAN NOT NULL DEFAULT FALSE,                     -- 是否已在 OTA 接口展示下发过（FALSE: 待展示下发, TRUE: 已展示下发）
     issued_at TIMESTAMPTZ NOT NULL,                                 -- Token 签发时间
     expires_at TIMESTAMPTZ DEFAULT NULL,                           -- Token 过期时间（为空表示无固定过期时间）
     revoked_at TIMESTAMPTZ DEFAULT NULL,                           -- Token 撤销时间（为空表示未撤销）

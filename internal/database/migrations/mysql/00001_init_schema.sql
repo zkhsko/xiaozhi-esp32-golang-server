@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS `device_access_token` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Token 凭证自增主键',
     `serial_number` VARCHAR(64) NOT NULL COMMENT '设备序列号，全局业务唯一',
     `access_token` VARCHAR(128) NOT NULL COMMENT '设备 Access Token 明文',
+    `has_exposed` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否已在 OTA 接口展示下发过（0: 待展示下发, 1: 已展示下发）',
     `issued_at` DATETIME(3) NOT NULL COMMENT 'Token 签发时间',
     `expires_at` DATETIME(3) DEFAULT NULL COMMENT 'Token 过期时间，为空表示无固定过期时间',
     `revoked_at` DATETIME(3) DEFAULT NULL COMMENT 'Token 撤销时间，为空表示未撤销',

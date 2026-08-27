@@ -20,7 +20,7 @@ type ServerTimeInfo struct {
 // WebSocketConfig 定义返回给设备的 WebSocket 连接配置。
 type WebSocketConfig struct {
 	URL     string `json:"url"`
-	Token   string `json:"token"`
+	Token   string `json:"token,omitempty"`
 	Version int    `json:"version"`
 }
 

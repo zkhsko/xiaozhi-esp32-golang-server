@@ -3,14 +3,17 @@ package router
 import (
 	"bytes"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -145,7 +148,33 @@ func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 
-	// 3. 清理一次性激活码缓存
+	// 3. 用户绑定结束后，插入或更新设备对应的 device_access_token，同时重置 has_exposed 标记为 false
+	tokenStr, err := GenerateDeviceAccessToken()
+	if err != nil {
+		h.logger.Error("failed to generate device access token",
+			"serial_number", logger.TruncateString(sn),
+			"error", err,
+		)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	accessTokenRecord := &database.DeviceAccessToken{
+		SerialNumber: sn,
+		AccessToken:  tokenStr,
+		HasExposed:   false,
+		IssuedAt:     time.Now(),
+	}
+	if err := h.db.UpsertDeviceAccessToken(r.Context(), accessTokenRecord); err != nil {
+		h.logger.Error("failed to upsert device access token during binding",
+			"serial_number", logger.TruncateString(sn),
+			"error", err,
+		)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// 4. 清理一次性激活码缓存
 	h.otaHandler.DeletePendingActivation(code, pending.Challenge)
 
 	h.logger.Info("device bound successfully with existing sn in code",
@@ -250,7 +279,33 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 		_ = h.db.UpdateDeviceHmacCredentialStatus(r.Context(), sn, database.CredentialStatusActivated)
 	}
 
-	// 7. 清理一次性激活码缓存
+	// 7. 用户绑定结束后，插入或更新设备对应的 device_access_token，同时重置 has_exposed 标记为 false
+	tokenStr, err := GenerateDeviceAccessToken()
+	if err != nil {
+		h.logger.Error("failed to generate device access token",
+			"serial_number", logger.TruncateString(sn),
+			"error", err,
+		)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	accessTokenRecord := &database.DeviceAccessToken{
+		SerialNumber: sn,
+		AccessToken:  tokenStr,
+		HasExposed:   false,
+		IssuedAt:     time.Now(),
+	}
+	if err := h.db.UpsertDeviceAccessToken(r.Context(), accessTokenRecord); err != nil {
+		h.logger.Error("failed to upsert device access token during binding",
+			"serial_number", logger.TruncateString(sn),
+			"error", err,
+		)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// 8. 清理一次性激活码缓存
 	h.otaHandler.DeletePendingActivation(code, pending.Challenge)
 
 	h.logger.Info("device bound successfully without initial sn in code",
@@ -364,4 +419,28 @@ func verifyHMAC(ciphertextKey []byte, hmacInput, challenge, code string) bool {
 	}
 
 	return false
+}
+
+// generateUUIDv4NoDash 生成 RFC 4122 v4 UUID 并去除连字符（32 位小写十六进制字符）。
+func generateUUIDv4NoDash() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("crypto rand failed: %w", err)
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // Version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // Variant RFC 4122
+	return hex.EncodeToString(b[:]), nil
+}
+
+// GenerateDeviceAccessToken 生成两个 UUID 去除连字符后拼接而成的 64 位十六进制 Access Token。
+func GenerateDeviceAccessToken() (string, error) {
+	u1, err := generateUUIDv4NoDash()
+	if err != nil {
+		return "", fmt.Errorf("generate first uuid: %w", err)
+	}
+	u2, err := generateUUIDv4NoDash()
+	if err != nil {
+		return "", fmt.Errorf("generate second uuid: %w", err)
+	}
+	return u1 + u2, nil
 }

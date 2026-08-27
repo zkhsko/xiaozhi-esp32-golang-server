@@ -158,10 +158,11 @@ func TestDeviceAccessToken_Upsert(t *testing.T) {
 		t.Errorf("expected token %q, got %q", "token-version-1", found1.AccessToken)
 	}
 
-	// 2. 再次 Upsert -> 覆盖更新 Token
+	// 2. 再次 Upsert -> 覆盖更新 Token 并支持更新 HasExposed
 	token2 := &database.DeviceAccessToken{
 		SerialNumber: sn,
 		AccessToken:  "token-version-2",
+		HasExposed:   true,
 		IssuedAt:     time.Now().Truncate(time.Millisecond),
 	}
 	if err := db.UpsertDeviceAccessToken(ctx, token2); err != nil {
@@ -177,6 +178,30 @@ func TestDeviceAccessToken_Upsert(t *testing.T) {
 	}
 	if found2.AccessToken != "token-version-2" {
 		t.Errorf("expected updated token %q, got %q", "token-version-2", found2.AccessToken)
+	}
+	if !found2.HasExposed {
+		t.Errorf("expected has_exposed to be true after secondary upsert")
+	}
+
+	// 3. 第三次 Upsert -> 重置 HasExposed 为 false（如重新绑定场景）
+	token3 := &database.DeviceAccessToken{
+		SerialNumber: sn,
+		AccessToken:  "token-version-3",
+		HasExposed:   false,
+		IssuedAt:     time.Now().Truncate(time.Millisecond),
+	}
+	if err := db.UpsertDeviceAccessToken(ctx, token3); err != nil {
+		t.Fatalf("failed to third upsert: %v", err)
+	}
+	found3, err := db.FindDeviceAccessTokenBySerialNumber(ctx, sn)
+	if err != nil {
+		t.Fatalf("failed to find token after third upsert: %v", err)
+	}
+	if found3.AccessToken != "token-version-3" {
+		t.Errorf("expected updated token %q, got %q", "token-version-3", found3.AccessToken)
+	}
+	if found3.HasExposed {
+		t.Errorf("expected has_exposed to be false after third upsert")
 	}
 }
 
@@ -247,6 +272,75 @@ func TestDeviceAccessToken_RevokeTokenBySerialNumber(t *testing.T) {
 	err = db.RevokeDeviceAccessTokenBySerialNumber(ctx, sn, revokeTime)
 	if !errors.Is(err, database.ErrAccessTokenNotFound) {
 		t.Fatalf("expected ErrAccessTokenNotFound when already revoked, got: %v", err)
+	}
+}
+
+func TestDeviceAccessToken_UpdateHasExposed(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	sn := "SN-EXPOSE-001"
+	rawToken := "token-for-expose-test"
+
+	record := &database.DeviceAccessToken{
+		SerialNumber: sn,
+		AccessToken:  rawToken,
+		HasExposed:   false,
+		IssuedAt:     time.Now(),
+	}
+	if err := db.CreateDeviceAccessToken(ctx, record); err != nil {
+		t.Fatalf("failed to create token: %v", err)
+	}
+
+	// 1. 验证初始 has_exposed 为 false
+	found1, err := db.FindDeviceAccessTokenBySerialNumber(ctx, sn)
+	if err != nil {
+		t.Fatalf("failed to find token: %v", err)
+	}
+	if found1.HasExposed {
+		t.Errorf("expected initial has_exposed to be false")
+	}
+
+	// 2. 更新 has_exposed 为 true
+	if err := db.UpdateDeviceAccessTokenHasExposed(ctx, sn, true); err != nil {
+		t.Fatalf("failed to update has_exposed to true: %v", err)
+	}
+
+	found2, err := db.FindDeviceAccessTokenBySerialNumber(ctx, sn)
+	if err != nil {
+		t.Fatalf("failed to find token: %v", err)
+	}
+	if !found2.HasExposed {
+		t.Errorf("expected has_exposed to be true after update")
+	}
+
+	// 3. 更新 has_exposed 为 false
+	if err := db.UpdateDeviceAccessTokenHasExposed(ctx, sn, false); err != nil {
+		t.Fatalf("failed to update has_exposed to false: %v", err)
+	}
+
+	found3, err := db.FindDeviceAccessTokenBySerialNumber(ctx, sn)
+	if err != nil {
+		t.Fatalf("failed to find token: %v", err)
+	}
+	if found3.HasExposed {
+		t.Errorf("expected has_exposed to be false after second update")
+	}
+
+	// 4. 对不存在的 SN 更新 -> 返回 ErrAccessTokenNotFound
+	if err := db.UpdateDeviceAccessTokenHasExposed(ctx, "NON-EXISTENT-SN", true); !errors.Is(err, database.ErrAccessTokenNotFound) {
+		t.Errorf("expected ErrAccessTokenNotFound, got: %v", err)
+	}
+
+	// 5. 空 SN 参数校验
+	if err := db.UpdateDeviceAccessTokenHasExposed(ctx, "  ", true); !errors.Is(err, database.ErrEmptySerialNumber) {
+		t.Errorf("expected ErrEmptySerialNumber, got: %v", err)
+	}
+
+	// 6. nil DB 安全校验
+	var nilDB *database.Database
+	if err := nilDB.UpdateDeviceAccessTokenHasExposed(ctx, sn, true); !errors.Is(err, database.ErrDatabaseInstanceRequired) {
+		t.Errorf("expected ErrDatabaseInstanceRequired, got: %v", err)
 	}
 }
 
