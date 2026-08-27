@@ -38,7 +38,7 @@ var (
 	ErrCredentialNotFound = errors.New("device hmac credential not found")
 	// ErrEmptySerialNumber 表示设备序列号为空。
 	ErrEmptySerialNumber = errors.New("serial number cannot be empty")
-	// ErrEmptyHMACKeyCiphertext 表示设备 HMAC Key 密文为空。
+	// ErrEmptyHMACKeyCiphertext 表示设备 HMAC Key 为空。
 	ErrEmptyHMACKeyCiphertext = errors.New("hmac key ciphertext cannot be empty")
 	// ErrEmptyStatus 表示凭证状态为空。
 	ErrEmptyStatus = errors.New("credential status cannot be empty")
@@ -60,7 +60,7 @@ var (
 // - id: 自增主键。
 // - serial_number: 设备序列号，不可为空且全局唯一，唯一索引 uk_serial_number。
 // - auth_method: 认证激活方式（efuse_hmac / activation_code / manual_code_hmac）。
-// - hmac_key_ciphertext: 加密后的 HMAC Key 密文，不可为空，禁止明文存储。
+// - hmac_key_ciphertext: HMAC Key 明文存储（统一字段名 hmac_key_ciphertext），不可为空。
 // - credential_status: 凭证状态（enabled / activated / blocked / revoked），无索引。
 type DeviceHmacCredential struct {
 	ID                uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`

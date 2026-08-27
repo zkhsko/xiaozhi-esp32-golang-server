@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS `device_hmac_credential` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '凭证自增主键',
     `serial_number` VARCHAR(64) NOT NULL COMMENT '设备序列号，全局业务唯一',
     `auth_method` VARCHAR(32) NOT NULL DEFAULT 'efuse_hmac' COMMENT '认证方式：efuse_hmac / activation_code / manual_code_hmac',
-    `hmac_key_ciphertext` VARBINARY(512) NOT NULL COMMENT '加密后的 HMAC Key 密文（禁止明文存储）',
+    `hmac_key_ciphertext` VARBINARY(512) NOT NULL COMMENT 'HMAC Key 明文（统一字段名 hmac_key_ciphertext）',
     `credential_status` VARCHAR(16) NOT NULL DEFAULT 'enabled' COMMENT '凭证状态：enabled / activated / blocked / revoked',
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS `device_user_ref` (
 CREATE TABLE IF NOT EXISTS `device_access_token` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Token 凭证自增主键',
     `serial_number` VARCHAR(64) NOT NULL COMMENT '设备序列号，全局业务唯一',
-    `access_token_hash` VARBINARY(64) NOT NULL COMMENT '设备 Access Token 的 SHA-256 哈希值（禁止明文存储）',
+    `access_token` VARCHAR(128) NOT NULL COMMENT '设备 Access Token 明文',
     `issued_at` DATETIME(3) NOT NULL COMMENT 'Token 签发时间',
     `expires_at` DATETIME(3) DEFAULT NULL COMMENT 'Token 过期时间，为空表示无固定过期时间',
     `revoked_at` DATETIME(3) DEFAULT NULL COMMENT 'Token 撤销时间，为空表示未撤销',
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS `device_access_token` (
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '记录最近更新时间',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_serial_number` (`serial_number`),
-    UNIQUE KEY `uk_access_token_hash` (`access_token_hash`)
+    UNIQUE KEY `uk_access_token` (`access_token`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='设备鉴权 Access Token 表';
 -- +goose StatementEnd
 

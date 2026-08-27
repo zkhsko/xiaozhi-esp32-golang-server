@@ -1,7 +1,6 @@
 package database_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -16,15 +15,14 @@ func TestDeviceAccessToken_CreateAndFind(t *testing.T) {
 
 	sn := "SN-TOKEN-001"
 	rawToken := "test-device-token-secret-123456"
-	tokenHash := database.HashAccessToken(rawToken)
 	issuedAt := time.Now().Truncate(time.Millisecond)
 	expiresAt := issuedAt.Add(24 * time.Hour)
 
 	record := &database.DeviceAccessToken{
-		SerialNumber:    sn,
-		AccessTokenHash: tokenHash,
-		IssuedAt:        issuedAt,
-		ExpiresAt:       &expiresAt,
+		SerialNumber: sn,
+		AccessToken:  rawToken,
+		IssuedAt:     issuedAt,
+		ExpiresAt:    &expiresAt,
 	}
 
 	if err := db.CreateDeviceAccessToken(ctx, record); err != nil {
@@ -35,31 +33,31 @@ func TestDeviceAccessToken_CreateAndFind(t *testing.T) {
 		t.Fatalf("expected auto-incremented ID > 0, got %d", record.ID)
 	}
 
-	// 1. 按 access_token_hash 查询
-	foundHash, err := db.FindDeviceAccessTokenByAccessTokenHash(ctx, tokenHash)
+	// 1. 按 access_token 查询
+	foundToken, err := db.FindDeviceAccessTokenByAccessToken(ctx, rawToken)
 	if err != nil {
-		t.Fatalf("failed to find device access token by access token hash: %v", err)
+		t.Fatalf("failed to find device access token by access token: %v", err)
 	}
-	if foundHash.ID != record.ID {
-		t.Errorf("expected ID %d, got %d", record.ID, foundHash.ID)
+	if foundToken.ID != record.ID {
+		t.Errorf("expected ID %d, got %d", record.ID, foundToken.ID)
 	}
-	if foundHash.SerialNumber != sn {
-		t.Errorf("expected serial_number %q, got %q", sn, foundHash.SerialNumber)
+	if foundToken.SerialNumber != sn {
+		t.Errorf("expected serial_number %q, got %q", sn, foundToken.SerialNumber)
 	}
-	if !bytes.Equal(foundHash.AccessTokenHash, tokenHash) {
-		t.Errorf("expected access_token_hash %x, got %x", tokenHash, foundHash.AccessTokenHash)
+	if foundToken.AccessToken != rawToken {
+		t.Errorf("expected access_token %q, got %q", rawToken, foundToken.AccessToken)
 	}
-	if foundHash.ExpiresAt == nil || foundHash.ExpiresAt.IsZero() {
-		t.Errorf("expected expires_at to be populated, got %v", foundHash.ExpiresAt)
+	if foundToken.ExpiresAt == nil || foundToken.ExpiresAt.IsZero() {
+		t.Errorf("expected expires_at to be populated, got %v", foundToken.ExpiresAt)
 	}
-	if foundHash.RevokedAt != nil {
-		t.Errorf("expected revoked_at to be nil, got %v", foundHash.RevokedAt)
+	if foundToken.RevokedAt != nil {
+		t.Errorf("expected revoked_at to be nil, got %v", foundToken.RevokedAt)
 	}
-	if foundHash.CreatedAt.IsZero() || foundHash.UpdatedAt.IsZero() {
+	if foundToken.CreatedAt.IsZero() || foundToken.UpdatedAt.IsZero() {
 		t.Errorf("expected timestamps to be populated, got created_at=%v, updated_at=%v",
-			foundHash.CreatedAt, foundHash.UpdatedAt)
+			foundToken.CreatedAt, foundToken.UpdatedAt)
 	}
-	if !foundHash.IsValid(time.Now()) {
+	if !foundToken.IsValid(time.Now()) {
 		t.Errorf("expected token to be valid")
 	}
 
@@ -88,18 +86,18 @@ func TestDeviceAccessToken_DuplicateSerialNumber_Fails(t *testing.T) {
 
 	sn := "SN-DUP-SN-001"
 	record1 := &database.DeviceAccessToken{
-		SerialNumber:    sn,
-		AccessTokenHash: database.HashAccessToken("token-1"),
-		IssuedAt:        time.Now(),
+		SerialNumber: sn,
+		AccessToken:  "token-1",
+		IssuedAt:     time.Now(),
 	}
 	if err := db.CreateDeviceAccessToken(ctx, record1); err != nil {
 		t.Fatalf("failed to create first device access token: %v", err)
 	}
 
 	record2 := &database.DeviceAccessToken{
-		SerialNumber:    sn,
-		AccessTokenHash: database.HashAccessToken("token-2"),
-		IssuedAt:        time.Now(),
+		SerialNumber: sn,
+		AccessToken:  "token-2",
+		IssuedAt:     time.Now(),
 	}
 	err := db.CreateDeviceAccessToken(ctx, record2)
 	if err == nil {
@@ -107,30 +105,29 @@ func TestDeviceAccessToken_DuplicateSerialNumber_Fails(t *testing.T) {
 	}
 }
 
-func TestDeviceAccessToken_DuplicateHash_Fails(t *testing.T) {
+func TestDeviceAccessToken_DuplicateAccessToken_Fails(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
 	rawToken := "duplicate-token-secret"
-	tokenHash := database.HashAccessToken(rawToken)
 
 	record1 := &database.DeviceAccessToken{
-		SerialNumber:    "SN-DUP-1",
-		AccessTokenHash: tokenHash,
-		IssuedAt:        time.Now(),
+		SerialNumber: "SN-DUP-1",
+		AccessToken:  rawToken,
+		IssuedAt:     time.Now(),
 	}
 	if err := db.CreateDeviceAccessToken(ctx, record1); err != nil {
 		t.Fatalf("failed to create first device access token: %v", err)
 	}
 
 	record2 := &database.DeviceAccessToken{
-		SerialNumber:    "SN-DUP-2",
-		AccessTokenHash: tokenHash,
-		IssuedAt:        time.Now(),
+		SerialNumber: "SN-DUP-2",
+		AccessToken:  rawToken,
+		IssuedAt:     time.Now(),
 	}
 	err := db.CreateDeviceAccessToken(ctx, record2)
 	if err == nil {
-		t.Fatal("expected duplicate access_token_hash to fail, got nil error")
+		t.Fatal("expected duplicate access_token to fail, got nil error")
 	}
 }
 
@@ -139,11 +136,10 @@ func TestDeviceAccessToken_Upsert(t *testing.T) {
 	ctx := context.Background()
 
 	sn := "SN-UPSERT-001"
-	tokenHash1 := database.HashAccessToken("token-version-1")
 	token1 := &database.DeviceAccessToken{
-		SerialNumber:    sn,
-		AccessTokenHash: tokenHash1,
-		IssuedAt:        time.Now().Truncate(time.Millisecond),
+		SerialNumber: sn,
+		AccessToken:  "token-version-1",
+		IssuedAt:     time.Now().Truncate(time.Millisecond),
 	}
 
 	// 1. 首次 Upsert -> 插入新记录
@@ -158,16 +154,15 @@ func TestDeviceAccessToken_Upsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to find token after initial upsert: %v", err)
 	}
-	if !bytes.Equal(found1.AccessTokenHash, tokenHash1) {
-		t.Errorf("expected token hash %x, got %x", tokenHash1, found1.AccessTokenHash)
+	if found1.AccessToken != "token-version-1" {
+		t.Errorf("expected token %q, got %q", "token-version-1", found1.AccessToken)
 	}
 
 	// 2. 再次 Upsert -> 覆盖更新 Token
-	tokenHash2 := database.HashAccessToken("token-version-2")
 	token2 := &database.DeviceAccessToken{
-		SerialNumber:    sn,
-		AccessTokenHash: tokenHash2,
-		IssuedAt:        time.Now().Truncate(time.Millisecond),
+		SerialNumber: sn,
+		AccessToken:  "token-version-2",
+		IssuedAt:     time.Now().Truncate(time.Millisecond),
 	}
 	if err := db.UpsertDeviceAccessToken(ctx, token2); err != nil {
 		t.Fatalf("failed to secondary upsert: %v", err)
@@ -180,33 +175,33 @@ func TestDeviceAccessToken_Upsert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to find token after secondary upsert: %v", err)
 	}
-	if !bytes.Equal(found2.AccessTokenHash, tokenHash2) {
-		t.Errorf("expected updated token hash %x, got %x", tokenHash2, found2.AccessTokenHash)
+	if found2.AccessToken != "token-version-2" {
+		t.Errorf("expected updated token %q, got %q", "token-version-2", found2.AccessToken)
 	}
 }
 
-func TestDeviceAccessToken_RevokeTokenByHash(t *testing.T) {
+func TestDeviceAccessToken_RevokeTokenByAccessToken(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
 	sn := "SN-REVOKE-001"
-	tokenHash := database.HashAccessToken("token-to-revoke")
+	rawToken := "token-to-revoke"
 
 	record := &database.DeviceAccessToken{
-		SerialNumber:    sn,
-		AccessTokenHash: tokenHash,
-		IssuedAt:        time.Now(),
+		SerialNumber: sn,
+		AccessToken:  rawToken,
+		IssuedAt:     time.Now(),
 	}
 	if err := db.CreateDeviceAccessToken(ctx, record); err != nil {
 		t.Fatalf("failed to create device access token: %v", err)
 	}
 
 	revokeTime := time.Now().Truncate(time.Millisecond)
-	if err := db.RevokeDeviceAccessTokenByAccessTokenHash(ctx, tokenHash, revokeTime); err != nil {
+	if err := db.RevokeDeviceAccessTokenByAccessToken(ctx, rawToken, revokeTime); err != nil {
 		t.Fatalf("failed to revoke device access token: %v", err)
 	}
 
-	found, err := db.FindDeviceAccessTokenByAccessTokenHash(ctx, tokenHash)
+	found, err := db.FindDeviceAccessTokenByAccessToken(ctx, rawToken)
 	if err != nil {
 		t.Fatalf("failed to find revoked token: %v", err)
 	}
@@ -224,9 +219,9 @@ func TestDeviceAccessToken_RevokeTokenBySerialNumber(t *testing.T) {
 
 	sn := "SN-REVOKE-SN-001"
 	token := &database.DeviceAccessToken{
-		SerialNumber:    sn,
-		AccessTokenHash: database.HashAccessToken("token-by-sn"),
-		IssuedAt:        time.Now(),
+		SerialNumber: sn,
+		AccessToken:  "token-by-sn",
+		IssuedAt:     time.Now(),
 	}
 	if err := db.CreateDeviceAccessToken(ctx, token); err != nil {
 		t.Fatalf("failed to create token: %v", err)
@@ -261,9 +256,9 @@ func TestDeviceAccessToken_DeleteBySerialNumber(t *testing.T) {
 
 	sn := "SN-DELETE-001"
 	token := &database.DeviceAccessToken{
-		SerialNumber:    sn,
-		AccessTokenHash: database.HashAccessToken("token-for-delete"),
-		IssuedAt:        time.Now(),
+		SerialNumber: sn,
+		AccessToken:  "token-for-delete",
+		IssuedAt:     time.Now(),
 	}
 	if err := db.CreateDeviceAccessToken(ctx, token); err != nil {
 		t.Fatalf("failed to create token: %v", err)
@@ -320,17 +315,6 @@ func TestDeviceAccessToken_IsValidHelper(t *testing.T) {
 	}
 }
 
-func TestDeviceAccessToken_HashAccessToken(t *testing.T) {
-	hash1 := database.HashAccessToken("my-token")
-	hash2 := database.HashAccessToken("  my-token  ")
-	if len(hash1) != 32 {
-		t.Fatalf("expected 32-byte sha256 output, got %d", len(hash1))
-	}
-	if !bytes.Equal(hash1, hash2) {
-		t.Errorf("expected trimmed token hashes to match")
-	}
-}
-
 func TestDeviceAccessToken_ValidationErrors(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
@@ -340,16 +324,16 @@ func TestDeviceAccessToken_ValidationErrors(t *testing.T) {
 		t.Errorf("expected ErrInvalidAccessTokenRecord, got: %v", err)
 	}
 	if err := db.CreateDeviceAccessToken(ctx, &database.DeviceAccessToken{
-		SerialNumber:    "",
-		AccessTokenHash: []byte("hash"),
+		SerialNumber: "",
+		AccessToken:  "token-test",
 	}); !errors.Is(err, database.ErrEmptySerialNumber) {
 		t.Errorf("expected ErrEmptySerialNumber, got: %v", err)
 	}
 	if err := db.CreateDeviceAccessToken(ctx, &database.DeviceAccessToken{
-		SerialNumber:    "SN-TEST",
-		AccessTokenHash: nil,
-	}); !errors.Is(err, database.ErrEmptyAccessTokenHash) {
-		t.Errorf("expected ErrEmptyAccessTokenHash, got: %v", err)
+		SerialNumber: "SN-TEST",
+		AccessToken:  "",
+	}); !errors.Is(err, database.ErrEmptyAccessToken) {
+		t.Errorf("expected ErrEmptyAccessToken, got: %v", err)
 	}
 
 	// 2. Upsert 校验
@@ -357,21 +341,21 @@ func TestDeviceAccessToken_ValidationErrors(t *testing.T) {
 		t.Errorf("expected ErrInvalidAccessTokenRecord, got: %v", err)
 	}
 	if err := db.UpsertDeviceAccessToken(ctx, &database.DeviceAccessToken{
-		SerialNumber:    "",
-		AccessTokenHash: []byte("hash"),
+		SerialNumber: "",
+		AccessToken:  "token-test",
 	}); !errors.Is(err, database.ErrEmptySerialNumber) {
 		t.Errorf("expected ErrEmptySerialNumber, got: %v", err)
 	}
 	if err := db.UpsertDeviceAccessToken(ctx, &database.DeviceAccessToken{
-		SerialNumber:    "SN-TEST",
-		AccessTokenHash: nil,
-	}); !errors.Is(err, database.ErrEmptyAccessTokenHash) {
-		t.Errorf("expected ErrEmptyAccessTokenHash, got: %v", err)
+		SerialNumber: "SN-TEST",
+		AccessToken:  "",
+	}); !errors.Is(err, database.ErrEmptyAccessToken) {
+		t.Errorf("expected ErrEmptyAccessToken, got: %v", err)
 	}
 
 	// 3. Find 校验
-	if _, err := db.FindDeviceAccessTokenByAccessTokenHash(ctx, nil); !errors.Is(err, database.ErrEmptyAccessTokenHash) {
-		t.Errorf("expected ErrEmptyAccessTokenHash, got: %v", err)
+	if _, err := db.FindDeviceAccessTokenByAccessToken(ctx, ""); !errors.Is(err, database.ErrEmptyAccessToken) {
+		t.Errorf("expected ErrEmptyAccessToken, got: %v", err)
 	}
 	if _, err := db.FindDeviceAccessTokenBySerialNumber(ctx, "  "); !errors.Is(err, database.ErrEmptySerialNumber) {
 		t.Errorf("expected ErrEmptySerialNumber, got: %v", err)
@@ -381,8 +365,8 @@ func TestDeviceAccessToken_ValidationErrors(t *testing.T) {
 	}
 
 	// 4. Revoke 校验
-	if err := db.RevokeDeviceAccessTokenByAccessTokenHash(ctx, nil, time.Now()); !errors.Is(err, database.ErrEmptyAccessTokenHash) {
-		t.Errorf("expected ErrEmptyAccessTokenHash, got: %v", err)
+	if err := db.RevokeDeviceAccessTokenByAccessToken(ctx, "", time.Now()); !errors.Is(err, database.ErrEmptyAccessToken) {
+		t.Errorf("expected ErrEmptyAccessToken, got: %v", err)
 	}
 	if err := db.RevokeDeviceAccessTokenBySerialNumber(ctx, "", time.Now()); !errors.Is(err, database.ErrEmptySerialNumber) {
 		t.Errorf("expected ErrEmptySerialNumber, got: %v", err)
@@ -398,7 +382,7 @@ func TestDeviceAccessToken_NotFound(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	_, err := db.FindDeviceAccessTokenByAccessTokenHash(ctx, []byte("non-existent-hash"))
+	_, err := db.FindDeviceAccessTokenByAccessToken(ctx, "non-existent-token")
 	if !errors.Is(err, database.ErrAccessTokenNotFound) {
 		t.Errorf("expected ErrAccessTokenNotFound, got: %v", err)
 	}
@@ -413,7 +397,7 @@ func TestDeviceAccessToken_NotFound(t *testing.T) {
 		t.Errorf("expected ErrAccessTokenNotFound, got: %v", err)
 	}
 
-	err = db.RevokeDeviceAccessTokenByAccessTokenHash(ctx, []byte("non-existent-hash"), time.Now())
+	err = db.RevokeDeviceAccessTokenByAccessToken(ctx, "non-existent-token", time.Now())
 	if !errors.Is(err, database.ErrAccessTokenNotFound) {
 		t.Errorf("expected ErrAccessTokenNotFound, got: %v", err)
 	}
@@ -428,7 +412,7 @@ func TestDeviceAccessToken_NilDatabaseSafety(t *testing.T) {
 	var nilDB *database.Database
 	ctx := context.Background()
 
-	if _, err := nilDB.FindDeviceAccessTokenByAccessTokenHash(ctx, []byte("hash")); !errors.Is(err, database.ErrDatabaseInstanceRequired) {
+	if _, err := nilDB.FindDeviceAccessTokenByAccessToken(ctx, "test-token"); !errors.Is(err, database.ErrDatabaseInstanceRequired) {
 		t.Errorf("expected ErrDatabaseInstanceRequired, got: %v", err)
 	}
 	if _, err := nilDB.FindDeviceAccessTokenBySerialNumber(ctx, "SN-001"); !errors.Is(err, database.ErrDatabaseInstanceRequired) {
@@ -443,7 +427,7 @@ func TestDeviceAccessToken_NilDatabaseSafety(t *testing.T) {
 	if err := nilDB.UpsertDeviceAccessToken(ctx, &database.DeviceAccessToken{}); !errors.Is(err, database.ErrDatabaseInstanceRequired) {
 		t.Errorf("expected ErrDatabaseInstanceRequired, got: %v", err)
 	}
-	if err := nilDB.RevokeDeviceAccessTokenByAccessTokenHash(ctx, []byte("hash"), time.Now()); !errors.Is(err, database.ErrDatabaseInstanceRequired) {
+	if err := nilDB.RevokeDeviceAccessTokenByAccessToken(ctx, "test-token", time.Now()); !errors.Is(err, database.ErrDatabaseInstanceRequired) {
 		t.Errorf("expected ErrDatabaseInstanceRequired, got: %v", err)
 	}
 	if err := nilDB.RevokeDeviceAccessTokenBySerialNumber(ctx, "SN-001", time.Now()); !errors.Is(err, database.ErrDatabaseInstanceRequired) {
@@ -460,7 +444,7 @@ func TestDeviceAccessToken_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := db.FindDeviceAccessTokenByAccessTokenHash(ctx, []byte("hash"))
+	_, err := db.FindDeviceAccessTokenByAccessToken(ctx, "test-token")
 	if err == nil {
 		t.Fatal("expected error with canceled context, got nil")
 	}

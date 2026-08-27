@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS device_hmac_credential (
     id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- 凭证内部自增主键
     serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
     auth_method VARCHAR(32) NOT NULL DEFAULT 'efuse_hmac',         -- 认证方式：efuse_hmac / activation_code / manual_code_hmac
-    hmac_key_ciphertext BLOB NOT NULL,                             -- 加密后的 HMAC Key 密文（禁止明文存储）
+    hmac_key_ciphertext BLOB NOT NULL,                             -- HMAC Key 明文（统一字段名 hmac_key_ciphertext）
     credential_status VARCHAR(16) NOT NULL DEFAULT 'enabled',      -- 凭证状态：enabled / activated / blocked / revoked
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 凭证创建时间
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 凭证最近更新时间
@@ -55,14 +55,14 @@ CREATE INDEX IF NOT EXISTS idx_user_id_serial_number ON device_user_ref(user_id,
 CREATE TABLE IF NOT EXISTS device_access_token (
     id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- Token 凭证内部自增主键
     serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
-    access_token_hash BLOB NOT NULL,                                -- 设备 Access Token 的 SHA-256 哈希值（禁止明文存储）
+    access_token VARCHAR(128) NOT NULL,                                   -- 设备 Access Token 明文
     issued_at DATETIME NOT NULL,                                   -- Token 签发时间
     expires_at DATETIME DEFAULT NULL,                              -- Token 过期时间（为空表示无固定过期时间）
     revoked_at DATETIME DEFAULT NULL,                              -- Token 撤销时间（为空表示未撤销）
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 记录创建时间
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 记录最近更新时间
     CONSTRAINT uk_serial_number UNIQUE (serial_number),
-    CONSTRAINT uk_access_token_hash UNIQUE (access_token_hash)
+    CONSTRAINT uk_access_token UNIQUE (access_token)
 );
 -- +goose StatementEnd
 

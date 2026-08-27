@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS device_hmac_credential (
     id BIGSERIAL PRIMARY KEY,                                       -- 凭证内部自增主键
     serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
     auth_method VARCHAR(32) NOT NULL DEFAULT 'efuse_hmac',         -- 认证方式：efuse_hmac / activation_code / manual_code_hmac
-    hmac_key_ciphertext BYTEA NOT NULL,                            -- 加密后的 HMAC Key 密文（禁止明文存储）
+    hmac_key_ciphertext BYTEA NOT NULL,                            -- HMAC Key 明文（统一字段名 hmac_key_ciphertext）
     credential_status VARCHAR(16) NOT NULL DEFAULT 'enabled',      -- 凭证状态：enabled / activated / blocked / revoked
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,     -- 凭证创建时间
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP      -- 凭证最近更新时间
@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_user_id_serial_number ON device_user_ref(user_id,
 CREATE TABLE IF NOT EXISTS device_access_token (
     id BIGSERIAL PRIMARY KEY,                                       -- Token 凭证内部自增主键
     serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
-    access_token_hash BYTEA NOT NULL,                               -- 设备 Access Token 的 SHA-256 哈希值（禁止明文存储）
+    access_token VARCHAR(128) NOT NULL,                                   -- 设备 Access Token 明文
     issued_at TIMESTAMPTZ NOT NULL,                                 -- Token 签发时间
     expires_at TIMESTAMPTZ DEFAULT NULL,                           -- Token 过期时间（为空表示无固定过期时间）
     revoked_at TIMESTAMPTZ DEFAULT NULL,                           -- Token 撤销时间（为空表示未撤销）
@@ -79,8 +79,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_device_access_token_serial_number ON device
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- uk_access_token_hash: 基于 Access Token Hash 的唯一索引（WebSocket Bearer Token 鉴权入口）
-CREATE UNIQUE INDEX IF NOT EXISTS uk_access_token_hash ON device_access_token(access_token_hash);
+-- uk_access_token: 基于 Access Token 明文的唯一索引（WebSocket Bearer Token 鉴权入口）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_access_token ON device_access_token(access_token);
 -- +goose StatementEnd
 
 -- +goose Down
