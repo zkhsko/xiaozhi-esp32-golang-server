@@ -13,11 +13,11 @@ import (
 // 1. 若配置了数据库且包含 SerialNumber，查询 device_activation 表激活状态：
 //   - 若设备存在且正常激活：下发可用 WebSocket 连接配置及服务器时间；
 //   - 若设备被冻结或撤销：拒绝访问并返回 403 Forbidden；
-//   - 若设备未找到：继续下发 6 位随机激活码；
+//   - 若设备未找到：继续下发 6 位随机激活码与 challenge；
 //
 // 2. 若设备不存在或未配置数据库：
 //   - 引入 ttlcache/v3 缓存待激活信息；
-//   - 返回 6 位数字激活码与绑定提示信息。
+//   - 返回 6 位数字激活码、Challenge 挑战值与绑定提示信息。
 func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Request, headers DeviceHeaders, body []byte) {
 	if h.db != nil && headers.SerialNumber != "" {
 		act, err := h.db.FindDeviceActivationBySerialNumber(r.Context(), headers.SerialNumber)
@@ -86,8 +86,9 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 	resp := Response{
 		ServerTime: currentServerTime(),
 		Activation: &ActivationInfo{
-			Code:    pending.Code,
-			Message: DefaultActivationMessage,
+			Code:      pending.Code,
+			Challenge: pending.Challenge,
+			Message:   DefaultActivationMessage,
 		},
 	}
 

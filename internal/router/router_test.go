@@ -637,14 +637,26 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 				break
 			}
 		}
+		if len(resp.Activation.Challenge) != 64 {
+			t.Errorf("expected 64-hex-character challenge (256-bit), got %q", resp.Activation.Challenge)
+		}
+		for _, c := range resp.Activation.Challenge {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				t.Errorf("expected challenge to contain valid hex characters, got %q", resp.Activation.Challenge)
+				break
+			}
+		}
 		if resp.Activation.Message != DefaultActivationMessage {
 			t.Errorf("expected activation message %q, got %q", DefaultActivationMessage, resp.Activation.Message)
 		}
 
-		// 验证 ttlcache 中成功保存了该待激活记录
+		// 验证 ttlcache 中根据激活码成功保存了该待激活记录
 		pending, ok := otaHandler.FindPendingActivationByCode(resp.Activation.Code)
 		if !ok {
 			t.Fatalf("expected pending activation to be found in ttlcache by code %q", resp.Activation.Code)
+		}
+		if pending.Challenge != resp.Activation.Challenge {
+			t.Errorf("expected pending Challenge %q, got %q", resp.Activation.Challenge, pending.Challenge)
 		}
 		if pending.SerialNumber != unactivatedSN {
 			t.Errorf("expected pending SerialNumber %q, got %q", unactivatedSN, pending.SerialNumber)
@@ -656,7 +668,19 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 			t.Errorf("expected pending ClientID %q, got %q", unactivatedCliID, pending.ClientID)
 		}
 
-		// 验证再次请求时生成新的激活码并存入 ttlcache
+		// 验证 ttlcache 中根据 Challenge 同样成功索引该待激活记录
+		pendingByChallenge, ok := otaHandler.FindPendingActivationByChallenge(resp.Activation.Challenge)
+		if !ok {
+			t.Fatalf("expected pending activation to be found in ttlcache by challenge %q", resp.Activation.Challenge)
+		}
+		if pendingByChallenge.Code != resp.Activation.Code {
+			t.Errorf("expected pending code %q, got %q", resp.Activation.Code, pendingByChallenge.Code)
+		}
+		if pendingByChallenge.SerialNumber != unactivatedSN {
+			t.Errorf("expected pending SerialNumber %q, got %q", unactivatedSN, pendingByChallenge.SerialNumber)
+		}
+
+		// 验证再次请求时生成新的激活码和 Challenge 并存入 ttlcache
 		req2 := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
 		req2.Header.Set("Device-Id", unactivatedDevID)
 		req2.Header.Set("Client-Id", unactivatedCliID)
@@ -674,12 +698,21 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 		if len(resp2.Activation.Code) != 6 {
 			t.Errorf("expected 6-digit activation code on second request, got %q", resp2.Activation.Code)
 		}
+		if len(resp2.Activation.Challenge) != 64 {
+			t.Errorf("expected 64-hex-character challenge on second request, got %q", resp2.Activation.Challenge)
+		}
+		if resp2.Activation.Challenge == resp.Activation.Challenge {
+			t.Errorf("expected different challenge on second request, got identical %q", resp2.Activation.Challenge)
+		}
 		pending2, ok := otaHandler.FindPendingActivationByCode(resp2.Activation.Code)
 		if !ok {
 			t.Fatalf("expected pending activation for second code %q in ttlcache", resp2.Activation.Code)
 		}
 		if pending2.SerialNumber != unactivatedSN {
 			t.Errorf("expected pending2 SerialNumber %q, got %q", unactivatedSN, pending2.SerialNumber)
+		}
+		if pending2.Challenge != resp2.Activation.Challenge {
+			t.Errorf("expected pending2 Challenge %q, got %q", resp2.Activation.Challenge, pending2.Challenge)
 		}
 
 		logOutput := logBuf.String()
@@ -933,6 +966,142 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 		}
 		if len(resp.Activation.Code) != 6 {
 			t.Errorf("expected 6-digit code, got %q", resp.Activation.Code)
+		}
+		if len(resp.Activation.Challenge) != 64 {
+			t.Errorf("expected 64-character challenge for nil database with SN, got %q", resp.Activation.Challenge)
+		}
+	})
+}
+
+func TestRouter_OTA_SerialNumberChallenge(t *testing.T) {
+	const (
+		testToken = "secret-token-challenge-test"
+		testWsURL = "wss://test.example.com/xiaozhi/v1/"
+	)
+
+	cfg := newTestConfig(testToken, testWsURL)
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	t.Run("unactivated device with serial number receives valid challenge in activation response", func(t *testing.T) {
+		const (
+			testSN       = "SN-CHALLENGE-TEST-001"
+			testDeviceID = "DEV-CHALLENGE-001"
+			testClientID = "CLI-CHALLENGE-001"
+		)
+
+		req := httptest.NewRequest(http.MethodPost, "/xiaozhi/ota/", strings.NewReader(`{}`))
+		req.Header.Set("Serial-Number", testSN)
+		req.Header.Set("Device-Id", testDeviceID)
+		req.Header.Set("Client-Id", testClientID)
+		req.Header.Set("Activation-Version", "2")
+
+		rec := httptest.NewRecorder()
+		var logBuf bytes.Buffer
+		testLogger := logger.New(&logBuf, slog.LevelDebug)
+
+		otaHandler := NewOTAHandler(cfg, db, testLogger)
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status code 200, got %d, body: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp Response
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if resp.Activation == nil {
+			t.Fatalf("expected Activation to be non-nil")
+		}
+		if resp.Activation.Challenge == "" {
+			t.Fatalf("expected Challenge to be non-empty in activation response")
+		}
+		if len(resp.Activation.Challenge) != 64 {
+			t.Fatalf("expected 64-hex-character (256-bit) challenge, got %d characters (%q)", len(resp.Activation.Challenge), resp.Activation.Challenge)
+		}
+		for _, ch := range resp.Activation.Challenge {
+			if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')) {
+				t.Fatalf("challenge contains invalid hex character %c", ch)
+			}
+		}
+
+		// 验证可以通过 Challenge 查询到 pending 信息
+		pending, ok := otaHandler.FindPendingActivationByChallenge(resp.Activation.Challenge)
+		if !ok {
+			t.Fatalf("expected to find pending activation by challenge %q", resp.Activation.Challenge)
+		}
+		if pending.SerialNumber != testSN {
+			t.Errorf("expected SerialNumber %q, got %q", testSN, pending.SerialNumber)
+		}
+		if pending.DeviceID != testDeviceID {
+			t.Errorf("expected DeviceID %q, got %q", testDeviceID, pending.DeviceID)
+		}
+		if pending.ClientID != testClientID {
+			t.Errorf("expected ClientID %q, got %q", testClientID, pending.ClientID)
+		}
+		if pending.Challenge != resp.Activation.Challenge {
+			t.Errorf("expected Challenge %q, got %q", resp.Activation.Challenge, pending.Challenge)
+		}
+		if pending.Code != resp.Activation.Code {
+			t.Errorf("expected Code %q, got %q", resp.Activation.Code, pending.Code)
+		}
+
+		// 验证不存在的 challenge 返回 false
+		_, notFound := otaHandler.FindPendingActivationByChallenge("non-existent-challenge-hex")
+		if notFound {
+			t.Errorf("expected non-existent challenge to return false")
+		}
+	})
+
+	t.Run("activated device with serial number does not return activation or challenge", func(t *testing.T) {
+		const (
+			activeSN       = "SN-ALREADY-ACTIVATED-001"
+			activeDeviceID = "DEV-ALREADY-ACTIVATED-001"
+			activeClientID = "CLI-ALREADY-ACTIVATED-001"
+		)
+
+		act := &database.DeviceActivation{
+			SerialNumber:     activeSN,
+			DeviceID:         activeDeviceID,
+			ClientID:         activeClientID,
+			ActivationStatus: database.ActivationStatusActive,
+			ActivatedAt:      time.Now(),
+		}
+		if err := db.CreateDeviceActivation(ctx, act); err != nil {
+			t.Fatalf("failed to create seed activation: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req.Header.Set("Serial-Number", activeSN)
+		req.Header.Set("Device-Id", activeDeviceID)
+		req.Header.Set("Client-Id", activeClientID)
+
+		rec := httptest.NewRecorder()
+		otaHandler := NewOTAHandler(cfg, db, slog.Default())
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status code 200, got %d", rec.Code)
+		}
+
+		var resp Response
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+
+		if resp.WebSocket == nil {
+			t.Fatalf("expected WebSocket config to be present for active device")
+		}
+		if resp.Activation != nil {
+			t.Fatalf("expected Activation to be nil for active device, got: %+v", resp.Activation)
 		}
 	})
 }
