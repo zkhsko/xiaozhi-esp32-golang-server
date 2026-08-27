@@ -169,6 +169,41 @@ func (d *Database) CreateDeviceHmacCredential(ctx context.Context, cred *DeviceH
 	return nil
 }
 
+// BatchCreateDeviceHmacCredentials 批量写入设备出厂凭证记录。
+func (d *Database) BatchCreateDeviceHmacCredentials(ctx context.Context, creds []*DeviceHmacCredential) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if len(creds) == 0 {
+		return nil
+	}
+
+	for _, cred := range creds {
+		if cred == nil {
+			return ErrInvalidCredential
+		}
+		cred.SerialNumber = strings.TrimSpace(cred.SerialNumber)
+		if cred.SerialNumber == "" {
+			return ErrEmptySerialNumber
+		}
+		if len(cred.HMACKeyCiphertext) == 0 {
+			return ErrEmptyHMACKeyCiphertext
+		}
+		if cred.AuthMethod == "" {
+			cred.AuthMethod = AuthMethodEfuseHMAC
+		}
+		if cred.CredentialStatus == "" {
+			cred.CredentialStatus = CredentialStatusEnabled
+		}
+	}
+
+	if err := d.gormDB.WithContext(ctx).Create(&creds).Error; err != nil {
+		return fmt.Errorf("batch create device hmac credentials: %w", err)
+	}
+
+	return nil
+}
+
 // UpdateDeviceHmacCredentialStatus 更新设备凭证状态（如激活、冻结或撤销）。
 func (d *Database) UpdateDeviceHmacCredentialStatus(ctx context.Context, serialNumber, status string) error {
 	if d == nil || d.gormDB == nil {

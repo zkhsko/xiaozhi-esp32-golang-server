@@ -89,9 +89,11 @@ func main() {
 		Logger:    slog.Default(),
 	})
 
+	adminHandler := router.NewAdminHandler(cfg, db, slog.Default())
 	otaHandler := router.NewOTAHandler(cfg, db, slog.Default())
 	userHandler := router.NewUserHandler(cfg, db, otaHandler, slog.Default())
 	httpRouter := router.NewRouter(router.Options{
+		Admin:            adminHandler,
 		OTA:              otaHandler,
 		User:             userHandler,
 		WebsocketSession: websocketSessionHandler,
