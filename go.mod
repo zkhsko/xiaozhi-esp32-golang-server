@@ -6,6 +6,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/hraban/opus v0.0.0-20260708213942-bde8e4304501
+	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/openai/openai-go v1.12.0
 	github.com/pressly/goose/v3 v3.27.3
@@ -25,7 +26,6 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/rogpeppe/go-internal v1.6.1 // indirect
 	github.com/sethvargo/go-retry v0.4.0 // indirect

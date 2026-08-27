@@ -84,6 +84,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 		wantStatusCode     int
 		wantAllowHeader    string
 		wantExactWS        bool
+		wantActivation     bool
 		wantEmptyBodyError bool
 	}{
 		{
@@ -101,7 +102,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 			wantExactWS:    true,
 		},
 		{
-			name:   "GET request with Serial-Number success",
+			name:   "GET request with Serial-Number returns activation code when unactivated",
 			method: http.MethodGet,
 			path:   "/xiaozhi/ota/",
 			headers: map[string]string{
@@ -113,10 +114,10 @@ func TestRouter_OTATableDriven(t *testing.T) {
 			},
 			body:           "",
 			wantStatusCode: http.StatusOK,
-			wantExactWS:    true,
+			wantActivation: true,
 		},
 		{
-			name:   "POST request with Serial-Number and json body success",
+			name:   "POST request with Serial-Number and json body returns activation code when unactivated",
 			method: http.MethodPost,
 			path:   "/xiaozhi/ota/",
 			headers: map[string]string{
@@ -127,7 +128,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 			},
 			body:           `{"version":2,"mac_address":"AA:BB:CC:DD:EE:FF","uuid":"uuid-device-client-123"}`,
 			wantStatusCode: http.StatusOK,
-			wantExactWS:    true,
+			wantActivation: true,
 		},
 		{
 			name:   "GET request without trailing slash success",
@@ -365,6 +366,58 @@ func TestRouter_OTATableDriven(t *testing.T) {
 				}
 			}
 
+			if tt.wantActivation {
+				contentType := rec.Header().Get("Content-Type")
+				if !strings.Contains(contentType, "application/json") {
+					t.Errorf("expected Content-Type to contain application/json, got %q", contentType)
+				}
+
+				var resp Response
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("failed to unmarshal response: %v", err)
+				}
+
+				if resp.WebSocket != nil {
+					t.Errorf("expected WebSocket to be nil in activation response, got: %+v", resp.WebSocket)
+				}
+				if resp.Activation == nil {
+					t.Fatalf("expected Activation to be non-nil")
+				}
+				if len(resp.Activation.Code) != 6 {
+					t.Errorf("expected 6-digit activation code, got %q", resp.Activation.Code)
+				}
+				for _, c := range resp.Activation.Code {
+					if c < '0' || c > '9' {
+						t.Errorf("expected all characters in activation code to be digits, got %q", resp.Activation.Code)
+						break
+					}
+				}
+				if resp.Activation.Message != DefaultActivationMessage {
+					t.Errorf("expected activation message %q, got %q", DefaultActivationMessage, resp.Activation.Message)
+				}
+				if resp.ServerTime == nil {
+					t.Fatalf("expected ServerTime to be non-nil")
+				}
+
+				var rawMap map[string]json.RawMessage
+				if err := json.Unmarshal(rec.Body.Bytes(), &rawMap); err != nil {
+					t.Fatalf("failed to unmarshal raw map: %v", err)
+				}
+
+				if len(rawMap) != 2 {
+					t.Errorf("expected exactly 2 top-level fields (activation, server_time), got %d fields: %+v", len(rawMap), rawMap)
+				}
+				if _, ok := rawMap["activation"]; !ok {
+					t.Errorf("missing top-level 'activation' field in response")
+				}
+				if _, ok := rawMap["server_time"]; !ok {
+					t.Errorf("missing top-level 'server_time' field in response")
+				}
+				if _, exists := rawMap["websocket"]; exists {
+					t.Errorf("response contains unwanted field 'websocket'")
+				}
+			}
+
 			// 日志安全性断言：绝不泄露敏感 Token
 			logOutput := logBuf.String()
 			if strings.Contains(logOutput, testToken) {
@@ -516,6 +569,20 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 			t.Fatalf("expected status code %d, got %d, body: %s", http.StatusOK, rec.Code, rec.Body.String())
 		}
 
+		var resp Response
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+		if resp.WebSocket == nil {
+			t.Fatalf("expected WebSocket config to be non-nil for activated device")
+		}
+		if resp.WebSocket.URL != testWsURL {
+			t.Errorf("expected WebSocket URL %q, got %q", testWsURL, resp.WebSocket.URL)
+		}
+		if resp.Activation != nil {
+			t.Errorf("expected Activation to be nil for activated device, got: %+v", resp.Activation)
+		}
+
 		logOutput := logBuf.String()
 		if !strings.Contains(logOutput, "device activation found") {
 			t.Errorf("expected log to contain 'device activation found', got: %s", logOutput)
@@ -528,11 +595,13 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 		}
 	})
 
-	t.Run("with SN and not found in database outputs not found", func(t *testing.T) {
+	t.Run("with SN and not found in database outputs not found and returns 6-digit code in ttlcache", func(t *testing.T) {
 		unactivatedSN := "SN-UNACTIVATED-999"
+		unactivatedDevID := "DEV-OTHER"
+		unactivatedCliID := "CLI-OTHER"
 		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
-		req.Header.Set("Device-Id", "DEV-OTHER")
-		req.Header.Set("Client-Id", "CLI-OTHER")
+		req.Header.Set("Device-Id", unactivatedDevID)
+		req.Header.Set("Client-Id", unactivatedCliID)
 		req.Header.Set("Serial-Number", unactivatedSN)
 
 		rec := httptest.NewRecorder()
@@ -549,12 +618,105 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 			t.Fatalf("expected status code %d, got %d, body: %s", http.StatusOK, rec.Code, rec.Body.String())
 		}
 
+		var resp Response
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+		if resp.WebSocket != nil {
+			t.Errorf("expected WebSocket config to be nil for unactivated device, got: %+v", resp.WebSocket)
+		}
+		if resp.Activation == nil {
+			t.Fatalf("expected Activation to be non-nil for unactivated device")
+		}
+		if len(resp.Activation.Code) != 6 {
+			t.Errorf("expected 6-digit activation code, got %q", resp.Activation.Code)
+		}
+		for _, c := range resp.Activation.Code {
+			if c < '0' || c > '9' {
+				t.Errorf("expected code to contain only digits, got %q", resp.Activation.Code)
+				break
+			}
+		}
+		if resp.Activation.Message != DefaultActivationMessage {
+			t.Errorf("expected activation message %q, got %q", DefaultActivationMessage, resp.Activation.Message)
+		}
+
+		// 验证 ttlcache 中成功保存了该待激活记录
+		pending, ok := otaHandler.FindPendingActivationByCode(resp.Activation.Code)
+		if !ok {
+			t.Fatalf("expected pending activation to be found in ttlcache by code %q", resp.Activation.Code)
+		}
+		if pending.SerialNumber != unactivatedSN {
+			t.Errorf("expected pending SerialNumber %q, got %q", unactivatedSN, pending.SerialNumber)
+		}
+		if pending.DeviceID != unactivatedDevID {
+			t.Errorf("expected pending DeviceID %q, got %q", unactivatedDevID, pending.DeviceID)
+		}
+		if pending.ClientID != unactivatedCliID {
+			t.Errorf("expected pending ClientID %q, got %q", unactivatedCliID, pending.ClientID)
+		}
+
+		// 验证再次请求时生成新的激活码并存入 ttlcache
+		req2 := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req2.Header.Set("Device-Id", unactivatedDevID)
+		req2.Header.Set("Client-Id", unactivatedCliID)
+		req2.Header.Set("Serial-Number", unactivatedSN)
+		rec2 := httptest.NewRecorder()
+		r.ServeHTTP(rec2, req2)
+
+		var resp2 Response
+		if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
+			t.Fatalf("failed to unmarshal second response: %v", err)
+		}
+		if resp2.Activation == nil {
+			t.Fatalf("expected second activation response to be non-nil")
+		}
+		if len(resp2.Activation.Code) != 6 {
+			t.Errorf("expected 6-digit activation code on second request, got %q", resp2.Activation.Code)
+		}
+		pending2, ok := otaHandler.FindPendingActivationByCode(resp2.Activation.Code)
+		if !ok {
+			t.Fatalf("expected pending activation for second code %q in ttlcache", resp2.Activation.Code)
+		}
+		if pending2.SerialNumber != unactivatedSN {
+			t.Errorf("expected pending2 SerialNumber %q, got %q", unactivatedSN, pending2.SerialNumber)
+		}
+
 		logOutput := logBuf.String()
 		if !strings.Contains(logOutput, "device activation not found") {
 			t.Errorf("expected log to contain 'device activation not found', got: %s", logOutput)
 		}
 		if !strings.Contains(logOutput, unactivatedSN) {
 			t.Errorf("expected log to contain serial number %q, got: %s", unactivatedSN, logOutput)
+		}
+	})
+
+	t.Run("with SN and frozen activation returns 403 forbidden", func(t *testing.T) {
+		frozenSN := "SN-FROZEN-001"
+		frozenRecord := &database.DeviceActivation{
+			SerialNumber:     frozenSN,
+			DeviceID:         "DEV-FROZEN-001",
+			ClientID:         "CLI-FROZEN-001",
+			ActivationStatus: database.ActivationStatusFrozen,
+			ActivatedAt:      time.Now().Truncate(time.Millisecond),
+		}
+		if err := db.CreateDeviceActivation(ctx, frozenRecord); err != nil {
+			t.Fatalf("failed to create frozen device activation: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req.Header.Set("Device-Id", "DEV-FROZEN-001")
+		req.Header.Set("Serial-Number", frozenSN)
+
+		rec := httptest.NewRecorder()
+		otaHandler := NewOTAHandler(cfg, db, slog.Default())
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected status code %d, got %d, body: %s", http.StatusForbidden, rec.Code, rec.Body.String())
 		}
 	})
 
@@ -599,6 +761,17 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected status code %d, got %d", http.StatusOK, rec.Code)
+		}
+
+		var resp Response
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+		if resp.Activation == nil {
+			t.Fatalf("expected Activation to be non-nil for nil database with SN")
+		}
+		if len(resp.Activation.Code) != 6 {
+			t.Errorf("expected 6-digit code, got %q", resp.Activation.Code)
 		}
 	})
 }

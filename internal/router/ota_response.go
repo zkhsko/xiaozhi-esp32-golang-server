@@ -40,10 +40,10 @@ type FirmwareInfo struct {
 
 // Response 定义配置发现响应结构。
 type Response struct {
-	ServerTime *ServerTimeInfo `json:"server_time,omitempty"`
-	WebSocket  WebSocketConfig `json:"websocket"`
-	Activation *ActivationInfo `json:"activation,omitempty"`
-	Firmware   *FirmwareInfo   `json:"firmware,omitempty"`
+	ServerTime *ServerTimeInfo  `json:"server_time,omitempty"`
+	WebSocket  *WebSocketConfig `json:"websocket,omitempty"`
+	Activation *ActivationInfo  `json:"activation,omitempty"`
+	Firmware   *FirmwareInfo    `json:"firmware,omitempty"`
 }
 
 // currentServerTime 获取当前服务端时间信息。

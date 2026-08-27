@@ -20,7 +20,7 @@ func (h *OTAHandler) handleOTALegacy(w http.ResponseWriter, r *http.Request, hea
 
 	resp := Response{
 		ServerTime: currentServerTime(),
-		WebSocket: WebSocketConfig{
+		WebSocket: &WebSocketConfig{
 			URL:     wsURL,
 			Token:   token,
 			Version: ProtocolVersion,
