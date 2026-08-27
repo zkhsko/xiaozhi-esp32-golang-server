@@ -26,6 +26,8 @@ var (
 	ErrActivationNotFound = errors.New("device activation not found")
 	// ErrEmptyDeviceID 表示设备 Device-Id 为空。
 	ErrEmptyDeviceID = errors.New("device id cannot be empty")
+	// ErrEmptyClientID 表示设备 Client-Id 为空。
+	ErrEmptyClientID = errors.New("client id cannot be empty")
 	// ErrInvalidActivation 表示设备激活结构体为 nil 或非法。
 	ErrInvalidActivation = errors.New("invalid device activation")
 	// ErrActivationBlocked 表示设备激活处于冻结或撤销状态。
@@ -118,6 +120,37 @@ func (d *Database) FindDeviceActivationByDeviceID(ctx context.Context, deviceID 
 			return nil, fmt.Errorf("find device activation by device_id %q: %w", trimmedDeviceID, ErrActivationNotFound)
 		}
 		return nil, fmt.Errorf("query device activation by device_id: %w", err)
+	}
+
+	return &act, nil
+}
+
+// FindDeviceActivationByDeviceIDAndClientID 根据后端 Device-Id 和 Client-Id 查询最新的激活记录。
+func (d *Database) FindDeviceActivationByDeviceIDAndClientID(ctx context.Context, deviceID, clientID string) (*DeviceActivation, error) {
+	if d == nil || d.gormDB == nil {
+		return nil, ErrDatabaseInstanceRequired
+	}
+
+	trimmedDeviceID := strings.TrimSpace(deviceID)
+	if trimmedDeviceID == "" {
+		return nil, ErrEmptyDeviceID
+	}
+	trimmedClientID := strings.TrimSpace(clientID)
+	if trimmedClientID == "" {
+		return nil, ErrEmptyClientID
+	}
+
+	var act DeviceActivation
+	err := d.gormDB.WithContext(ctx).
+		Model(&DeviceActivation{}).
+		Where("device_id = ? AND client_id = ?", trimmedDeviceID, trimmedClientID).
+		Order("id DESC").
+		Take(&act).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("find device activation by device_id %q and client_id %q: %w", trimmedDeviceID, trimmedClientID, ErrActivationNotFound)
+		}
+		return nil, fmt.Errorf("query device activation by device_id and client_id: %w", err)
 	}
 
 	return &act, nil

@@ -88,7 +88,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 		wantEmptyBodyError bool
 	}{
 		{
-			name:   "GET request without Serial-Number success",
+			name:   "GET request without Serial-Number returns activation code when unactivated",
 			method: http.MethodGet,
 			path:   "/xiaozhi/ota/",
 			headers: map[string]string{
@@ -99,7 +99,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 			},
 			body:           "",
 			wantStatusCode: http.StatusOK,
-			wantExactWS:    true,
+			wantActivation: true,
 		},
 		{
 			name:   "GET request with Serial-Number returns activation code when unactivated",
@@ -131,7 +131,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 			wantActivation: true,
 		},
 		{
-			name:   "GET request without trailing slash success",
+			name:   "GET request without trailing slash returns activation code when unactivated",
 			method: http.MethodGet,
 			path:   "/xiaozhi/ota",
 			headers: map[string]string{
@@ -142,39 +142,39 @@ func TestRouter_OTATableDriven(t *testing.T) {
 			},
 			body:           "",
 			wantStatusCode: http.StatusOK,
-			wantExactWS:    true,
+			wantActivation: true,
 		},
 		{
-			name:           "POST empty body success",
+			name:           "POST empty body returns activation code when unactivated",
 			method:         http.MethodPost,
 			path:           "/xiaozhi/ota/",
 			body:           "",
 			wantStatusCode: http.StatusOK,
-			wantExactWS:    true,
+			wantActivation: true,
 		},
 		{
-			name:           "POST whitespace only body success",
+			name:           "POST whitespace only body returns activation code when unactivated",
 			method:         http.MethodPost,
 			path:           "/xiaozhi/ota/",
 			body:           "   \n\t  ",
 			wantStatusCode: http.StatusOK,
-			wantExactWS:    true,
+			wantActivation: true,
 		},
 		{
-			name:           "POST valid json body success",
+			name:           "POST valid json body returns activation code when unactivated",
 			method:         http.MethodPost,
 			path:           "/xiaozhi/ota/",
 			body:           `{"version":"1.0.0","mac":"AA:BB:CC:DD:EE:FF","flash_size":4194304}`,
 			wantStatusCode: http.StatusOK,
-			wantExactWS:    true,
+			wantActivation: true,
 		},
 		{
-			name:           "POST valid json array body success",
+			name:           "POST valid json array body returns activation code when unactivated",
 			method:         http.MethodPost,
 			path:           "/xiaozhi/ota/",
 			body:           `[1, 2, "three"]`,
 			wantStatusCode: http.StatusOK,
-			wantExactWS:    true,
+			wantActivation: true,
 		},
 		{
 			name:           "POST invalid json body returns 400",
@@ -230,7 +230,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 				"Device-Id": strings.Repeat("A", 1024),
 			},
 			wantStatusCode: http.StatusOK,
-			wantExactWS:    true,
+			wantActivation: true,
 		},
 		{
 			name:   "Untrusted Host and Forwarded headers ignored in response URL",
@@ -242,7 +242,7 @@ func TestRouter_OTATableDriven(t *testing.T) {
 				"X-Forwarded-Proto": "http",
 			},
 			wantStatusCode: http.StatusOK,
-			wantExactWS:    true,
+			wantActivation: true,
 		},
 		{
 			name:   "Single header value exceeds 1024 bytes returns 400",
@@ -720,10 +720,24 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 		}
 	})
 
-	t.Run("without SN does not query activation by SN", func(t *testing.T) {
+	t.Run("without SN and found in database outputs activation info", func(t *testing.T) {
+		legacySN := "SN-LEGACY-001"
+		legacyDevID := "DEV-LEGACY-ACTIVATED"
+		legacyCliID := "CLI-LEGACY-ACTIVATED"
+		legacyRecord := &database.DeviceActivation{
+			SerialNumber:     legacySN,
+			DeviceID:         legacyDevID,
+			ClientID:         legacyCliID,
+			ActivationStatus: database.ActivationStatusActive,
+			ActivatedAt:      time.Now().Truncate(time.Millisecond),
+		}
+		if err := db.CreateDeviceActivation(ctx, legacyRecord); err != nil {
+			t.Fatalf("failed to create legacy device activation: %v", err)
+		}
+
 		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
-		req.Header.Set("Device-Id", "DEV-LEGACY-001")
-		req.Header.Set("Client-Id", "CLI-LEGACY-001")
+		req.Header.Set("Device-Id", legacyDevID)
+		req.Header.Set("Client-Id", legacyCliID)
 
 		rec := httptest.NewRecorder()
 		var logBuf bytes.Buffer
@@ -739,9 +753,156 @@ func TestRouter_OTA_DeviceActivationQuery(t *testing.T) {
 			t.Fatalf("expected status code %d, got %d, body: %s", http.StatusOK, rec.Code, rec.Body.String())
 		}
 
+		var resp Response
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+		if resp.WebSocket == nil {
+			t.Fatalf("expected WebSocket config to be non-nil for activated legacy device")
+		}
+		if resp.WebSocket.URL != testWsURL {
+			t.Errorf("expected WebSocket URL %q, got %q", testWsURL, resp.WebSocket.URL)
+		}
+		if resp.Activation != nil {
+			t.Errorf("expected Activation to be nil for activated legacy device, got: %+v", resp.Activation)
+		}
+
 		logOutput := logBuf.String()
-		if strings.Contains(logOutput, "device activation found") || strings.Contains(logOutput, "device activation not found") {
-			t.Errorf("expected log not to contain device activation query output for legacy device, got: %s", logOutput)
+		if !strings.Contains(logOutput, "legacy device activation found") {
+			t.Errorf("expected log to contain 'legacy device activation found', got: %s", logOutput)
+		}
+		if !strings.Contains(logOutput, legacyDevID) {
+			t.Errorf("expected log to contain device ID %q, got: %s", legacyDevID, logOutput)
+		}
+		if !strings.Contains(logOutput, legacyCliID) {
+			t.Errorf("expected log to contain client ID %q, got: %s", legacyCliID, logOutput)
+		}
+	})
+
+	t.Run("without SN and not found in database outputs not found and returns 6-digit code in ttlcache", func(t *testing.T) {
+		unactivatedDevID := "DEV-LEGACY-NOT-EXIST"
+		unactivatedCliID := "CLI-LEGACY-NOT-EXIST"
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req.Header.Set("Device-Id", unactivatedDevID)
+		req.Header.Set("Client-Id", unactivatedCliID)
+
+		rec := httptest.NewRecorder()
+		var logBuf bytes.Buffer
+		testLogger := logger.New(&logBuf, slog.LevelDebug)
+
+		otaHandler := NewOTAHandler(cfg, db, testLogger)
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected status code %d, got %d, body: %s", http.StatusOK, rec.Code, rec.Body.String())
+		}
+
+		var resp Response
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to unmarshal response: %v", err)
+		}
+		if resp.WebSocket != nil {
+			t.Errorf("expected WebSocket config to be nil for unactivated legacy device, got: %+v", resp.WebSocket)
+		}
+		if resp.Activation == nil {
+			t.Fatalf("expected Activation to be non-nil for unactivated legacy device")
+		}
+		if len(resp.Activation.Code) != 6 {
+			t.Errorf("expected 6-digit activation code, got %q", resp.Activation.Code)
+		}
+		for _, c := range resp.Activation.Code {
+			if c < '0' || c > '9' {
+				t.Errorf("expected code to contain only digits, got %q", resp.Activation.Code)
+				break
+			}
+		}
+		if resp.Activation.Message != DefaultActivationMessage {
+			t.Errorf("expected activation message %q, got %q", DefaultActivationMessage, resp.Activation.Message)
+		}
+
+		// 验证 ttlcache 中成功保存了该待激活记录，且 SerialNumber 为空
+		pending, ok := otaHandler.FindPendingActivationByCode(resp.Activation.Code)
+		if !ok {
+			t.Fatalf("expected pending activation to be found in ttlcache by code %q", resp.Activation.Code)
+		}
+		if pending.SerialNumber != "" {
+			t.Errorf("expected empty pending SerialNumber, got %q", pending.SerialNumber)
+		}
+		if pending.DeviceID != unactivatedDevID {
+			t.Errorf("expected pending DeviceID %q, got %q", unactivatedDevID, pending.DeviceID)
+		}
+		if pending.ClientID != unactivatedCliID {
+			t.Errorf("expected pending ClientID %q, got %q", unactivatedCliID, pending.ClientID)
+		}
+
+		logOutput := logBuf.String()
+		if !strings.Contains(logOutput, "legacy device activation not found") {
+			t.Errorf("expected log to contain 'legacy device activation not found', got: %s", logOutput)
+		}
+	})
+
+	t.Run("without SN and frozen activation returns 403 forbidden", func(t *testing.T) {
+		frozenLegacySN := "SN-LEGACY-FROZEN-001"
+		frozenLegacyDevID := "DEV-LEGACY-FROZEN-001"
+		frozenLegacyCliID := "CLI-LEGACY-FROZEN-001"
+		frozenRecord := &database.DeviceActivation{
+			SerialNumber:     frozenLegacySN,
+			DeviceID:         frozenLegacyDevID,
+			ClientID:         frozenLegacyCliID,
+			ActivationStatus: database.ActivationStatusFrozen,
+			ActivatedAt:      time.Now().Truncate(time.Millisecond),
+		}
+		if err := db.CreateDeviceActivation(ctx, frozenRecord); err != nil {
+			t.Fatalf("failed to create frozen legacy device activation: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req.Header.Set("Device-Id", frozenLegacyDevID)
+		req.Header.Set("Client-Id", frozenLegacyCliID)
+
+		rec := httptest.NewRecorder()
+		otaHandler := NewOTAHandler(cfg, db, slog.Default())
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected status code %d, got %d, body: %s", http.StatusForbidden, rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("without SN and revoked activation returns 403 forbidden", func(t *testing.T) {
+		revokedLegacySN := "SN-LEGACY-REVOKED-001"
+		revokedLegacyDevID := "DEV-LEGACY-REVOKED-001"
+		revokedLegacyCliID := "CLI-LEGACY-REVOKED-001"
+		revokedRecord := &database.DeviceActivation{
+			SerialNumber:     revokedLegacySN,
+			DeviceID:         revokedLegacyDevID,
+			ClientID:         revokedLegacyCliID,
+			ActivationStatus: database.ActivationStatusRevoked,
+			ActivatedAt:      time.Now().Truncate(time.Millisecond),
+		}
+		if err := db.CreateDeviceActivation(ctx, revokedRecord); err != nil {
+			t.Fatalf("failed to create revoked legacy device activation: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/xiaozhi/ota/", nil)
+		req.Header.Set("Device-Id", revokedLegacyDevID)
+		req.Header.Set("Client-Id", revokedLegacyCliID)
+
+		rec := httptest.NewRecorder()
+		otaHandler := NewOTAHandler(cfg, db, slog.Default())
+		r := NewRouter(Options{
+			OTA: otaHandler,
+		})
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected status code %d, got %d, body: %s", http.StatusForbidden, rec.Code, rec.Body.String())
 		}
 	})
 

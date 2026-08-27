@@ -79,7 +79,31 @@ func TestDeviceActivation_CreateAndFind(t *testing.T) {
 		t.Errorf("expected ID %d, got %d", record.ID, foundDevID.ID)
 	}
 
-	// 4. 按 id 查询
+	// 4. 按 device_id 和 client_id 联合查询
+	foundDevCli, err := db.FindDeviceActivationByDeviceIDAndClientID(ctx, deviceID, clientID)
+	if err != nil {
+		t.Fatalf("failed to find device activation by device_id and client_id: %v", err)
+	}
+	if foundDevCli.ID != record.ID {
+		t.Errorf("expected ID %d, got %d", record.ID, foundDevCli.ID)
+	}
+	if foundDevCli.DeviceID != deviceID {
+		t.Errorf("expected device_id %q, got %q", deviceID, foundDevCli.DeviceID)
+	}
+	if foundDevCli.ClientID != clientID {
+		t.Errorf("expected client_id %q, got %q", clientID, foundDevCli.ClientID)
+	}
+
+	// 5. 按 device_id 和 client_id 带首尾空格查询（自动 Trim）
+	foundDevCliTrimmed, err := db.FindDeviceActivationByDeviceIDAndClientID(ctx, "  "+deviceID+"  ", "  "+clientID+"  ")
+	if err != nil {
+		t.Fatalf("failed to find device activation by device_id and client_id with whitespace: %v", err)
+	}
+	if foundDevCliTrimmed.ID != record.ID {
+		t.Errorf("expected ID %d, got %d", record.ID, foundDevCliTrimmed.ID)
+	}
+
+	// 6. 按 id 查询
 	foundID, err := db.FindDeviceActivationByID(ctx, record.ID)
 	if err != nil {
 		t.Fatalf("failed to find device activation by id: %v", err)
@@ -324,13 +348,19 @@ func TestDeviceActivation_NotFound(t *testing.T) {
 		t.Errorf("expected ErrActivationNotFound, got: %v", err)
 	}
 
-	// 3. ID 不存在
+	// 3. device_id 和 client_id 不存在
+	_, err = db.FindDeviceActivationByDeviceIDAndClientID(ctx, "NON-EXISTENT-DEV-ID", "NON-EXISTENT-CLI-ID")
+	if !errors.Is(err, database.ErrActivationNotFound) {
+		t.Errorf("expected ErrActivationNotFound, got: %v", err)
+	}
+
+	// 4. ID 不存在
 	_, err = db.FindDeviceActivationByID(ctx, 999999)
 	if !errors.Is(err, database.ErrActivationNotFound) {
 		t.Errorf("expected ErrActivationNotFound, got: %v", err)
 	}
 
-	// 4. ID 为 0
+	// 5. ID 为 0
 	_, err = db.FindDeviceActivationByID(ctx, 0)
 	if !errors.Is(err, database.ErrActivationNotFound) {
 		t.Errorf("expected ErrActivationNotFound for id 0, got: %v", err)
@@ -347,6 +377,11 @@ func TestDeviceActivation_NilDatabaseSafety(t *testing.T) {
 	}
 
 	_, err = nilDB.FindDeviceActivationByDeviceID(ctx, "DEV-TEST")
+	if !errors.Is(err, database.ErrDatabaseInstanceRequired) {
+		t.Errorf("expected ErrDatabaseInstanceRequired, got: %v", err)
+	}
+
+	_, err = nilDB.FindDeviceActivationByDeviceIDAndClientID(ctx, "DEV-TEST", "CLI-TEST")
 	if !errors.Is(err, database.ErrDatabaseInstanceRequired) {
 		t.Errorf("expected ErrDatabaseInstanceRequired, got: %v", err)
 	}
@@ -388,9 +423,39 @@ func TestDeviceActivation_ContextCanceled(t *testing.T) {
 		t.Fatal("expected error with canceled context, got nil")
 	}
 
+	_, err = db.FindDeviceActivationByDeviceIDAndClientID(ctx, "DEV-001", "CLI-001")
+	if err == nil {
+		t.Fatal("expected error with canceled context, got nil")
+	}
+
 	_, err = db.FindDeviceActivationByID(ctx, 1)
 	if err == nil {
 		t.Fatal("expected error with canceled context, got nil")
+	}
+}
+
+func TestDeviceActivation_FindByDeviceIDAndClientID_Validation(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	// 空 device_id
+	_, err := db.FindDeviceActivationByDeviceIDAndClientID(ctx, "", "CLI-001")
+	if !errors.Is(err, database.ErrEmptyDeviceID) {
+		t.Errorf("expected ErrEmptyDeviceID, got: %v", err)
+	}
+	_, err = db.FindDeviceActivationByDeviceIDAndClientID(ctx, "   ", "CLI-001")
+	if !errors.Is(err, database.ErrEmptyDeviceID) {
+		t.Errorf("expected ErrEmptyDeviceID for whitespace, got: %v", err)
+	}
+
+	// 空 client_id
+	_, err = db.FindDeviceActivationByDeviceIDAndClientID(ctx, "DEV-001", "")
+	if !errors.Is(err, database.ErrEmptyClientID) {
+		t.Errorf("expected ErrEmptyClientID, got: %v", err)
+	}
+	_, err = db.FindDeviceActivationByDeviceIDAndClientID(ctx, "DEV-001", "   ")
+	if !errors.Is(err, database.ErrEmptyClientID) {
+		t.Errorf("expected ErrEmptyClientID for whitespace, got: %v", err)
 	}
 }
 
