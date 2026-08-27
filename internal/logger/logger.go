@@ -156,9 +156,9 @@ func isSensitiveKey(key string) bool {
 
 	switch k {
 	case "authorization", "proxy_authorization", "auth", "cookie", "set_cookie",
-		"dashscope_api_key", "device_shared_token",
+		"dashscope_api_key",
 		"api_key", "apikey", "x_api_key", "key",
-		"token", "access_token", "refresh_token", "id_token", "bearer_token", "shared_token", "session_token",
+		"token", "access_token", "refresh_token", "id_token", "bearer_token", "session_token",
 		"secret", "client_secret", "app_secret",
 		"password", "passwd", "pass", "private_key",
 		"credential", "credentials",

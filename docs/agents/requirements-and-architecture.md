@@ -84,7 +84,7 @@
 ### 5.1 必须实现
 
 - 同时兼容固件配置发现使用的 `GET` 和 `POST`。
-- 返回固定协议版本的 WebSocket URL 和共享 Token。
+- 返回固定协议版本的 WebSocket URL 和设备专属 Access Token（针对已绑定设备）。
 - WebSocket Bearer Token 校验、客户端 hello 校验和服务端 hello 响应。
 - WebSocket 二进制协议 v1 的 Opus 上行和下行。
 - `auto` 模式的流式识别与服务端 VAD 端点检测。
@@ -178,14 +178,14 @@ ASR、LLM、TTS 必须是三个独立的小接口，不创建统一的“大模�
 {
   "websocket": {
     "url": "wss://example.com/xiaozhi/v1/",
-    "token": "shared-device-token",
+    "token": "generated-access-token",
     "version": 1
   }
 }
 ```
 
 - `url` 来自可信服务端配置，不根据客户端 `Host` 或任意转发头拼接。
-- `token` 来自进程环境变量，每次配置发现都返回同一个值。
+- `token` 来自数据库 `device_access_token` 表，在设备完成绑定后的首次配置发现中展示并下发。
 - `version` 固定为 1，不提供版本配置项。
 - 不返回 `activation`、`mqtt`、`firmware` 或其他占位对象。
 - 响应和日志不得暴露 Token 之外的其他敏感配置；日志不得记录 Token。
@@ -196,7 +196,7 @@ ASR、LLM、TTS 必须是三个独立的小接口，不创建统一的“大模�
 
 WebSocket 使用固定路径 `/xiaozhi/v1/`。
 
-- 要求 `Authorization: Bearer <token>` 与环境变量中的共享 Token 匹配。
+- 要求 `Authorization: Bearer <token>` 与数据库中有效的每设备 Access Token 记录匹配。
 - 要求 `Protocol-Version` 等于 `1`。
 - 接收 `Device-Id` 和 `Client-Id`，单个 Header 长度上限 1024 字符（超限拒绝握手），只写入必要的会话日志字段。
 - 不要求 `Serial-Number`，保证没有序列号的当前 v1 固件能够接入。
@@ -500,11 +500,11 @@ YAML 必须严格映射到明确 struct（启用未知字段检查 `Decoder.Know
 
 ## 13. 安全与日志边界
 
-- 本阶段的共享 Token 只提供最低限度接入保护，不构成设备身份认证。
-- `Device-Id`、`Client-Id` 和 `Serial-Number` 都是客户端声明，不得在日志或响应中描述为可信身份。
+- 设备认证采用基于数据库 `device_access_token` 表的每设备 Access Token。
+- `Device-Id`、`Client-Id` 和 `Serial-Number` 作为客户端声明参与匹配和校验。
 - 公网传输必须由受控反向代理提供 HTTPS/WSS；本服务首期不自行终止 TLS。
 - 配置发现、WebSocket 头、JSON、Opus 包、队列和收音时长必须有上限。
-- Token 比较使用常量时间比较（`crypto/subtle.ConstantTimeCompare`），日志严禁记录 `Authorization`、API Key、共享 Token 或完整外部响应。
+- Token 比较使用常量时间比较（`crypto/subtle.ConstantTimeCompare`），日志严禁记录 `Authorization`、API Key、Access Token 或完整外部响应。
 - 严禁记录原始 PCM、Opus、完整系统提示词或完整对话正文。
 - 日志字段截断规则：客户端声明字段（如 `device_id`、`client_id`、`serial_number`）、未识别扩展消息 payload 及错误摘要等，在日志输出时按最大 64 字符（常量 `log_truncate_limit`）进行截断并追加 `...`。
 - 诊断日志限频规则：针对未识别扩展消息或高频异常，采用会话级令牌桶/滑动窗口限频器，每秒最多输出 1 条日志（常量 `diag_rate_limit = 1 msg/s`，突发容量 3 条），超限部分静默丢弃或聚合计数。
@@ -574,7 +574,7 @@ go test -race ./...
 - `auto`、`manual`、按句 TTS、有限多轮、显式中断和断线清理行为符合本文档。
 - 运行时所有连接、队列、音频、上下文和外部请求均有界且可取消。
 - `go test ./...`、`go vet ./...` 和 `go test -race ./...` 通过。
-- 源码、配置、测试、日志和文档中不存在真实 API Key、共享 Token 或原始音频。
+- 源码、配置、测试、日志和文档中不存在真实 API Key、Access Token 或原始音频。
 - 人类概览、启动说明和实际实现保持一致，明确标注 MVP 的安全限制和未实现范围。
 
 成功编译、只通过模拟服务或只完成文本调用都不能替代真实设备语音验收。
