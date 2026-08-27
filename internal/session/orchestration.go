@@ -473,8 +473,12 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 				if ctx.Err() != nil || s.Generation() > gen {
 					return
 				}
-				// 若为 auto 模式且启用了提示音，在 TTS 语音末尾追加提示音 PCM，通过同一编码器连续编码
-				if s.Mode() == ListenModeAuto && s.cfg != nil && s.cfg.Session.ListenPromptEnabled {
+				s.mu.RLock()
+				isCloseAfterTurn := s.closeAfterTurn
+				s.mu.RUnlock()
+
+				// 若为 auto 模式且启用了提示音且本轮非关闭连接操作，在 TTS 语音末尾追加提示音 PCM，通过同一编码器连续编码
+				if s.Mode() == ListenModeAuto && s.cfg != nil && s.cfg.Session.ListenPromptEnabled && !isCloseAfterTurn {
 					promptPCM, pErr := audio.GetListenPromptPCM()
 					if pErr != nil {
 						consumeErr = pErr

@@ -9,7 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/audio"
 	"xiaozhi-esp32-golang-server/internal/config"
 )
 
@@ -780,5 +783,96 @@ func TestServerTool_CloseSession_AbortCancelsPendingClose(t *testing.T) {
 	}
 	if closeFlag {
 		t.Errorf("expected closeAfterTurn to be cleared on abort")
+	}
+}
+
+// TestServerTool_CloseSession_NoListenPromptSound 验证在 auto 模式且启用提示音时，
+// 如果大模型调用了 server.close_session 关闭连接，TTS 播报告别语末尾绝不追加播放提示音。
+func TestServerTool_CloseSession_NoListenPromptSound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn := &fakeWSConn{}
+	writer := NewWriter(ctx, conn, 100, slog.Default())
+
+	// 准备 1 帧 60ms 24kHz 单声道 16-bit PCM (2880 字节)
+	ttsPCMFrame := make([]byte, 2880)
+
+	stream1 := newMockMCPLLMStream(nil, []ai.ToolCall{
+		{
+			ID:        "call_close_no_prompt",
+			Name:      ServerToolCloseSession,
+			Arguments: `{}`,
+		},
+	})
+	stream2 := newMockMCPLLMStream([]string{"再见，随时叫我。"}, nil)
+
+	llmClient := &mockMCPLLMClient{
+		streams: []ai.LLMStream{stream1, stream2},
+	}
+
+	ttsStream := newMockTTSStream(nil)
+	ttsStream.pcmDataToReturn = [][]byte{ttsPCMFrame}
+	ttsClientWrapper := newMockTTSClient(ttsStream, nil)
+
+	fastTickerFactory := func(d time.Duration) Ticker {
+		return &realTicker{ticker: time.NewTicker(1 * time.Millisecond)}
+	}
+
+	sess := NewSession(ctx, Options{
+		Writer: writer,
+		Config: &config.Config{
+			Session: config.SessionConfig{
+				SystemPrompt:        "你是小智助手。",
+				ListenPromptEnabled: true, // 启用提示音
+			},
+		},
+		LLMClient:     llmClient,
+		TTSClient:     ttsClientWrapper,
+		TickerFactory: fastTickerFactory,
+		Logger:        slog.Default(),
+	})
+	defer sess.Close()
+	go func() { _ = sess.Run() }()
+
+	sess.mu.Lock()
+	sess.sessionID = "test-close-no-prompt-session"
+	sess.mode = ListenModeAuto
+	sess.state = StateProcessing
+	sess.generation = 1
+	sess.mu.Unlock()
+
+	sess.orchestrateLLMAndTTS(ctx, 1, "退下吧")
+
+	// 等待会话关闭
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if sess.State() == StateClosed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if sess.State() != StateClosed {
+		t.Fatalf("expected session to be closed, got %s", sess.State())
+	}
+
+	// 统计下发的二进制 Opus 数据包数量
+	var binaryCount int
+	for _, m := range conn.Messages() {
+		if m.typ == websocket.MessageBinary {
+			binaryCount++
+		}
+	}
+
+	// 预期：只有 TTS 自身的 1 帧音频包，绝不追加提示音包
+	promptFrameCount, err := audio.GetListenPromptFrameCount()
+	if err != nil {
+		t.Fatalf("failed to get listen prompt frame count: %v", err)
+	}
+
+	if binaryCount != 1 {
+		t.Errorf("expected exactly 1 TTS opus packet (no prompt appended), got %d (prompt frame count is %d)",
+			binaryCount, promptFrameCount)
 	}
 }
