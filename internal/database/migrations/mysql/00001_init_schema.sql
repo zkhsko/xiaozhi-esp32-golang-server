@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS `device_hmac_credential` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '凭证自增主键',
     `serial_number` VARCHAR(64) NOT NULL COMMENT '设备序列号，全局业务唯一',
     `auth_method` VARCHAR(32) NOT NULL DEFAULT 'efuse_hmac' COMMENT '认证方式：efuse_hmac / activation_code / manual_code_hmac',
-    `hmac_key_ciphertext` VARBINARY(512) NOT NULL COMMENT 'HMAC Key 明文（统一字段名 hmac_key_ciphertext）',
+    `hmac_key_ciphertext` VARCHAR(64) NOT NULL COMMENT 'HMAC Key（统一字段名 hmac_key_ciphertext，64位十六进制字符，可直接写入 hmac_0）',
     `credential_status` VARCHAR(16) NOT NULL DEFAULT 'enabled' COMMENT '凭证状态：enabled / activated / blocked / revoked',
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',

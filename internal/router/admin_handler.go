@@ -125,7 +125,7 @@ func (h *AdminHandler) handleGenerateCredential(w http.ResponseWriter, r *http.R
 		rec := &database.DeviceHmacCredential{
 			SerialNumber:      curSN,
 			AuthMethod:        database.AuthMethodEfuseHMAC,
-			HMACKeyCiphertext: randKey,
+			HMACKeyCiphertext: keyHex,
 			CredentialStatus:  database.CredentialStatusEnabled,
 		}
 		records = append(records, rec)

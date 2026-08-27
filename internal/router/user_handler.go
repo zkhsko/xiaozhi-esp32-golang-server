@@ -376,30 +376,38 @@ func (h *UserHandler) readAndValidateBindRequest(w http.ResponseWriter, r *http.
 
 // verifyHMAC 校验输入的 HMAC 凭证。
 // 支持：
-// 1. 直接匹配 HMAC 密钥（密文字节或 hex 编码）；
+// 1. 直接匹配 HMAC 密钥（hex 字符串或原始字符比对）；
 // 2. 针对 challenge 计算的 HMAC-SHA256 十六进制摘要比对；
 // 3. 针对 code 计算的 HMAC-SHA256 十六进制摘要比对。
-func verifyHMAC(ciphertextKey []byte, hmacInput, challenge, code string) bool {
-	if len(ciphertextKey) == 0 || hmacInput == "" {
+func verifyHMAC(ciphertextKey, hmacInput, challenge, code string) bool {
+	cleanKey := strings.TrimSpace(ciphertextKey)
+	cleanInput := strings.TrimSpace(hmacInput)
+	if cleanKey == "" || cleanInput == "" {
 		return false
 	}
 
-	// 1. 直接匹配密钥（字节或 hex 解码后比对）
-	if hmac.Equal(ciphertextKey, []byte(hmacInput)) {
+	// 1. 直接匹配密钥
+	if strings.EqualFold(cleanKey, cleanInput) {
 		return true
 	}
-	if decodedInput, err := hex.DecodeString(hmacInput); err == nil {
-		if hmac.Equal(ciphertextKey, decodedInput) {
+
+	keyBytes, err := hex.DecodeString(cleanKey)
+	if err != nil || len(keyBytes) == 0 {
+		keyBytes = []byte(cleanKey)
+	}
+
+	if decodedInput, err := hex.DecodeString(cleanInput); err == nil {
+		if hmac.Equal(keyBytes, decodedInput) {
 			return true
 		}
 	}
 
 	// 2. 针对 challenge 计算 HMAC-SHA256 比对
 	if challenge != "" {
-		mac := hmac.New(sha256.New, ciphertextKey)
+		mac := hmac.New(sha256.New, keyBytes)
 		mac.Write([]byte(challenge))
 		expected := mac.Sum(nil)
-		if decoded, err := hex.DecodeString(hmacInput); err == nil {
+		if decoded, err := hex.DecodeString(cleanInput); err == nil {
 			if hmac.Equal(expected, decoded) {
 				return true
 			}
@@ -408,10 +416,10 @@ func verifyHMAC(ciphertextKey []byte, hmacInput, challenge, code string) bool {
 
 	// 3. 针对 code 计算 HMAC-SHA256 比对
 	if code != "" {
-		mac := hmac.New(sha256.New, ciphertextKey)
+		mac := hmac.New(sha256.New, keyBytes)
 		mac.Write([]byte(code))
 		expected := mac.Sum(nil)
-		if decoded, err := hex.DecodeString(hmacInput); err == nil {
+		if decoded, err := hex.DecodeString(cleanInput); err == nil {
 			if hmac.Equal(expected, decoded) {
 				return true
 			}

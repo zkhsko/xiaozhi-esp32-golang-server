@@ -105,7 +105,12 @@ func (h *OTAHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mac := hmac.New(sha256.New, cred.HMACKeyCiphertext)
+	keyBytes, err := hex.DecodeString(strings.TrimSpace(cred.HMACKeyCiphertext))
+	if err != nil || len(keyBytes) == 0 {
+		keyBytes = []byte(strings.TrimSpace(cred.HMACKeyCiphertext))
+	}
+
+	mac := hmac.New(sha256.New, keyBytes)
 	mac.Write([]byte(challenge))
 	expectedHMAC := mac.Sum(nil)
 
