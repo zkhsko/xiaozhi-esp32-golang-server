@@ -61,7 +61,8 @@ func (DeviceActivation) TableName() string {
 //  1. 根据 serialNumber 查询 device_activation 表；
 //  2. 若未激活过（记录不存在）：创建新的激活记录（status=active, activated_at=now）；
 //  3. 若已激活过（记录已存在）：更新 device_id、client_id、activation_status=active；
-//     并删除 device_user_ref 表中该 serialNumber 绑定的旧用户记录（保证重新激活后需重新绑定用户）。
+//     并删除 device_user_ref 表中该 serialNumber 绑定的旧用户记录与 device_access_token 中的旧 Token（保证重新激活后需重新绑定用户，且旧 Token 立即失效）；
+//  4. 将 device_hmac_credential 中该 serialNumber 的凭证状态更新为 activated（若当前为 enabled）。
 func (d *Database) ActivateDeviceBySerialNumber(ctx context.Context, serialNumber, deviceID, clientID string) (*DeviceActivation, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
@@ -94,35 +95,45 @@ func (d *Database) ActivateDeviceBySerialNumber(ctx context.Context, serialNumbe
 			if err := tx.Create(&act).Error; err != nil {
 				return fmt.Errorf("create device activation: %w", err)
 			}
-			return nil
+		} else {
+			updates := map[string]any{
+				"activation_status": ActivationStatusActive,
+			}
+			if trimmedDeviceID != "" {
+				updates["device_id"] = trimmedDeviceID
+			}
+			if trimmedClientID != "" {
+				updates["client_id"] = trimmedClientID
+			}
+
+			if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+				return fmt.Errorf("update device activation: %w", err)
+			}
+
+			if err := tx.Where("serial_number = ?", trimmedSN).Delete(&DeviceUserRef{}).Error; err != nil {
+				return fmt.Errorf("delete device user ref on reactivate: %w", err)
+			}
+
+			if err := tx.Where("serial_number = ?", trimmedSN).Delete(&DeviceAccessToken{}).Error; err != nil {
+				return fmt.Errorf("delete device access token on reactivate: %w", err)
+			}
+
+			act = existing
+			if trimmedDeviceID != "" {
+				act.DeviceID = trimmedDeviceID
+			}
+			if trimmedClientID != "" {
+				act.ClientID = trimmedClientID
+			}
+			act.ActivationStatus = ActivationStatusActive
 		}
 
-		updates := map[string]any{
-			"activation_status": ActivationStatusActive,
-		}
-		if trimmedDeviceID != "" {
-			updates["device_id"] = trimmedDeviceID
-		}
-		if trimmedClientID != "" {
-			updates["client_id"] = trimmedClientID
+		if err := tx.Model(&DeviceHmacCredential{}).
+			Where("serial_number = ? AND credential_status = ?", trimmedSN, CredentialStatusEnabled).
+			Update("credential_status", CredentialStatusActivated).Error; err != nil {
+			return fmt.Errorf("update device hmac credential status on activate: %w", err)
 		}
 
-		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
-			return fmt.Errorf("update device activation: %w", err)
-		}
-
-		if err := tx.Where("serial_number = ?", trimmedSN).Delete(&DeviceUserRef{}).Error; err != nil {
-			return fmt.Errorf("delete device user ref on reactivate: %w", err)
-		}
-
-		act = existing
-		if trimmedDeviceID != "" {
-			act.DeviceID = trimmedDeviceID
-		}
-		if trimmedClientID != "" {
-			act.ClientID = trimmedClientID
-		}
-		act.ActivationStatus = ActivationStatusActive
 		return nil
 	})
 	if err != nil {

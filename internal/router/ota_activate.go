@@ -27,13 +27,12 @@ type ActivateRequest struct {
 // 2. 查 device_hmac_credential 表确认 hmac：
 //   - 根据 serial_number 查询凭证记录，验证凭证存在且可用；
 //   - 使用凭证中的密钥与 challenge 计算 expected HMAC-SHA256，与设备提交的 HMAC 做常量时间比对；
-//   - 校验成功后清理一次性 Challenge 缓存；
 //
-// 3. 确认是否已经激活过，如果没有直接插入，如果已经激活更新这条数据并删除绑定的用户记录：
-//   - 调用 ActivateDeviceBySerialNumber 事务方法完成激活关系写入/更新及旧用户绑定解绑；
-//   - 将凭证状态更新为 activated；
+// 3. 在单一数据库事务中完成激活关系写入、旧绑定/旧Token清理及凭证状态更新：
+//   - 调用 ActivateDeviceBySerialNumber 事务方法原子完成全部状态变更；
 //
-// 4. 返回 200 OK 与服务端时间信息。
+// 4. 数据库事务成功后清理一次性 Challenge / Code 缓存；
+// 5. 返回 200 OK 与服务端时间信息。
 func (h *OTAHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 	headers, body, ok := h.readAndValidateOTARequest(w, r)
 	if !ok {
@@ -123,17 +122,7 @@ func (h *OTAHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 校验成功后清理 Challenge 缓存
-	if h.challengeCache != nil {
-		if pending, ok := h.FindPendingActivationByChallenge(challenge); ok {
-			h.challengeCache.Delete(challenge)
-			if h.codeCache != nil && pending.Code != "" {
-				h.codeCache.Delete(pending.Code)
-			}
-		}
-	}
-
-	// 2. 确认是否已经激活过，如果没有直接插入，如果已经激活更新这条数据并删除绑定的用户记录
+	// 2. 在单一数据库事务中完成激活、旧绑定/旧Token清理及凭证状态更新
 	deviceID := headers.DeviceID
 	clientID := headers.ClientID
 	authSN := cred.SerialNumber
@@ -149,8 +138,13 @@ func (h *OTAHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if cred.CredentialStatus == database.CredentialStatusEnabled {
-		_ = h.db.UpdateDeviceHmacCredentialStatus(r.Context(), authSN, database.CredentialStatusActivated)
+	// 3. 数据库事务成功后清理 Challenge / Code 缓存
+	if h.challengeCache != nil {
+		if pending, ok := h.FindPendingActivationByChallenge(challenge); ok {
+			h.DeletePendingActivation(pending.Code, challenge)
+		} else {
+			h.challengeCache.Delete(challenge)
+		}
 	}
 
 	h.logger.Info("device activated successfully via hmac challenge",

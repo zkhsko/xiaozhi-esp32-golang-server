@@ -128,8 +128,8 @@ HTTP / WebSocket 入口 (internal/router)
 #### 2) 硬件签名激活：`POST /xiaozhi/ota/activate`
 - **请求参数/请求头**：`challenge`, `hmac`, `serial_number`。
 - **验证**：使用 `device_hmac_credential` 中的密钥对 Challenge 执行 HMAC-SHA256 常量时间校验。
-- **状态变更**：向 `device_activation` 插入/更新激活记录，更新凭证状态为 `activated`。
-- **响应 (HTTP 200)**：`{"success": true, "message": "device activated successfully"}`。
+- **状态变更**：在单一数据库事务中完成 `device_activation` 写入/更新，重新激活时清理旧用户绑定与旧 Access Token，并将凭证状态更新为 `activated`；事务成功后清理 Challenge 缓存。
+- **响应 (HTTP 200)**：`{"server_time": {"timestamp": 1724832000, "timezone": "Asia/Shanghai"}}`。
 
 ### 5.2 用户绑定 API (`POST /user-api/device/bind`)
 
