@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -630,8 +631,19 @@ func TestSession_SystemPrompt_ToolsOrderingAndFormatting(t *testing.T) {
 		}
 
 		prompt := sess.SystemPrompt()
-		if !strings.Contains(prompt, "你是小智助手。") {
-			t.Fatalf("expected base prompt in %s", prompt)
+		basePrefix := "你是小智助手。\n\n"
+		if !strings.HasPrefix(prompt, basePrefix) {
+			t.Fatalf("expected base prompt prefix in %s", prompt)
+		}
+
+		// 验证追加内容为纯 JSON 且无前后提示词
+		jsonPart := strings.TrimPrefix(prompt, basePrefix)
+		var parsedTools []MCPTool
+		if err := json.Unmarshal([]byte(jsonPart), &parsedTools); err != nil {
+			t.Fatalf("expected valid JSON array without surrounding prompts, got err: %v\ncontent: %s", err, jsonPart)
+		}
+		if len(parsedTools) != 4 {
+			t.Fatalf("expected 4 tools in JSON, got %d", len(parsedTools))
 		}
 
 		// 验证设备工具排在服务端工具之前

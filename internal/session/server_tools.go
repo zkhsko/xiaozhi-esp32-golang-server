@@ -26,7 +26,7 @@ func DefaultServerTools() []ai.Tool {
 	return []ai.Tool{
 		{
 			Name:        ServerToolGetCurrentTime,
-			Description: "获取服务端当前的日期、时间、星期和时区信息。当用户询问现在几点、今天几号、星期几等时间日期相关问题时调用此工具",
+			Description: "获取服务端当前的日期、时间、星期和时区信息。当用户询问现在几点、今天几号、星期几、当前时间日期等问题时调用此工具",
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -34,7 +34,7 @@ func DefaultServerTools() []ai.Tool {
 		},
 		{
 			Name:        ServerToolCloseSession,
-			Description: "关闭当前会话并断开连接。当用户表达想要结束对话、退下、退下吧、去睡觉、去睡吧、睡觉了、不聊了、再见、拜拜、断开连接、退出、闭嘴、不要再说了、结束对话或不再需要交互时必须立即调用此工具",
+			Description: "关闭当前会话并断开连接。当用户表达想要结束对话、退下、退下吧、去睡觉、去睡吧、睡觉了、晚安、不聊了、再见、拜拜、断开连接、退出、闭嘴、不要再说了、结束对话或不再需要交互时必须立即调用此工具",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

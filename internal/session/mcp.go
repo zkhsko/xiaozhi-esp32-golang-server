@@ -347,46 +347,31 @@ func (s *Session) getMCPTools() []ai.Tool {
 	return copied
 }
 
-// DeviceControlInstruction 相关控制提示词模板常量。
-const (
-	// DeviceControlInstructionHeader 控制提示词引导头。
-	DeviceControlInstructionHeader = `【重要工具调用规范】
-你拥有直接控制设备硬件、查询实时状态与调用服务端能力的工具权限。
-当用户的请求或意图与可用工具的功能相匹配时，你必须坚决直接发起工具调用（Tool Call），严禁拒绝，严禁仅以纯文本口头假装执行。`
-
-	// DeviceControlInstructionFooter 控制提示词反馈指导尾。
-	DeviceControlInstructionFooter = `【工具调用执行准则】
-1. 意图匹配即调用：凡用户请求涉及控制外设、调节参数（如音量/亮度）、查询实时状态或数据（如时间/电量/设备信息）、结束退出对话等工具支持的场景，必须坚决调用对应的工具，不得只用文字应答。
-2. 先查询后控制：若调节操作需要基于设备当前状态（如在当前音量基础上调高/调低），且当前数值未知，第1步必须先调用对应的查询/状态工具获取实时值，待返回结果后再发起控制工具调用。
-3. 真实反馈与简洁口语：严禁在文本中向用户输出工具调用的 JSON 格式或函数名称。工具执行完成后，根据工具实际返回的结果，用简短、自然、亲切的中文口语向用户反馈执行结果。`
-)
-
-// FormatDeviceToolsPrompt 将控制提示词和工具列表整理为清晰易懂的提示词段落。
+// FormatDeviceToolsPrompt 将工具列表序列化为完整 JSON 格式字符串。
 func FormatDeviceToolsPrompt(tools []ai.Tool) string {
 	if len(tools) == 0 {
 		return ""
 	}
 
-	var sb strings.Builder
-	sb.WriteString(DeviceControlInstructionHeader)
-	sb.WriteString("\n\n【可用工具列表】\n")
+	mcpToolsList := make([]MCPTool, 0, len(tools))
 	for _, t := range tools {
-		sb.WriteString("- ")
-		sb.WriteString(t.Name)
-		if t.Description != "" {
-			sb.WriteString(": ")
-			sb.WriteString(t.Description)
-		}
-		sb.WriteString("\n")
+		mcpToolsList = append(mcpToolsList, MCPTool{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.Parameters,
+		})
 	}
-	sb.WriteString("\n")
-	sb.WriteString(DeviceControlInstructionFooter)
 
-	return sb.String()
+	toolsJSON, err := json.MarshalIndent(mcpToolsList, "", "  ")
+	if err != nil {
+		toolsJSON, _ = json.Marshal(mcpToolsList)
+	}
+
+	return string(toolsJSON)
 }
 
 // buildSystemPromptLocked 在持有锁的前提下计算当前会话实际生效的系统提示词。
-// 将控制提示词与工具列表（设备 MCP 工具在前，服务端工具拼接在后）整理为段落追加到基础系统提示词最后。
+// 将工具列表（设备 MCP 工具在前，服务端工具拼接在后）序列化为 JSON 追加到基础系统提示词最后。
 func (s *Session) buildSystemPromptLocked() string {
 	basePrompt := s.systemPrompt
 
