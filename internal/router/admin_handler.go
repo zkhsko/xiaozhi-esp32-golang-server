@@ -264,6 +264,58 @@ type BatchDeleteTTSConfigRequest struct {
 	IDs []uint64 `json:"ids"`
 }
 
+// AgentConfigItem 表示单条 Agent 配置 DTO。
+type AgentConfigItem struct {
+	ID           uint64    `json:"id"`
+	Name         string    `json:"name"`
+	ASRConfigID  uint64    `json:"asr_config_id"`
+	ASRName      string    `json:"asr_name,omitempty"`
+	LLMConfigID  uint64    `json:"llm_config_id"`
+	LLMName      string    `json:"llm_name,omitempty"`
+	TTSConfigID  uint64    `json:"tts_config_id"`
+	TTSName      string    `json:"tts_name,omitempty"`
+	SystemPrompt string    `json:"system_prompt"`
+	Voice        string    `json:"voice"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// AgentConfigListData Agent 配置列表响应数据。
+type AgentConfigListData struct {
+	Items    []AgentConfigItem `json:"items"`
+	Total    int64             `json:"total"`
+	Page     int               `json:"page"`
+	PageSize int               `json:"page_size"`
+}
+
+// SaveAgentConfigRequest 保存或更新 Agent 配置请求体。
+type SaveAgentConfigRequest struct {
+	ID           uint64 `json:"id"`
+	Name         string `json:"name"`
+	ASRConfigID  uint64 `json:"asr_config_id"`
+	LLMConfigID  uint64 `json:"llm_config_id"`
+	TTSConfigID  uint64 `json:"tts_config_id"`
+	SystemPrompt string `json:"system_prompt"`
+	Voice        string `json:"voice"`
+	Enabled      *bool  `json:"enabled"`
+}
+
+// DeleteAgentConfigRequest 删除单条 Agent 配置请求体。
+type DeleteAgentConfigRequest struct {
+	ID uint64 `json:"id"`
+}
+
+// BatchDeleteAgentConfigRequest 批量删除 Agent 配置请求体。
+type BatchDeleteAgentConfigRequest struct {
+	IDs []uint64 `json:"ids"`
+}
+
+// ActivateAgentConfigRequest 激活单条 Agent 配置请求体。
+type ActivateAgentConfigRequest struct {
+	ID uint64 `json:"id"`
+}
+
 
 
 // AdminHandler 处理 /admin-api/ 管理接口。
@@ -327,6 +379,15 @@ func (h *AdminHandler) Routes() http.Handler {
 	r.Post("/tts-config/update", h.handleSaveTTSConfig)
 	r.Post("/tts-config/delete", h.handleDeleteTTSConfig)
 	r.Post("/tts-config/batch-delete", h.handleBatchDeleteTTSConfigs)
+
+	// Agent Config 接口
+	r.Get("/agent-config", h.handleListAgentConfigs)
+	r.Get("/agent-config/list", h.handleListAgentConfigs)
+	r.Post("/agent-config/save", h.handleSaveAgentConfig)
+	r.Post("/agent-config/update", h.handleSaveAgentConfig)
+	r.Post("/agent-config/delete", h.handleDeleteAgentConfig)
+	r.Post("/agent-config/batch-delete", h.handleBatchDeleteAgentConfigs)
+	r.Post("/agent-config/activate", h.handleActivateAgentConfig)
 
 	return r
 }
@@ -1668,6 +1729,356 @@ func (h *AdminHandler) handleBatchDeleteTTSConfigs(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, AdminResponse{
 		Success: true,
 		Message: fmt.Sprintf("成功批量删除 %d 条 TTS 配置", len(req.IDs)),
+	})
+}
+
+// handleListAgentConfigs 分页获取 Agent 配置列表。
+func (h *AdminHandler) handleListAgentConfigs(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	query := r.URL.Query()
+	page, _ := strconv.Atoi(query.Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(query.Get("page_size"))
+	if pageSize <= 0 {
+		pageSize = 10
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
+
+	filter := database.AgentConfigFilter{
+		Name:     query.Get("name"),
+		Page:     page,
+		PageSize: pageSize,
+	}
+
+	if enabledStr := query.Get("enabled"); enabledStr != "" {
+		if enabledVal, err := strconv.ParseBool(enabledStr); err == nil {
+			filter.Enabled = &enabledVal
+		}
+	}
+
+	configs, total, err := h.db.ListAgentConfigs(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("failed to list agent configs", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// 收集引用的 ASR, LLM, TTS ID 并填充名称
+	asrMap := make(map[uint64]string)
+	llmMap := make(map[uint64]string)
+	ttsMap := make(map[uint64]string)
+	for _, cfg := range configs {
+		if cfg.ASRConfigID > 0 {
+			if _, ok := asrMap[cfg.ASRConfigID]; !ok {
+				if asr, err := h.db.FindASRConfigByID(r.Context(), cfg.ASRConfigID); err == nil && asr != nil {
+					asrMap[cfg.ASRConfigID] = asr.Name
+				}
+			}
+		}
+		if cfg.LLMConfigID > 0 {
+			if _, ok := llmMap[cfg.LLMConfigID]; !ok {
+				if llm, err := h.db.FindLLMConfigByID(r.Context(), cfg.LLMConfigID); err == nil && llm != nil {
+					llmMap[cfg.LLMConfigID] = llm.Name
+				}
+			}
+		}
+		if cfg.TTSConfigID > 0 {
+			if _, ok := ttsMap[cfg.TTSConfigID]; !ok {
+				if tts, err := h.db.FindTTSConfigByID(r.Context(), cfg.TTSConfigID); err == nil && tts != nil {
+					ttsMap[cfg.TTSConfigID] = tts.Name
+				}
+			}
+		}
+	}
+
+	items := make([]AgentConfigItem, 0, len(configs))
+	for _, cfg := range configs {
+		items = append(items, AgentConfigItem{
+			ID:           cfg.ID,
+			Name:         cfg.Name,
+			ASRConfigID:  cfg.ASRConfigID,
+			ASRName:      asrMap[cfg.ASRConfigID],
+			LLMConfigID:  cfg.LLMConfigID,
+			LLMName:      llmMap[cfg.LLMConfigID],
+			TTSConfigID:  cfg.TTSConfigID,
+			TTSName:      ttsMap[cfg.TTSConfigID],
+			SystemPrompt: cfg.SystemPrompt,
+			Voice:        cfg.Voice,
+			Enabled:      cfg.Enabled,
+			CreatedAt:    cfg.CreatedAt,
+			UpdatedAt:    cfg.UpdatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Data: AgentConfigListData{
+			Items:    items,
+			Total:    total,
+			Page:     page,
+			PageSize: pageSize,
+		},
+	})
+}
+
+// handleSaveAgentConfig 创建或更新 Agent 配置（ID 为 0 时创建，ID > 0 时按 ID 覆盖）。
+func (h *AdminHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req SaveAgentConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	enabled := false
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+
+	if req.ID == 0 {
+		// 创建新配置
+		cfg := &database.AgentConfig{
+			Name:         strings.TrimSpace(req.Name),
+			ASRConfigID:  req.ASRConfigID,
+			LLMConfigID:  req.LLMConfigID,
+			TTSConfigID:  req.TTSConfigID,
+			SystemPrompt: strings.TrimSpace(req.SystemPrompt),
+			Voice:        strings.TrimSpace(req.Voice),
+			Enabled:      false,
+		}
+
+		if err := h.db.CreateAgentConfig(r.Context(), cfg); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		if enabled {
+			if err := h.db.ActivateAgent(r.Context(), cfg.ID); err != nil {
+				h.logger.Warn("failed to activate newly created agent", "id", cfg.ID, "error", err)
+			} else {
+				cfg.Enabled = true
+			}
+		}
+
+		writeJSON(w, http.StatusOK, AdminResponse{
+			Success: true,
+			Message: "Agent 配置创建成功",
+			Data: AgentConfigItem{
+				ID:           cfg.ID,
+				Name:         cfg.Name,
+				ASRConfigID:  cfg.ASRConfigID,
+				LLMConfigID:  cfg.LLMConfigID,
+				TTSConfigID:  cfg.TTSConfigID,
+				SystemPrompt: cfg.SystemPrompt,
+				Voice:        cfg.Voice,
+				Enabled:      cfg.Enabled,
+				CreatedAt:    cfg.CreatedAt,
+				UpdatedAt:    cfg.UpdatedAt,
+			},
+		})
+		return
+	}
+
+	// 覆盖更新已有配置
+	existing, err := h.db.FindAgentConfigByID(r.Context(), req.ID)
+	if err != nil {
+		if errors.Is(err, database.ErrAgentConfigNotFound) {
+			http.Error(w, "agent config not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	asrID := existing.ASRConfigID
+	if req.ASRConfigID > 0 {
+		asrID = req.ASRConfigID
+	}
+	llmID := existing.LLMConfigID
+	if req.LLMConfigID > 0 {
+		llmID = req.LLMConfigID
+	}
+	ttsID := existing.TTSConfigID
+	if req.TTSConfigID > 0 {
+		ttsID = req.TTSConfigID
+	}
+
+	name := existing.Name
+	if strings.TrimSpace(req.Name) != "" {
+		name = strings.TrimSpace(req.Name)
+	}
+
+	systemPrompt := existing.SystemPrompt
+	if strings.TrimSpace(req.SystemPrompt) != "" {
+		systemPrompt = strings.TrimSpace(req.SystemPrompt)
+	}
+
+	voice := existing.Voice
+	if strings.TrimSpace(req.Voice) != "" {
+		voice = strings.TrimSpace(req.Voice)
+	}
+
+	updatedCfg := &database.AgentConfig{
+		ID:           req.ID,
+		Name:         name,
+		ASRConfigID:  asrID,
+		LLMConfigID:  llmID,
+		TTSConfigID:  ttsID,
+		SystemPrompt: systemPrompt,
+		Voice:        voice,
+		Enabled:      existing.Enabled,
+	}
+
+	if err := h.db.UpdateAgentConfigByID(r.Context(), updatedCfg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Enabled != nil && *req.Enabled && !existing.Enabled {
+		if err := h.db.ActivateAgent(r.Context(), req.ID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		updatedCfg.Enabled = true
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "Agent 配置更新成功",
+		Data: AgentConfigItem{
+			ID:           updatedCfg.ID,
+			Name:         updatedCfg.Name,
+			ASRConfigID:  updatedCfg.ASRConfigID,
+			LLMConfigID:  updatedCfg.LLMConfigID,
+			TTSConfigID:  updatedCfg.TTSConfigID,
+			SystemPrompt: updatedCfg.SystemPrompt,
+			Voice:        updatedCfg.Voice,
+			Enabled:      updatedCfg.Enabled,
+			UpdatedAt:    time.Now(),
+		},
+	})
+}
+
+// handleDeleteAgentConfig 删除指定 ID 的 Agent 配置记录。
+func (h *AdminHandler) handleDeleteAgentConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req DeleteAgentConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == 0 {
+		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeleteAgentConfig(r.Context(), req.ID); err != nil {
+		if errors.Is(err, database.ErrAgentConfigNotFound) {
+			http.Error(w, "agent config not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to delete agent config", "id", req.ID, "error", err)
+		http.Error(w, "failed to delete agent config", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "Agent 配置删除成功",
+	})
+}
+
+// handleBatchDeleteAgentConfigs 批量删除 Agent 配置记录。
+func (h *AdminHandler) handleBatchDeleteAgentConfigs(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req BatchDeleteAgentConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.BatchDeleteAgentConfigs(r.Context(), req.IDs); err != nil {
+		h.logger.Error("failed to batch delete agent configs", "error", err)
+		http.Error(w, "failed to batch delete agent configs", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: fmt.Sprintf("成功批量删除 %d 条 Agent 配置", len(req.IDs)),
+	})
+}
+
+// handleActivateAgentConfig 激活指定 ID 的 Agent 配置。
+func (h *AdminHandler) handleActivateAgentConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req ActivateAgentConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == 0 {
+		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.ActivateAgent(r.Context(), req.ID); err != nil {
+		if errors.Is(err, database.ErrAgentConfigNotFound) {
+			http.Error(w, "agent config not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, database.ErrReferencedASRNotFound) ||
+			errors.Is(err, database.ErrReferencedASRDisabled) ||
+			errors.Is(err, database.ErrReferencedLLMNotFound) ||
+			errors.Is(err, database.ErrReferencedLLMDisabled) ||
+			errors.Is(err, database.ErrReferencedTTSNotFound) ||
+			errors.Is(err, database.ErrReferencedTTSDisabled) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		h.logger.Error("failed to activate agent config", "id", req.ID, "error", err)
+		http.Error(w, "failed to activate agent config", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "Agent 配置激活成功",
 	})
 }
 

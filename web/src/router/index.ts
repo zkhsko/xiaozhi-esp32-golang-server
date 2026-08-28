@@ -4,6 +4,7 @@ import DeviceActivations from '../views/DeviceActivations.vue'
 import ASRConfigs from '../views/ASRConfigs.vue'
 import LLMConfigs from '../views/LLMConfigs.vue'
 import TTSConfigs from '../views/TTSConfigs.vue'
+import AgentConfigs from '../views/AgentConfigs.vue'
 
 const routes = [
   {
@@ -48,6 +49,14 @@ const routes = [
     component: TTSConfigs,
     meta: {
       title: 'TTS 语音合成配置',
+    },
+  },
+  {
+    path: '/agent-configs',
+    name: 'AgentConfigs',
+    component: AgentConfigs,
+    meta: {
+      title: 'Agent 智能体配置',
     },
   },
 ]

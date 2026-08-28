@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/database"
 )
 
 func TestAdminCredentialEndToEnd(t *testing.T) {
@@ -383,6 +384,79 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 
 	if wSPA5.Code != http.StatusOK {
 		t.Fatalf("SPA route for tts-configs failed, code=%d", wSPA5.Code)
+	}
+
+	// 25. Agent 配置 E2E 测试准备基础依赖 ASR, LLM, TTS
+	asrCfg := &database.ASRConfig{Name: "E2E-Agent-ASR", Provider: "bailian", Endpoint: "wss://asr.com", Model: "m1", ConnectTimeoutMS: 5000, Enabled: true}
+	_ = db.CreateASRConfig(context.Background(), asrCfg)
+	llmCfg := &database.LLMConfig{Name: "E2E-Agent-LLM", Provider: "bailian", Endpoint: "https://llm.com", Model: "m2", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
+	_ = db.CreateLLMConfig(context.Background(), llmCfg)
+	ttsCfg := &database.TTSConfig{Name: "E2E-Agent-TTS", Provider: "bailian", Endpoint: "wss://tts.com", Model: "m3", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	_ = db.CreateTTSConfig(context.Background(), ttsCfg)
+
+	// 26. Agent 配置 E2E 创建
+	createAgentBody, _ := json.Marshal(SaveAgentConfigRequest{
+		Name:         "E2E 智能助手",
+		ASRConfigID:  asrCfg.ID,
+		LLMConfigID:  llmCfg.ID,
+		TTSConfigID:  ttsCfg.ID,
+		SystemPrompt: "你是一个测试助手。",
+		Voice:        "default-voice",
+		Enabled:      func(b bool) *bool { return &b }(true),
+	})
+	reqAgentCreate := httptest.NewRequest(http.MethodPost, "/admin-api/agent-config/save", bytes.NewReader(createAgentBody))
+	reqAgentCreate.Header.Set("Content-Type", "application/json")
+	wAgentCreate := httptest.NewRecorder()
+	r.ServeHTTP(wAgentCreate, reqAgentCreate)
+
+	if wAgentCreate.Code != http.StatusOK {
+		t.Fatalf("create agent config failed: %s", wAgentCreate.Body.String())
+	}
+	var agentCreateResp struct {
+		Success bool            `json:"success"`
+		Data    AgentConfigItem `json:"data"`
+	}
+	_ = json.Unmarshal(wAgentCreate.Body.Bytes(), &agentCreateResp)
+	if !agentCreateResp.Success || agentCreateResp.Data.ID == 0 || agentCreateResp.Data.Name != "E2E 智能助手" {
+		t.Fatalf("unexpected agent create resp: %+v", agentCreateResp)
+	}
+	createdAgentID := agentCreateResp.Data.ID
+
+	// 27. Agent 配置列表查询
+	reqAgentList := httptest.NewRequest(http.MethodGet, "/admin-api/agent-config?name=E2E", nil)
+	wAgentList := httptest.NewRecorder()
+	r.ServeHTTP(wAgentList, reqAgentList)
+
+	if wAgentList.Code != http.StatusOK {
+		t.Fatalf("list agent config failed: %s", wAgentList.Body.String())
+	}
+	var agentListResp struct {
+		Success bool                `json:"success"`
+		Data    AgentConfigListData `json:"data"`
+	}
+	_ = json.Unmarshal(wAgentList.Body.Bytes(), &agentListResp)
+	if agentListResp.Data.Total != 1 || len(agentListResp.Data.Items) != 1 || agentListResp.Data.Items[0].Name != "E2E 智能助手" {
+		t.Fatalf("expected 1 Agent config item, got %v", agentListResp.Data.Items)
+	}
+
+	// 28. Agent 配置单条删除
+	delAgentBody, _ := json.Marshal(DeleteAgentConfigRequest{ID: createdAgentID})
+	reqDelAgent := httptest.NewRequest(http.MethodPost, "/admin-api/agent-config/delete", bytes.NewReader(delAgentBody))
+	reqDelAgent.Header.Set("Content-Type", "application/json")
+	wDelAgent := httptest.NewRecorder()
+	r.ServeHTTP(wDelAgent, reqDelAgent)
+
+	if wDelAgent.Code != http.StatusOK {
+		t.Fatalf("delete agent config failed: %s", wDelAgent.Body.String())
+	}
+
+	// 29. 访问 /admin/agent-configs 确保静态 SPA 路由可 fallback 到 index.html
+	reqSPA6 := httptest.NewRequest(http.MethodGet, "/admin/agent-configs", nil)
+	wSPA6 := httptest.NewRecorder()
+	r.ServeHTTP(wSPA6, reqSPA6)
+
+	if wSPA6.Code != http.StatusOK {
+		t.Fatalf("SPA route for agent-configs failed, code=%d", wSPA6.Code)
 	}
 }
 

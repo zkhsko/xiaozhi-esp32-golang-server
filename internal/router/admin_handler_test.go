@@ -769,5 +769,153 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	}
 }
 
+func TestAdminAgentConfigEndpoints(t *testing.T) {
+	db := setupTestRouterDB(t)
+	cfg := &config.Config{}
+	adminHandler := NewAdminHandler(cfg, db, nil)
+	routes := adminHandler.Routes()
+	ctx := context.Background()
+
+	// 准备基础 ASR, LLM, TTS 组件
+	asr := &database.ASRConfig{Name: "默认ASR", Provider: "bailian", Endpoint: "wss://asr.example.com", Model: "asr-v1", ConnectTimeoutMS: 5000, Enabled: true}
+	_ = db.CreateASRConfig(ctx, asr)
+	llm := &database.LLMConfig{Name: "默认LLM", Provider: "bailian", Endpoint: "https://llm.example.com", Model: "qwen-turbo", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
+	_ = db.CreateLLMConfig(ctx, llm)
+	tts := &database.TTSConfig{Name: "默认TTS", Provider: "bailian", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["voice1"]`, ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	_ = db.CreateTTSConfig(ctx, tts)
+
+	// 1. Create Agent Config via /agent-config/save
+	createBody := []byte(fmt.Sprintf(`{
+		"name": "智能助手",
+		"asr_config_id": %d,
+		"llm_config_id": %d,
+		"tts_config_id": %d,
+		"system_prompt": "你是一个智能音箱助手。",
+		"voice": "voice1",
+		"enabled": true
+	}`, asr.ID, llm.ID, tts.ID))
+	reqCreate := httptest.NewRequest(http.MethodPost, "/agent-config/save", bytes.NewReader(createBody))
+	reqCreate.Header.Set("Content-Type", "application/json")
+	wCreate := httptest.NewRecorder()
+	routes.ServeHTTP(wCreate, reqCreate)
+
+	if wCreate.Code != http.StatusOK {
+		t.Fatalf("create agent config failed, code=%d, body=%s", wCreate.Code, wCreate.Body.String())
+	}
+
+	var createResp struct {
+		Success bool            `json:"success"`
+		Data    AgentConfigItem `json:"data"`
+	}
+	if err := json.Unmarshal(wCreate.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("unmarshal createResp failed: %v", err)
+	}
+	if !createResp.Success || createResp.Data.ID == 0 {
+		t.Fatalf("unexpected create response: %+v", createResp)
+	}
+	if createResp.Data.Name != "智能助手" || createResp.Data.Voice != "voice1" {
+		t.Fatalf("unexpected create data: %+v", createResp.Data)
+	}
+
+	agentID := createResp.Data.ID
+
+	// 2. List Agent Configs
+	reqList := httptest.NewRequest(http.MethodGet, "/agent-config?page=1&page_size=10", nil)
+	wList := httptest.NewRecorder()
+	routes.ServeHTTP(wList, reqList)
+
+	if wList.Code != http.StatusOK {
+		t.Fatalf("list agent config failed, code=%d, body=%s", wList.Code, wList.Body.String())
+	}
+
+	var listResp struct {
+		Success bool                `json:"success"`
+		Data    AgentConfigListData `json:"data"`
+	}
+	if err := json.Unmarshal(wList.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal listResp failed: %v", err)
+	}
+	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
+		t.Fatalf("unexpected list count: total=%d, items=%d", listResp.Data.Total, len(listResp.Data.Items))
+	}
+	if listResp.Data.Items[0].Name != "智能助手" || listResp.Data.Items[0].ASRName != "默认ASR" {
+		t.Fatalf("unexpected item content: %+v", listResp.Data.Items[0])
+	}
+
+	// 3. Update Agent Config
+	updateBody := []byte(fmt.Sprintf(`{
+		"id": %d,
+		"name": "智能助手-修改版",
+		"asr_config_id": %d,
+		"llm_config_id": %d,
+		"tts_config_id": %d,
+		"system_prompt": "更新后的提示词",
+		"voice": "voice2"
+	}`, agentID, asr.ID, llm.ID, tts.ID))
+	reqUpdate := httptest.NewRequest(http.MethodPost, "/agent-config/update", bytes.NewReader(updateBody))
+	reqUpdate.Header.Set("Content-Type", "application/json")
+	wUpdate := httptest.NewRecorder()
+	routes.ServeHTTP(wUpdate, reqUpdate)
+
+	if wUpdate.Code != http.StatusOK {
+		t.Fatalf("update agent config failed, code=%d, body=%s", wUpdate.Code, wUpdate.Body.String())
+	}
+
+	found, err := db.FindAgentConfigByID(ctx, agentID)
+	if err != nil {
+		t.Fatalf("find agent config in db failed: %v", err)
+	}
+	if found.Name != "智能助手-修改版" || found.SystemPrompt != "更新后的提示词" || found.Voice != "voice2" {
+		t.Errorf("unexpected updated fields in DB: %+v", found)
+	}
+
+	// 4. Activate Agent Config
+	actBody := []byte(fmt.Sprintf(`{"id": %d}`, agentID))
+	reqAct := httptest.NewRequest(http.MethodPost, "/agent-config/activate", bytes.NewReader(actBody))
+	reqAct.Header.Set("Content-Type", "application/json")
+	wAct := httptest.NewRecorder()
+	routes.ServeHTTP(wAct, reqAct)
+	if wAct.Code != http.StatusOK {
+		t.Fatalf("activate agent config failed, code=%d, body=%s", wAct.Code, wAct.Body.String())
+	}
+
+	// 5. Delete Agent Config
+	delBody := []byte(fmt.Sprintf(`{"id": %d}`, agentID))
+	reqDel := httptest.NewRequest(http.MethodPost, "/agent-config/delete", bytes.NewReader(delBody))
+	reqDel.Header.Set("Content-Type", "application/json")
+	wDel := httptest.NewRecorder()
+	routes.ServeHTTP(wDel, reqDel)
+
+	if wDel.Code != http.StatusOK {
+		t.Fatalf("delete agent config failed, code=%d, body=%s", wDel.Code, wDel.Body.String())
+	}
+
+	_, err = db.FindAgentConfigByID(ctx, agentID)
+	if !errors.Is(err, database.ErrAgentConfigNotFound) {
+		t.Fatalf("expected ErrAgentConfigNotFound after delete, got %v", err)
+	}
+
+	// 6. Batch Delete
+	cfgA := &database.AgentConfig{Name: "A", ASRConfigID: asr.ID, LLMConfigID: llm.ID, TTSConfigID: tts.ID, SystemPrompt: "p1", Voice: "v1"}
+	cfgB := &database.AgentConfig{Name: "B", ASRConfigID: asr.ID, LLMConfigID: llm.ID, TTSConfigID: tts.ID, SystemPrompt: "p2", Voice: "v2"}
+	_ = db.CreateAgentConfig(ctx, cfgA)
+	_ = db.CreateAgentConfig(ctx, cfgB)
+
+	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, cfgA.ID, cfgB.ID))
+	reqBatchDel := httptest.NewRequest(http.MethodPost, "/agent-config/batch-delete", bytes.NewReader(batchDelBody))
+	reqBatchDel.Header.Set("Content-Type", "application/json")
+	wBatchDel := httptest.NewRecorder()
+	routes.ServeHTTP(wBatchDel, reqBatchDel)
+
+	if wBatchDel.Code != http.StatusOK {
+		t.Fatalf("batch delete agent config failed, code=%d, body=%s", wBatchDel.Code, wBatchDel.Body.String())
+	}
+
+	_, finalCount, _ := db.ListAgentConfigs(ctx, database.AgentConfigFilter{})
+	if finalCount != 0 {
+		t.Fatalf("expected 0 configs after batch delete, got %d", finalCount)
+	}
+}
+
 
 
