@@ -13,7 +13,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -178,6 +177,12 @@ func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, c
 // 业务背景：
 // 设备在 OTA 阶段未携带出厂硬件序列号（Legacy 或无 SN 设备），因此由用户在绑定时手动输入 sn 与 hmac 凭证。
 // 服务端核验 device_hmac_credential 后，将设备写入设备激活表并绑定至当前用户。
+// 事务与缓存边界规范：
+// 1. 在数据库事务前生成安全的 64 位十六进制 Access Token；
+// 2. 将设备激活记录、用户绑定关系、凭据状态更新与 Access Token 写入收敛在单一数据库事务中完成；
+// 3. 仅在数据库事务完全成功后，删除 PendingActivation 缓存；
+// 4. 若事务失败，数据库完整回滚且保留缓存，保证不发生部分提交并支持重试；
+// 5. 彻底消除忽略凭证状态更新错误的写法，若凭证更新失败整个事务回滚并报错。
 func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request, code string, pending PendingActivation, req BindDeviceRequest, userID uint64) {
 	sn := strings.TrimSpace(req.SN)
 	if sn == "" {
@@ -232,34 +237,7 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 4. 比对通过后：插入或更新到设备激活表
-	act, err := h.db.ActivateDeviceBySerialNumber(r.Context(), sn, pending.DeviceID, pending.ClientID)
-	if err != nil {
-		h.logger.Error("failed to activate device during binding",
-			"serial_number", logger.TruncateString(sn),
-			"error", err,
-		)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// 5. 插入或更新设备绑定用户（当前登录用户 hardcode 1 模拟）
-	if _, err := h.db.UpsertDeviceUserRef(r.Context(), sn, userID); err != nil {
-		h.logger.Error("failed to bind device to user",
-			"serial_number", logger.TruncateString(sn),
-			"user_id", userID,
-			"error", err,
-		)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// 6. 更新凭证状态为 activated
-	if cred.CredentialStatus == database.CredentialStatusEnabled {
-		_ = h.db.UpdateDeviceHmacCredentialStatus(r.Context(), sn, database.CredentialStatusActivated)
-	}
-
-	// 7. 用户绑定结束后，插入或更新设备对应的 device_access_token，同时重置 has_exposed 标记为 false
+	// 4. 事务前生成 Access Token
 	tokenStr, err := GenerateDeviceAccessToken()
 	if err != nil {
 		h.logger.Error("failed to generate device access token",
@@ -270,22 +248,19 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	accessTokenRecord := &database.DeviceAccessToken{
-		SerialNumber: sn,
-		AccessToken:  tokenStr,
-		HasExposed:   false,
-		IssuedAt:     time.Now(),
-	}
-	if err := h.db.UpsertDeviceAccessToken(r.Context(), accessTokenRecord); err != nil {
-		h.logger.Error("failed to upsert device access token during binding",
+	// 5. 在单一数据库事务中原子执行激活、用户绑定、凭证状态更新及 Access Token 写入
+	act, err := h.db.BindDeviceWithSN(r.Context(), sn, pending.DeviceID, pending.ClientID, tokenStr, userID)
+	if err != nil {
+		h.logger.Error("failed to bind device without initial sn in transaction",
 			"serial_number", logger.TruncateString(sn),
+			"user_id", userID,
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// 8. 清理一次性激活码缓存
+	// 6. 数据库事务成功后，清理一次性激活码缓存
 	h.otaHandler.DeletePendingActivation(code, pending.Challenge)
 
 	h.logger.Info("device bound successfully without initial sn in code",

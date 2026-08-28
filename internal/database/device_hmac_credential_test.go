@@ -66,18 +66,6 @@ func TestDeviceHmacCredentialCRUD(t *testing.T) {
 	if !found.IsAvailable() {
 		t.Errorf("expected credential to be available")
 	}
-
-	// Update status
-	if err := db.UpdateDeviceHmacCredentialStatus(ctx, testSN, CredentialStatusActivated); err != nil {
-		t.Fatalf("UpdateDeviceHmacCredentialStatus failed: %v", err)
-	}
-	foundUpdated, err := db.FindDeviceHmacCredentialBySerialNumber(ctx, testSN)
-	if err != nil {
-		t.Fatalf("FindDeviceHmacCredentialBySerialNumber after update failed: %v", err)
-	}
-	if foundUpdated.CredentialStatus != CredentialStatusActivated {
-		t.Errorf("expected status %q, got %q", CredentialStatusActivated, foundUpdated.CredentialStatus)
-	}
 }
 
 func TestBatchCreateDeviceHmacCredentials(t *testing.T) {

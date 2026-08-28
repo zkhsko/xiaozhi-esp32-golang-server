@@ -32,8 +32,6 @@ var (
 	ErrEmptySerialNumber = errors.New("serial number cannot be empty")
 	// ErrEmptyHMACKeyCiphertext 表示设备 HMAC Key 为空。
 	ErrEmptyHMACKeyCiphertext = errors.New("hmac key ciphertext cannot be empty")
-	// ErrEmptyStatus 表示凭证状态为空。
-	ErrEmptyStatus = errors.New("credential status cannot be empty")
 	// ErrInvalidCredential 表示凭证结构体为 nil 或非法。
 	ErrInvalidCredential = errors.New("invalid device hmac credential")
 	// ErrDatabaseInstanceRequired 表示 Database 实例不能为 nil。
@@ -133,35 +131,6 @@ func (d *Database) BatchCreateDeviceHmacCredentials(ctx context.Context, creds [
 
 	if err := d.gormDB.WithContext(ctx).Create(&creds).Error; err != nil {
 		return fmt.Errorf("batch create device hmac credentials: %w", err)
-	}
-
-	return nil
-}
-
-// UpdateDeviceHmacCredentialStatus 更新设备凭证状态（如激活、冻结或撤销）。
-func (d *Database) UpdateDeviceHmacCredentialStatus(ctx context.Context, serialNumber, status string) error {
-	if d == nil || d.gormDB == nil {
-		return ErrDatabaseInstanceRequired
-	}
-
-	trimmedSN := strings.TrimSpace(serialNumber)
-	if trimmedSN == "" {
-		return ErrEmptySerialNumber
-	}
-	trimmedStatus := strings.TrimSpace(status)
-	if trimmedStatus == "" {
-		return ErrEmptyStatus
-	}
-
-	result := d.gormDB.WithContext(ctx).
-		Model(&DeviceHmacCredential{}).
-		Where("serial_number = ?", trimmedSN).
-		Update("credential_status", trimmedStatus)
-	if result.Error != nil {
-		return fmt.Errorf("update device hmac credential status: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("update device hmac credential status for %q: %w", trimmedSN, ErrCredentialNotFound)
 	}
 
 	return nil
