@@ -5,11 +5,13 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/config"
 )
 
 type mockTTSStream struct {
@@ -594,4 +596,69 @@ func TestOrchestrateLLMAndTTS_ContextCanceled(t *testing.T) {
 	default:
 	}
 }
+
+func TestSession_SystemPrompt_ToolsOrderingAndFormatting(t *testing.T) {
+	t.Run("only server tools when no device tools", func(t *testing.T) {
+		cfg := &config.Config{
+			Session: config.SessionConfig{
+				SystemPrompt: "你是小智助手。",
+			},
+		}
+		sess := &Session{
+			cfg: cfg,
+		}
+
+		prompt := sess.SystemPrompt()
+		if !strings.Contains(prompt, "你是小智助手。") {
+			t.Fatalf("expected base prompt in %s", prompt)
+		}
+		if !strings.Contains(prompt, ServerToolGetCurrentTime) {
+			t.Fatalf("expected server get_current_time in %s", prompt)
+		}
+		if !strings.Contains(prompt, ServerToolCloseSession) {
+			t.Fatalf("expected server close_session in %s", prompt)
+		}
+	})
+
+	t.Run("device tools first followed by server tools in single json", func(t *testing.T) {
+		cfg := &config.Config{
+			Session: config.SessionConfig{
+				SystemPrompt: "你是小智助手。",
+			},
+		}
+		sess := &Session{
+			cfg: cfg,
+			mcpTools: []ai.Tool{
+				{
+					Name:        "self.lamp.turn_on",
+					Description: "打开灯光",
+				},
+				{
+					Name:        "self.audio_speaker.set_volume",
+					Description: "设置音量",
+				},
+			},
+		}
+
+		prompt := sess.SystemPrompt()
+		if !strings.Contains(prompt, "你是小智助手。") {
+			t.Fatalf("expected base prompt in %s", prompt)
+		}
+
+		// 验证设备工具排在服务端工具之前
+		idxDeviceTool1 := strings.Index(prompt, "self.lamp.turn_on")
+		idxDeviceTool2 := strings.Index(prompt, "self.audio_speaker.set_volume")
+		idxServerTool1 := strings.Index(prompt, ServerToolGetCurrentTime)
+		idxServerTool2 := strings.Index(prompt, ServerToolCloseSession)
+
+		if idxDeviceTool1 == -1 || idxDeviceTool2 == -1 || idxServerTool1 == -1 || idxServerTool2 == -1 {
+			t.Fatalf("all tools should be present in prompt:\n%s", prompt)
+		}
+
+		if !(idxDeviceTool1 < idxServerTool1 && idxDeviceTool2 < idxServerTool1) {
+			t.Fatalf("device tools should appear before server tools:\n%s", prompt)
+		}
+	})
+}
+
 

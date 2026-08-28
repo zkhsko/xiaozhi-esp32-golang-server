@@ -349,14 +349,14 @@ func (s *Session) getMCPTools() []ai.Tool {
 
 // DeviceControlInstruction 相关控制提示词模板常量。
 const (
-	// DeviceControlInstructionHeader 设备控制提示词引导头。
-	DeviceControlInstructionHeader = "当用户需要控制设备或查询设备状态时，请务必直接调用对应的工具（Tool Call），不要拒绝："
+	// DeviceControlInstructionHeader 控制提示词引导头。
+	DeviceControlInstructionHeader = "当用户需要控制设备、查询设备状态、查询时间或结束退出对话时，请务必直接调用对应的工具（Tool Call），不要拒绝："
 
-	// DeviceControlInstructionFooter 设备控制提示词反馈指导尾。
-	DeviceControlInstructionFooter = "当用户表达控制意图时，必须立即调用对应的工具，执行完成后根据返回结果简要向用户反馈。"
+	// DeviceControlInstructionFooter 控制提示词反馈指导尾。
+	DeviceControlInstructionFooter = "当用户表达上述意图（如退下、再见、关灯、设置音量等）时，必须立即调用对应的工具，执行完成后根据返回结果简要向用户反馈。"
 )
 
-// FormatDeviceToolsPrompt 将控制提示词和设备上报的工具列表（原样 JSON）整理为合理的提示词段落。
+// FormatDeviceToolsPrompt 将控制提示词和工具列表（原样 JSON）整理为合理的提示词段落。
 func FormatDeviceToolsPrompt(tools []ai.Tool) string {
 	if len(tools) == 0 {
 		return ""
@@ -387,18 +387,41 @@ func FormatDeviceToolsPrompt(tools []ai.Tool) string {
 }
 
 // buildSystemPromptLocked 在持有锁的前提下计算当前会话实际生效的系统提示词。
-// 若设备上报了工具列表，将控制提示词与工具列表整理为段落追加到基础系统提示词最后。
+// 将控制提示词与工具列表（设备 MCP 工具在前，服务端工具拼接在后）整理为段落追加到基础系统提示词最后。
 func (s *Session) buildSystemPromptLocked() string {
 	var basePrompt string
 	if s.cfg != nil {
 		basePrompt = s.cfg.Session.SystemPrompt
 	}
 
-	if len(s.mcpTools) == 0 {
+	serverTools := DefaultServerTools()
+	deviceTools := s.mcpTools
+
+	totalLen := len(deviceTools) + len(serverTools)
+	if totalLen == 0 {
 		return basePrompt
 	}
 
-	toolsPrompt := FormatDeviceToolsPrompt(s.mcpTools)
+	allTools := make([]ai.Tool, 0, totalLen)
+	seen := make(map[string]struct{}, totalLen)
+
+	// 1. 设备 MCP 工具在前
+	for _, t := range deviceTools {
+		if _, exists := seen[t.Name]; !exists {
+			seen[t.Name] = struct{}{}
+			allTools = append(allTools, t)
+		}
+	}
+
+	// 2. 服务端工具拼接在 MCP 工具之后
+	for _, t := range serverTools {
+		if _, exists := seen[t.Name]; !exists {
+			seen[t.Name] = struct{}{}
+			allTools = append(allTools, t)
+		}
+	}
+
+	toolsPrompt := FormatDeviceToolsPrompt(allTools)
 	if basePrompt == "" {
 		return toolsPrompt
 	}
