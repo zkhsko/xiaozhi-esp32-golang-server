@@ -24,14 +24,16 @@ func TestOTAActivateWithHMAC(t *testing.T) {
 	testRawKey := []byte("01234567890123456789012345678901") // 32 bytes
 	testHexKey := hex.EncodeToString(testRawKey)
 
-	err := db.CreateDeviceHmacCredential(context.Background(), &database.DeviceHmacCredential{
-		SerialNumber:      testSN,
-		AuthMethod:        database.AuthMethodEfuseHMAC,
-		HMACKeyCiphertext: testHexKey,
-		CredentialStatus:  database.CredentialStatusEnabled,
+	err := db.BatchCreateDeviceHmacCredentials(context.Background(), []*database.DeviceHmacCredential{
+		{
+			SerialNumber:      testSN,
+			AuthMethod:        database.AuthMethodEfuseHMAC,
+			HMACKeyCiphertext: testHexKey,
+			CredentialStatus:  database.CredentialStatusEnabled,
+		},
 	})
 	if err != nil {
-		t.Fatalf("CreateDeviceHmacCredential failed: %v", err)
+		t.Fatalf("BatchCreateDeviceHmacCredentials failed: %v", err)
 	}
 
 	challenge := "test-challenge-nonce-12345"

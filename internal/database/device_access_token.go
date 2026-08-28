@@ -18,10 +18,6 @@ var (
 	ErrEmptyAccessToken = errors.New("access token cannot be empty")
 	// ErrInvalidAccessTokenRecord 表示 Access Token 结构体为 nil 或非法。
 	ErrInvalidAccessTokenRecord = errors.New("invalid device access token")
-	// ErrAccessTokenRevoked 表示 Access Token 已被撤销。
-	ErrAccessTokenRevoked = errors.New("device access token is revoked")
-	// ErrAccessTokenExpired 表示 Access Token 已过期。
-	ErrAccessTokenExpired = errors.New("device access token is expired")
 )
 
 // DeviceAccessToken 映射 device_access_token 设备鉴权 Access Token 表。
@@ -123,60 +119,6 @@ func (d *Database) FindDeviceAccessTokenBySerialNumber(ctx context.Context, seri
 	return &tok, nil
 }
 
-// FindDeviceAccessTokenByID 根据自增主键 ID 查询设备 Access Token 记录。
-func (d *Database) FindDeviceAccessTokenByID(ctx context.Context, id uint64) (*DeviceAccessToken, error) {
-	if d == nil || d.gormDB == nil {
-		return nil, ErrDatabaseInstanceRequired
-	}
-
-	if id == 0 {
-		return nil, fmt.Errorf("find device access token by id %d: %w", id, ErrAccessTokenNotFound)
-	}
-
-	var tok DeviceAccessToken
-	err := d.gormDB.WithContext(ctx).
-		Model(&DeviceAccessToken{}).
-		Where("id = ?", id).
-		Take(&tok).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("find device access token by id %d: %w", id, ErrAccessTokenNotFound)
-		}
-		return nil, fmt.Errorf("query device access token by id: %w", err)
-	}
-
-	return &tok, nil
-}
-
-// CreateDeviceAccessToken 插入一条设备 Access Token 记录。
-func (d *Database) CreateDeviceAccessToken(ctx context.Context, token *DeviceAccessToken) error {
-	if d == nil || d.gormDB == nil {
-		return ErrDatabaseInstanceRequired
-	}
-	if token == nil {
-		return ErrInvalidAccessTokenRecord
-	}
-
-	token.SerialNumber = strings.TrimSpace(token.SerialNumber)
-	if token.SerialNumber == "" {
-		return ErrEmptySerialNumber
-	}
-	token.AccessToken = strings.TrimSpace(token.AccessToken)
-	if token.AccessToken == "" {
-		return ErrEmptyAccessToken
-	}
-
-	if token.IssuedAt.IsZero() {
-		token.IssuedAt = time.Now()
-	}
-
-	if err := d.gormDB.WithContext(ctx).Create(token).Error; err != nil {
-		return fmt.Errorf("create device access token: %w", err)
-	}
-
-	return nil
-}
-
 // UpsertDeviceAccessToken 创建或覆盖更新指定设备的 Access Token。
 // 若该设备已存在 Token，则更新 AccessToken、HasExposed、IssuedAt、ExpiresAt 并清空 RevokedAt。
 func (d *Database) UpsertDeviceAccessToken(ctx context.Context, token *DeviceAccessToken) error {
@@ -258,88 +200,6 @@ func (d *Database) UpdateDeviceAccessTokenHasExposed(ctx context.Context, serial
 	}
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("update device access token has_exposed for %q: %w", trimmedSN, ErrAccessTokenNotFound)
-	}
-
-	return nil
-}
-
-// RevokeDeviceAccessTokenByAccessToken 根据明文 Access Token 撤销指定 Token。
-func (d *Database) RevokeDeviceAccessTokenByAccessToken(ctx context.Context, accessToken string, revokeTime time.Time) error {
-	if d == nil || d.gormDB == nil {
-		return ErrDatabaseInstanceRequired
-	}
-
-	trimmedToken := strings.TrimSpace(accessToken)
-	if trimmedToken == "" {
-		return ErrEmptyAccessToken
-	}
-
-	if revokeTime.IsZero() {
-		revokeTime = time.Now()
-	}
-
-	result := d.gormDB.WithContext(ctx).
-		Model(&DeviceAccessToken{}).
-		Where("access_token = ?", trimmedToken).
-		Update("revoked_at", revokeTime)
-	if result.Error != nil {
-		return fmt.Errorf("revoke device access token: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("revoke device access token: %w", ErrAccessTokenNotFound)
-	}
-
-	return nil
-}
-
-// RevokeDeviceAccessTokenBySerialNumber 撤销指定设备序列号下的当前未撤销 Token。
-func (d *Database) RevokeDeviceAccessTokenBySerialNumber(ctx context.Context, serialNumber string, revokeTime time.Time) error {
-	if d == nil || d.gormDB == nil {
-		return ErrDatabaseInstanceRequired
-	}
-
-	trimmedSN := strings.TrimSpace(serialNumber)
-	if trimmedSN == "" {
-		return ErrEmptySerialNumber
-	}
-
-	if revokeTime.IsZero() {
-		revokeTime = time.Now()
-	}
-
-	result := d.gormDB.WithContext(ctx).
-		Model(&DeviceAccessToken{}).
-		Where("serial_number = ? AND (revoked_at IS NULL OR revoked_at > ?)", trimmedSN, revokeTime).
-		Update("revoked_at", revokeTime)
-	if result.Error != nil {
-		return fmt.Errorf("revoke device access token by serial_number %q: %w", trimmedSN, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("revoke device access token for %q: %w", trimmedSN, ErrAccessTokenNotFound)
-	}
-
-	return nil
-}
-
-// DeleteDeviceAccessTokenBySerialNumber 删除指定设备序列号的 Access Token 记录。
-func (d *Database) DeleteDeviceAccessTokenBySerialNumber(ctx context.Context, serialNumber string) error {
-	if d == nil || d.gormDB == nil {
-		return ErrDatabaseInstanceRequired
-	}
-
-	trimmedSN := strings.TrimSpace(serialNumber)
-	if trimmedSN == "" {
-		return ErrEmptySerialNumber
-	}
-
-	result := d.gormDB.WithContext(ctx).
-		Where("serial_number = ?", trimmedSN).
-		Delete(&DeviceAccessToken{})
-	if result.Error != nil {
-		return fmt.Errorf("delete device access token by serial_number %q: %w", trimmedSN, result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("delete device access token for serial_number %q: %w", trimmedSN, ErrAccessTokenNotFound)
 	}
 
 	return nil

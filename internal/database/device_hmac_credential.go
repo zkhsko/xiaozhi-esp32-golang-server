@@ -14,10 +14,6 @@ import (
 const (
 	// AuthMethodEfuseHMAC 表示基于硬件 eFuse HMAC 挑战应答的激活方式（针对包含出厂硬件序列号与密钥的设备）。
 	AuthMethodEfuseHMAC = "efuse_hmac"
-	// AuthMethodActivationCode 表示基于 6 位一次性激活码人工绑定的激活方式（针对未烧录出厂序列号的设备）。
-	AuthMethodActivationCode = "activation_code"
-	// AuthMethodManualCodeHMAC 表示通过人工输入 serial_number + hmac + code 的组合激活方式。
-	AuthMethodManualCodeHMAC = "manual_code_hmac"
 )
 
 // 凭证状态常量定义。
@@ -26,10 +22,6 @@ const (
 	CredentialStatusEnabled = "enabled"
 	// CredentialStatusActivated 表示凭证已完成设备激活并与运行态设备建立权威关联。
 	CredentialStatusActivated = "activated"
-	// CredentialStatusBlocked 表示凭证被暂时冻结，禁止进行激活和鉴权。
-	CredentialStatusBlocked = "blocked"
-	// CredentialStatusRevoked 表示凭证已永久作废撤销，禁止再次激活或使用。
-	CredentialStatusRevoked = "revoked"
 )
 
 // 哨兵错误定义。
@@ -44,8 +36,6 @@ var (
 	ErrEmptyStatus = errors.New("credential status cannot be empty")
 	// ErrInvalidCredential 表示凭证结构体为 nil 或非法。
 	ErrInvalidCredential = errors.New("invalid device hmac credential")
-	// ErrCredentialBlocked 表示设备凭证处于冻结或撤销不可用状态。
-	ErrCredentialBlocked = errors.New("device credential is blocked or revoked")
 	// ErrDatabaseInstanceRequired 表示 Database 实例不能为 nil。
 	ErrDatabaseInstanceRequired = errors.New("database instance cannot be nil")
 )
@@ -59,9 +49,9 @@ var (
 // 字段约束与索引规范：
 // - id: 自增主键。
 // - serial_number: 设备序列号，不可为空且全局唯一，唯一索引 uk_serial_number。
-// - auth_method: 认证激活方式（efuse_hmac / activation_code / manual_code_hmac）。
+// - auth_method: 认证激活方式（efuse_hmac）。
 // - hmac_key_ciphertext: HMAC Key（统一字段名 hmac_key_ciphertext，64位十六进制字符串，可直接写入 hmac_0），不可为空。
-// - credential_status: 凭证状态（enabled / activated / blocked / revoked），无索引。
+// - credential_status: 凭证状态（enabled / activated），无索引。
 type DeviceHmacCredential struct {
 	ID                uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	SerialNumber      string    `gorm:"uniqueIndex:uk_serial_number;column:serial_number;size:64;not null" json:"serial_number"`
@@ -110,64 +100,6 @@ func (d *Database) FindDeviceHmacCredentialBySerialNumber(ctx context.Context, s
 	}
 
 	return &cred, nil
-}
-
-// FindDeviceHmacCredentialByID 根据自增主键 ID 查询设备 HMAC 凭证记录。
-func (d *Database) FindDeviceHmacCredentialByID(ctx context.Context, id uint64) (*DeviceHmacCredential, error) {
-	if d == nil || d.gormDB == nil {
-		return nil, ErrDatabaseInstanceRequired
-	}
-
-	if id == 0 {
-		return nil, fmt.Errorf("find device hmac credential by id %d: %w", id, ErrCredentialNotFound)
-	}
-
-	var cred DeviceHmacCredential
-	err := d.gormDB.WithContext(ctx).
-		Model(&DeviceHmacCredential{}).
-		Where("id = ?", id).
-		Take(&cred).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("find device hmac credential by id %d: %w", id, ErrCredentialNotFound)
-		}
-		return nil, fmt.Errorf("query device hmac credential by id: %w", err)
-	}
-
-	return &cred, nil
-}
-
-// CreateDeviceHmacCredential 写入单条设备出厂凭证记录（供制造预置/初始化使用）。
-func (d *Database) CreateDeviceHmacCredential(ctx context.Context, cred *DeviceHmacCredential) error {
-	if d == nil || d.gormDB == nil {
-		return ErrDatabaseInstanceRequired
-	}
-	if cred == nil {
-		return ErrInvalidCredential
-	}
-
-	cred.SerialNumber = strings.TrimSpace(cred.SerialNumber)
-	if cred.SerialNumber == "" {
-		return ErrEmptySerialNumber
-	}
-
-	cred.HMACKeyCiphertext = strings.TrimSpace(cred.HMACKeyCiphertext)
-	if cred.HMACKeyCiphertext == "" {
-		return ErrEmptyHMACKeyCiphertext
-	}
-
-	if cred.AuthMethod == "" {
-		cred.AuthMethod = AuthMethodEfuseHMAC
-	}
-	if cred.CredentialStatus == "" {
-		cred.CredentialStatus = CredentialStatusEnabled
-	}
-
-	if err := d.gormDB.WithContext(ctx).Create(cred).Error; err != nil {
-		return fmt.Errorf("create device hmac credential: %w", err)
-	}
-
-	return nil
 }
 
 // BatchCreateDeviceHmacCredentials 批量写入设备出厂凭证记录。
@@ -232,78 +164,5 @@ func (d *Database) UpdateDeviceHmacCredentialStatus(ctx context.Context, serialN
 		return fmt.Errorf("update device hmac credential status for %q: %w", trimmedSN, ErrCredentialNotFound)
 	}
 
-	return nil
-}
-
-// UpsertDeviceHmacCredential 针对无序列号设备输入 serial_number、hmac、code 激活场景，创建或更新设备凭证。
-func (d *Database) UpsertDeviceHmacCredential(ctx context.Context, cred *DeviceHmacCredential) error {
-	if d == nil || d.gormDB == nil {
-		return ErrDatabaseInstanceRequired
-	}
-	if cred == nil {
-		return ErrInvalidCredential
-	}
-
-	cred.SerialNumber = strings.TrimSpace(cred.SerialNumber)
-	if cred.SerialNumber == "" {
-		return ErrEmptySerialNumber
-	}
-	cred.HMACKeyCiphertext = strings.TrimSpace(cred.HMACKeyCiphertext)
-	if cred.HMACKeyCiphertext == "" {
-		return ErrEmptyHMACKeyCiphertext
-	}
-
-	var existing DeviceHmacCredential
-	err := d.gormDB.WithContext(ctx).
-		Model(&DeviceHmacCredential{}).
-		Where("serial_number = ?", cred.SerialNumber).
-		Take(&existing).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return fmt.Errorf("query device hmac credential: %w", err)
-	}
-
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		if cred.AuthMethod == "" {
-			cred.AuthMethod = AuthMethodManualCodeHMAC
-		}
-		if cred.CredentialStatus == "" {
-			cred.CredentialStatus = CredentialStatusActivated
-		}
-		if err := d.gormDB.WithContext(ctx).Create(cred).Error; err != nil {
-			return fmt.Errorf("create device hmac credential: %w", err)
-		}
-		return nil
-	}
-
-	if !existing.IsAvailable() {
-		return ErrCredentialBlocked
-	}
-
-	updates := map[string]any{
-		"hmac_key_ciphertext": cred.HMACKeyCiphertext,
-		"credential_status":   CredentialStatusActivated,
-	}
-	if cred.AuthMethod != "" {
-		updates["auth_method"] = cred.AuthMethod
-	}
-
-	if err := d.gormDB.WithContext(ctx).Model(&existing).Updates(updates).Error; err != nil {
-		return fmt.Errorf("update device hmac credential: %w", err)
-	}
-
-	return nil
-}
-
-// ValidateActivationInput 校验输入 serial_number、hmac、code 激活请求的基础合法性。
-func ValidateActivationInput(serialNumber, hmacKey, code string) error {
-	if strings.TrimSpace(serialNumber) == "" {
-		return fmt.Errorf("serial_number cannot be empty")
-	}
-	if strings.TrimSpace(hmacKey) == "" {
-		return fmt.Errorf("hmac key cannot be empty")
-	}
-	if strings.TrimSpace(code) == "" {
-		return fmt.Errorf("activation code cannot be empty")
-	}
 	return nil
 }

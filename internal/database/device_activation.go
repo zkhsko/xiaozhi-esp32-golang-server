@@ -14,10 +14,6 @@ import (
 const (
 	// ActivationStatusActive 表示设备处于正常激活状态，可正常连接与交互。
 	ActivationStatusActive = "active"
-	// ActivationStatusFrozen 表示设备被暂时冻结，禁止设备连接，但保留激活关系。
-	ActivationStatusFrozen = "frozen"
-	// ActivationStatusRevoked 表示设备激活关系已被永久撤销。
-	ActivationStatusRevoked = "revoked"
 )
 
 // 哨兵错误定义。
@@ -28,10 +24,6 @@ var (
 	ErrEmptyDeviceID = errors.New("device id cannot be empty")
 	// ErrEmptyClientID 表示设备 Client-Id 为空。
 	ErrEmptyClientID = errors.New("client id cannot be empty")
-	// ErrInvalidActivation 表示设备激活结构体为 nil 或非法。
-	ErrInvalidActivation = errors.New("invalid device activation")
-	// ErrActivationBlocked 表示设备激活处于冻结或撤销状态。
-	ErrActivationBlocked = errors.New("device activation is frozen or revoked")
 )
 
 // DeviceActivation 映射 device_activation 设备激活关系表。
@@ -44,7 +36,7 @@ var (
 // - serial_number: 设备出厂序列号，全局业务唯一，唯一索引 uk_serial_number。
 // - device_id: 后端设备标识 Device-Id，普通索引 idx_device_id。
 // - client_id: 固件/客户端安装实例标识，可为空。
-// - activation_status: 激活状态（active / frozen / revoked）。
+// - activation_status: 激活状态（active）。
 // - activated_at: 首次激活时间。
 // - created_at: 记录创建时间。
 // - updated_at: 记录最近更新时间。
@@ -174,33 +166,6 @@ func (d *Database) FindDeviceActivationBySerialNumber(ctx context.Context, seria
 	return &act, nil
 }
 
-// FindDeviceActivationByDeviceID 根据后端 Device-Id 查询最新的激活记录。
-func (d *Database) FindDeviceActivationByDeviceID(ctx context.Context, deviceID string) (*DeviceActivation, error) {
-	if d == nil || d.gormDB == nil {
-		return nil, ErrDatabaseInstanceRequired
-	}
-
-	trimmedDeviceID := strings.TrimSpace(deviceID)
-	if trimmedDeviceID == "" {
-		return nil, ErrEmptyDeviceID
-	}
-
-	var act DeviceActivation
-	err := d.gormDB.WithContext(ctx).
-		Model(&DeviceActivation{}).
-		Where("device_id = ?", trimmedDeviceID).
-		Order("id DESC").
-		Take(&act).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("find device activation by device_id %q: %w", trimmedDeviceID, ErrActivationNotFound)
-		}
-		return nil, fmt.Errorf("query device activation by device_id: %w", err)
-	}
-
-	return &act, nil
-}
-
 // FindDeviceActivationByDeviceIDAndClientID 根据后端 Device-Id 和 Client-Id 查询最新的激活记录。
 func (d *Database) FindDeviceActivationByDeviceIDAndClientID(ctx context.Context, deviceID, clientID string) (*DeviceActivation, error) {
 	if d == nil || d.gormDB == nil {
@@ -230,166 +195,4 @@ func (d *Database) FindDeviceActivationByDeviceIDAndClientID(ctx context.Context
 	}
 
 	return &act, nil
-}
-
-// FindDeviceActivationByID 根据自增主键 ID 查询设备激活记录。
-func (d *Database) FindDeviceActivationByID(ctx context.Context, id uint64) (*DeviceActivation, error) {
-	if d == nil || d.gormDB == nil {
-		return nil, ErrDatabaseInstanceRequired
-	}
-
-	if id == 0 {
-		return nil, fmt.Errorf("find device activation by id %d: %w", id, ErrActivationNotFound)
-	}
-
-	var act DeviceActivation
-	err := d.gormDB.WithContext(ctx).
-		Model(&DeviceActivation{}).
-		Where("id = ?", id).
-		Take(&act).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("find device activation by id %d: %w", id, ErrActivationNotFound)
-		}
-		return nil, fmt.Errorf("query device activation by id: %w", err)
-	}
-
-	return &act, nil
-}
-
-// CreateDeviceActivation 插入一条设备激活记录。
-func (d *Database) CreateDeviceActivation(ctx context.Context, act *DeviceActivation) error {
-	if d == nil || d.gormDB == nil {
-		return ErrDatabaseInstanceRequired
-	}
-	if act == nil {
-		return ErrInvalidActivation
-	}
-
-	act.SerialNumber = strings.TrimSpace(act.SerialNumber)
-	if act.SerialNumber == "" {
-		return ErrEmptySerialNumber
-	}
-	act.DeviceID = strings.TrimSpace(act.DeviceID)
-	if act.DeviceID == "" {
-		return ErrEmptyDeviceID
-	}
-	act.ClientID = strings.TrimSpace(act.ClientID)
-
-	if act.ActivationStatus == "" {
-		act.ActivationStatus = ActivationStatusActive
-	}
-	if act.ActivatedAt.IsZero() {
-		act.ActivatedAt = time.Now()
-	}
-
-	if err := d.gormDB.WithContext(ctx).Create(act).Error; err != nil {
-		return fmt.Errorf("create device activation: %w", err)
-	}
-
-	return nil
-}
-
-// UpdateDeviceActivationStatus 更新设备激活状态（如激活、冻结或撤销）。
-func (d *Database) UpdateDeviceActivationStatus(ctx context.Context, serialNumber, status string) error {
-	if d == nil || d.gormDB == nil {
-		return ErrDatabaseInstanceRequired
-	}
-
-	trimmedSN := strings.TrimSpace(serialNumber)
-	if trimmedSN == "" {
-		return ErrEmptySerialNumber
-	}
-	trimmedStatus := strings.TrimSpace(status)
-	if trimmedStatus == "" {
-		return ErrEmptyStatus
-	}
-
-	result := d.gormDB.WithContext(ctx).
-		Model(&DeviceActivation{}).
-		Where("serial_number = ?", trimmedSN).
-		Update("activation_status", trimmedStatus)
-	if result.Error != nil {
-		return fmt.Errorf("update device activation status: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("update device activation status for %q: %w", trimmedSN, ErrActivationNotFound)
-	}
-
-	return nil
-}
-
-// UpsertDeviceActivation 创建或更新设备激活记录。
-// 若设备首次激活则创建新记录；若已有激活记录且未被冻结/撤销，则更新 DeviceID、ClientID 等运行态信息。
-func (d *Database) UpsertDeviceActivation(ctx context.Context, act *DeviceActivation) error {
-	if d == nil || d.gormDB == nil {
-		return ErrDatabaseInstanceRequired
-	}
-	if act == nil {
-		return ErrInvalidActivation
-	}
-
-	trimmedSN := strings.TrimSpace(act.SerialNumber)
-	if trimmedSN == "" {
-		return ErrEmptySerialNumber
-	}
-	trimmedDeviceID := strings.TrimSpace(act.DeviceID)
-	if trimmedDeviceID == "" {
-		return ErrEmptyDeviceID
-	}
-	trimmedClientID := strings.TrimSpace(act.ClientID)
-
-	var existing DeviceActivation
-	err := d.gormDB.WithContext(ctx).
-		Model(&DeviceActivation{}).
-		Where("serial_number = ?", trimmedSN).
-		Take(&existing).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return fmt.Errorf("query device activation: %w", err)
-	}
-
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		act.SerialNumber = trimmedSN
-		act.DeviceID = trimmedDeviceID
-		act.ClientID = trimmedClientID
-		if act.ActivationStatus == "" {
-			act.ActivationStatus = ActivationStatusActive
-		}
-		if act.ActivatedAt.IsZero() {
-			act.ActivatedAt = time.Now()
-		}
-		if err := d.gormDB.WithContext(ctx).Create(act).Error; err != nil {
-			return fmt.Errorf("create device activation: %w", err)
-		}
-		return nil
-	}
-
-	if !existing.IsActive() {
-		return ErrActivationBlocked
-	}
-
-	updates := map[string]any{
-		"device_id": trimmedDeviceID,
-		"client_id": trimmedClientID,
-	}
-	if act.ActivationStatus != "" {
-		updates["activation_status"] = act.ActivationStatus
-	}
-
-	if err := d.gormDB.WithContext(ctx).Model(&existing).Updates(updates).Error; err != nil {
-		return fmt.Errorf("update device activation: %w", err)
-	}
-
-	act.ID = existing.ID
-	act.SerialNumber = existing.SerialNumber
-	act.DeviceID = trimmedDeviceID
-	act.ClientID = trimmedClientID
-	act.ActivationStatus = existing.ActivationStatus
-	if actStatus, ok := updates["activation_status"].(string); ok {
-		act.ActivationStatus = actStatus
-	}
-	act.ActivatedAt = existing.ActivatedAt
-	act.CreatedAt = existing.CreatedAt
-
-	return nil
 }

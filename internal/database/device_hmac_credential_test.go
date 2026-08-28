@@ -40,15 +40,17 @@ func TestDeviceHmacCredentialCRUD(t *testing.T) {
 	testSN := "test-sn-001"
 	testHexKey := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-	cred := &DeviceHmacCredential{
-		SerialNumber:      testSN,
-		AuthMethod:        AuthMethodEfuseHMAC,
-		HMACKeyCiphertext: testHexKey,
-		CredentialStatus:  CredentialStatusEnabled,
+	creds := []*DeviceHmacCredential{
+		{
+			SerialNumber:      testSN,
+			AuthMethod:        AuthMethodEfuseHMAC,
+			HMACKeyCiphertext: testHexKey,
+			CredentialStatus:  CredentialStatusEnabled,
+		},
 	}
 
-	if err := db.CreateDeviceHmacCredential(ctx, cred); err != nil {
-		t.Fatalf("CreateDeviceHmacCredential failed: %v", err)
+	if err := db.BatchCreateDeviceHmacCredentials(ctx, creds); err != nil {
+		t.Fatalf("BatchCreateDeviceHmacCredentials failed: %v", err)
 	}
 
 	found, err := db.FindDeviceHmacCredentialBySerialNumber(ctx, testSN)
@@ -65,15 +67,6 @@ func TestDeviceHmacCredentialCRUD(t *testing.T) {
 		t.Errorf("expected credential to be available")
 	}
 
-	// Test find by ID
-	foundByID, err := db.FindDeviceHmacCredentialByID(ctx, found.ID)
-	if err != nil {
-		t.Fatalf("FindDeviceHmacCredentialByID failed: %v", err)
-	}
-	if foundByID.SerialNumber != testSN {
-		t.Errorf("expected SN %q, got %q", testSN, foundByID.SerialNumber)
-	}
-
 	// Update status
 	if err := db.UpdateDeviceHmacCredentialStatus(ctx, testSN, CredentialStatusActivated); err != nil {
 		t.Fatalf("UpdateDeviceHmacCredentialStatus failed: %v", err)
@@ -84,40 +77,6 @@ func TestDeviceHmacCredentialCRUD(t *testing.T) {
 	}
 	if foundUpdated.CredentialStatus != CredentialStatusActivated {
 		t.Errorf("expected status %q, got %q", CredentialStatusActivated, foundUpdated.CredentialStatus)
-	}
-
-	// Test Upsert existing
-	upsertHexKey := "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
-	upsertCred := &DeviceHmacCredential{
-		SerialNumber:      testSN,
-		HMACKeyCiphertext: upsertHexKey,
-	}
-	if err := db.UpsertDeviceHmacCredential(ctx, upsertCred); err != nil {
-		t.Fatalf("UpsertDeviceHmacCredential failed: %v", err)
-	}
-	foundUpserted, err := db.FindDeviceHmacCredentialBySerialNumber(ctx, testSN)
-	if err != nil {
-		t.Fatalf("FindDeviceHmacCredentialBySerialNumber after upsert failed: %v", err)
-	}
-	if foundUpserted.HMACKeyCiphertext != upsertHexKey {
-		t.Errorf("expected updated hex key %q, got %q", upsertHexKey, foundUpserted.HMACKeyCiphertext)
-	}
-
-	// Test Upsert new
-	newSN := "test-sn-002"
-	newCred := &DeviceHmacCredential{
-		SerialNumber:      newSN,
-		HMACKeyCiphertext: testHexKey,
-	}
-	if err := db.UpsertDeviceHmacCredential(ctx, newCred); err != nil {
-		t.Fatalf("UpsertDeviceHmacCredential new failed: %v", err)
-	}
-	foundNew, err := db.FindDeviceHmacCredentialBySerialNumber(ctx, newSN)
-	if err != nil {
-		t.Fatalf("FindDeviceHmacCredentialBySerialNumber after upsert new failed: %v", err)
-	}
-	if foundNew.SerialNumber != newSN || foundNew.HMACKeyCiphertext != testHexKey {
-		t.Errorf("unexpected upsert new result: %+v", foundNew)
 	}
 }
 
@@ -156,34 +115,30 @@ func TestDeviceHmacCredentialValidation(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty SN
-	err := db.CreateDeviceHmacCredential(ctx, &DeviceHmacCredential{
-		SerialNumber:      "",
-		HMACKeyCiphertext: "some-key",
+	err := db.BatchCreateDeviceHmacCredentials(ctx, []*DeviceHmacCredential{
+		{
+			SerialNumber:      "",
+			HMACKeyCiphertext: "some-key",
+		},
 	})
 	if !errors.Is(err, ErrEmptySerialNumber) {
 		t.Errorf("expected ErrEmptySerialNumber, got %v", err)
 	}
 
 	// Empty Key
-	err = db.CreateDeviceHmacCredential(ctx, &DeviceHmacCredential{
-		SerialNumber:      "sn-empty-key",
-		HMACKeyCiphertext: "",
+	err = db.BatchCreateDeviceHmacCredentials(ctx, []*DeviceHmacCredential{
+		{
+			SerialNumber:      "sn-empty-key",
+			HMACKeyCiphertext: "",
+		},
 	})
 	if !errors.Is(err, ErrEmptyHMACKeyCiphertext) {
 		t.Errorf("expected ErrEmptyHMACKeyCiphertext, got %v", err)
 	}
 
-	// ValidateActivationInput
-	if err := ValidateActivationInput("", "key", "123456"); err == nil {
-		t.Errorf("expected error for empty SN")
-	}
-	if err := ValidateActivationInput("sn", "", "123456"); err == nil {
-		t.Errorf("expected error for empty key")
-	}
-	if err := ValidateActivationInput("sn", "key", ""); err == nil {
-		t.Errorf("expected error for empty code")
-	}
-	if err := ValidateActivationInput("sn", "key", "123456"); err != nil {
-		t.Errorf("expected valid input, got %v", err)
+	// Nil credential in slice
+	err = db.BatchCreateDeviceHmacCredentials(ctx, []*DeviceHmacCredential{nil})
+	if !errors.Is(err, ErrInvalidCredential) {
+		t.Errorf("expected ErrInvalidCredential, got %v", err)
 	}
 }
