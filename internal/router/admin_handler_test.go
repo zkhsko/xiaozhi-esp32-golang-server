@@ -155,7 +155,7 @@ func TestAdminCredentialCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find credential failed: %v", err)
 	}
-	targetID := foundCred.ID
+	targetId := foundCred.Id
 
 	// 2. List credentials
 	reqList := httptest.NewRequest(http.MethodGet, "/device-hmac-credential?serial_number=test-sn", nil)
@@ -179,7 +179,7 @@ func TestAdminCredentialCRUD(t *testing.T) {
 
 	// 3. Update credential (via POST /device-hmac-credential/update)
 	updateBody, _ := json.Marshal(UpdateCredentialRequest{
-		ID:               targetID,
+		Id:               targetId,
 		DeviceType:       "desk-robot-v2",
 		CredentialStatus: "blocked",
 	})
@@ -202,7 +202,7 @@ func TestAdminCredentialCRUD(t *testing.T) {
 
 	// 4. Delete credential (via POST /device-hmac-credential/delete)
 	deleteBody, _ := json.Marshal(DeleteCredentialRequest{
-		ID: targetID,
+		Id: targetId,
 	})
 	reqDelete := httptest.NewRequest(http.MethodPost, "/device-hmac-credential/delete", bytes.NewReader(deleteBody))
 	reqDelete.Header.Set("Content-Type", "application/json")
@@ -244,7 +244,7 @@ func TestAdminCredentialBatchDelete(t *testing.T) {
 	}
 
 	batchDelBody, _ := json.Marshal(BatchDeleteCredentialRequest{
-		IDs: []uint64{list[0].ID, list[1].ID},
+		Ids: []uint64{list[0].Id, list[1].Id},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/device-hmac-credential/batch-delete", bytes.NewReader(batchDelBody))
 	req.Header.Set("Content-Type", "application/json")
@@ -272,7 +272,7 @@ func TestAdminDeviceActivationEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activate device failed: %v", err)
 	}
-	actID := initialAct.ID
+	actId := initialAct.Id
 
 	// 2. Test List Activation
 	reqList := httptest.NewRequest(http.MethodGet, "/device-activation?page=1&page_size=10", nil)
@@ -298,7 +298,7 @@ func TestAdminDeviceActivationEndpoints(t *testing.T) {
 		"id": %d,
 		"device_id": "dev-test-act-001-mod",
 		"activation_status": "frozen"
-	}`, actID))
+	}`, actId))
 	reqUpdate := httptest.NewRequest(http.MethodPost, "/device-activation/update", bytes.NewReader(updateBody))
 	reqUpdate.Header.Set("Content-Type", "application/json")
 	wUpdate := httptest.NewRecorder()
@@ -312,12 +312,12 @@ func TestAdminDeviceActivationEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("find activation failed: %v", err)
 	}
-	if act.DeviceID != "dev-test-act-001-mod" || act.ActivationStatus != "frozen" {
+	if act.DeviceId != "dev-test-act-001-mod" || act.ActivationStatus != "frozen" {
 		t.Fatalf("unexpected updated activation: %+v", act)
 	}
 
 	// 4. Test Single Delete
-	deleteBody := []byte(fmt.Sprintf(`{"id": %d}`, actID))
+	deleteBody := []byte(fmt.Sprintf(`{"id": %d}`, actId))
 	reqDelete := httptest.NewRequest(http.MethodPost, "/device-activation/delete", bytes.NewReader(deleteBody))
 	reqDelete.Header.Set("Content-Type", "application/json")
 	wDelete := httptest.NewRecorder()
@@ -337,7 +337,7 @@ func TestAdminDeviceActivationEndpoints(t *testing.T) {
 	}
 
 	batchDelBody, _ := json.Marshal(BatchDeleteActivationRequest{
-		IDs: []uint64{act1.ID, act2.ID},
+		Ids: []uint64{act1.Id, act2.Id},
 	})
 	reqBatchDel := httptest.NewRequest(http.MethodPost, "/device-activation/batch-delete", bytes.NewReader(batchDelBody))
 	reqBatchDel.Header.Set("Content-Type", "application/json")
@@ -388,7 +388,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	if err := json.Unmarshal(wCreate.Body.Bytes(), &createResp); err != nil {
 		t.Fatalf("unmarshal createResp failed: %v", err)
 	}
-	if !createResp.Success || createResp.Data.ID == 0 {
+	if !createResp.Success || createResp.Data.Id == 0 {
 		t.Fatalf("unexpected create response: %+v", createResp)
 	}
 	if !createResp.Data.HasAPIKey {
@@ -400,7 +400,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	if createResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("expected proxy_url http://127.0.0.1:7890, got %q", createResp.Data.ProxyURL)
 	}
-	asrID := createResp.Data.ID
+	asrId := createResp.Data.Id
 
 	// 2. List ASR Configs
 	reqList := httptest.NewRequest(http.MethodGet, "/asr-config/list?page=1&page_size=10&name=百炼", nil)
@@ -436,7 +436,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 		"proxy_url": "socks5://127.0.0.1:1080",
 		"connect_timeout_ms": 8000,
 		"enabled": false
-	}`, asrID))
+	}`, asrId))
 	reqUpdate := httptest.NewRequest(http.MethodPost, "/asr-config/update", bytes.NewReader(updateBody))
 	reqUpdate.Header.Set("Content-Type", "application/json")
 	wUpdate := httptest.NewRecorder()
@@ -447,7 +447,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	}
 
 	// Verify in DB that original api_key is preserved and fields updated
-	found, err := db.FindASRConfigByID(context.Background(), asrID)
+	found, err := db.FindASRConfigById(context.Background(), asrId)
 	if err != nil {
 		t.Fatalf("find asr config in db failed: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	}
 
 	// 4. Single Delete
-	delBody := []byte(fmt.Sprintf(`{"id": %d}`, asrID))
+	delBody := []byte(fmt.Sprintf(`{"id": %d}`, asrId))
 	reqDel := httptest.NewRequest(http.MethodPost, "/asr-config/delete", bytes.NewReader(delBody))
 	reqDel.Header.Set("Content-Type", "application/json")
 	wDel := httptest.NewRecorder()
@@ -469,7 +469,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 		t.Fatalf("delete asr config failed, code=%d, body=%s", wDel.Code, wDel.Body.String())
 	}
 
-	_, err = db.FindASRConfigByID(context.Background(), asrID)
+	_, err = db.FindASRConfigById(context.Background(), asrId)
 	if !errors.Is(err, database.ErrASRConfigNotFound) {
 		t.Fatalf("expected ErrASRConfigNotFound after delete, got %v", err)
 	}
@@ -480,7 +480,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	_ = db.CreateASRConfig(context.Background(), cfgA)
 	_ = db.CreateASRConfig(context.Background(), cfgB)
 
-	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, cfgA.ID, cfgB.ID))
+	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, cfgA.Id, cfgB.Id))
 	reqBatchDel := httptest.NewRequest(http.MethodPost, "/asr-config/batch-delete", bytes.NewReader(batchDelBody))
 	reqBatchDel.Header.Set("Content-Type", "application/json")
 	wBatchDel := httptest.NewRecorder()
@@ -530,7 +530,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	if err := json.Unmarshal(wCreate.Body.Bytes(), &createResp); err != nil {
 		t.Fatalf("unmarshal createResp failed: %v", err)
 	}
-	if !createResp.Success || createResp.Data.ID == 0 {
+	if !createResp.Success || createResp.Data.Id == 0 {
 		t.Fatalf("unexpected create response: %+v", createResp)
 	}
 	if !createResp.Data.HasAPIKey {
@@ -542,7 +542,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	if createResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("expected proxy_url http://127.0.0.1:7890, got %q", createResp.Data.ProxyURL)
 	}
-	llmID := createResp.Data.ID
+	llmId := createResp.Data.Id
 
 	// 2. List LLM Configs
 	reqList := httptest.NewRequest(http.MethodGet, "/llm-config/list?page=1&page_size=10&name=百炼", nil)
@@ -578,7 +578,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 		"first_token_timeout_ms": 8000,
 		"overall_timeout_ms": 40000,
 		"enabled": false
-	}`, llmID))
+	}`, llmId))
 	reqUpdate := httptest.NewRequest(http.MethodPost, "/llm-config/update", bytes.NewReader(updateBody))
 	reqUpdate.Header.Set("Content-Type", "application/json")
 	wUpdate := httptest.NewRecorder()
@@ -589,7 +589,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	}
 
 	// Verify in DB that original api_key is preserved and fields updated
-	found, err := db.FindLLMConfigByID(context.Background(), llmID)
+	found, err := db.FindLLMConfigById(context.Background(), llmId)
 	if err != nil {
 		t.Fatalf("find llm config in db failed: %v", err)
 	}
@@ -601,7 +601,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	}
 
 	// 4. Single Delete
-	delBody := []byte(fmt.Sprintf(`{"id": %d}`, llmID))
+	delBody := []byte(fmt.Sprintf(`{"id": %d}`, llmId))
 	reqDel := httptest.NewRequest(http.MethodPost, "/llm-config/delete", bytes.NewReader(delBody))
 	reqDel.Header.Set("Content-Type", "application/json")
 	wDel := httptest.NewRecorder()
@@ -611,7 +611,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 		t.Fatalf("delete llm config failed, code=%d, body=%s", wDel.Code, wDel.Body.String())
 	}
 
-	_, err = db.FindLLMConfigByID(context.Background(), llmID)
+	_, err = db.FindLLMConfigById(context.Background(), llmId)
 	if !errors.Is(err, database.ErrLLMConfigNotFound) {
 		t.Fatalf("expected ErrLLMConfigNotFound after delete, got %v", err)
 	}
@@ -622,7 +622,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	_ = db.CreateLLMConfig(context.Background(), cfgA)
 	_ = db.CreateLLMConfig(context.Background(), cfgB)
 
-	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, cfgA.ID, cfgB.ID))
+	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, cfgA.Id, cfgB.Id))
 	reqBatchDel := httptest.NewRequest(http.MethodPost, "/llm-config/batch-delete", bytes.NewReader(batchDelBody))
 	reqBatchDel.Header.Set("Content-Type", "application/json")
 	wBatchDel := httptest.NewRecorder()
@@ -674,7 +674,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	if err := json.Unmarshal(wCreate.Body.Bytes(), &createResp); err != nil {
 		t.Fatalf("unmarshal createResp failed: %v", err)
 	}
-	if !createResp.Success || createResp.Data.ID == 0 {
+	if !createResp.Success || createResp.Data.Id == 0 {
 		t.Fatalf("unexpected create response: %+v", createResp)
 	}
 	if !createResp.Data.HasAPIKey {
@@ -686,7 +686,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	if createResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("expected proxy_url http://127.0.0.1:7890, got %q", createResp.Data.ProxyURL)
 	}
-	ttsID := createResp.Data.ID
+	ttsId := createResp.Data.Id
 
 	// 2. List TTS Configs
 	reqList := httptest.NewRequest(http.MethodGet, "/tts-config/list?page=1&page_size=10&name=百炼", nil)
@@ -724,7 +724,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 		"first_audio_timeout_ms": 7000,
 		"sentence_timeout_ms": 15000,
 		"enabled": false
-	}`, ttsID))
+	}`, ttsId))
 	reqUpdate := httptest.NewRequest(http.MethodPost, "/tts-config/update", bytes.NewReader(updateBody))
 	reqUpdate.Header.Set("Content-Type", "application/json")
 	wUpdate := httptest.NewRecorder()
@@ -735,7 +735,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	}
 
 	// Verify in DB that original api_key is preserved and fields updated
-	found, err := db.FindTTSConfigByID(context.Background(), ttsID)
+	found, err := db.FindTTSConfigById(context.Background(), ttsId)
 	if err != nil {
 		t.Fatalf("find tts config in db failed: %v", err)
 	}
@@ -747,7 +747,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	}
 
 	// 4. Single Delete
-	delBody := []byte(fmt.Sprintf(`{"id": %d}`, ttsID))
+	delBody := []byte(fmt.Sprintf(`{"id": %d}`, ttsId))
 	reqDel := httptest.NewRequest(http.MethodPost, "/tts-config/delete", bytes.NewReader(delBody))
 	reqDel.Header.Set("Content-Type", "application/json")
 	wDel := httptest.NewRecorder()
@@ -757,7 +757,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 		t.Fatalf("delete tts config failed, code=%d, body=%s", wDel.Code, wDel.Body.String())
 	}
 
-	_, err = db.FindTTSConfigByID(context.Background(), ttsID)
+	_, err = db.FindTTSConfigById(context.Background(), ttsId)
 	if !errors.Is(err, database.ErrTTSConfigNotFound) {
 		t.Fatalf("expected ErrTTSConfigNotFound after delete, got %v", err)
 	}
@@ -768,7 +768,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	_ = db.CreateTTSConfig(context.Background(), cfgA)
 	_ = db.CreateTTSConfig(context.Background(), cfgB)
 
-	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, cfgA.ID, cfgB.ID))
+	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, cfgA.Id, cfgB.Id))
 	reqBatchDel := httptest.NewRequest(http.MethodPost, "/tts-config/batch-delete", bytes.NewReader(batchDelBody))
 	reqBatchDel.Header.Set("Content-Type", "application/json")
 	wBatchDel := httptest.NewRecorder()
@@ -808,7 +808,7 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 		"system_prompt": "你是一个智能音箱助手。",
 		"voice": "voice1",
 		"enabled": true
-	}`, asr.ID, llm.ID, tts.ID))
+	}`, asr.Id, llm.Id, tts.Id))
 	reqCreate := httptest.NewRequest(http.MethodPost, "/agent-config/save", bytes.NewReader(createBody))
 	reqCreate.Header.Set("Content-Type", "application/json")
 	wCreate := httptest.NewRecorder()
@@ -825,14 +825,14 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 	if err := json.Unmarshal(wCreate.Body.Bytes(), &createResp); err != nil {
 		t.Fatalf("unmarshal createResp failed: %v", err)
 	}
-	if !createResp.Success || createResp.Data.ID == 0 {
+	if !createResp.Success || createResp.Data.Id == 0 {
 		t.Fatalf("unexpected create response: %+v", createResp)
 	}
 	if createResp.Data.Name != "智能助手" || createResp.Data.Voice != "voice1" {
 		t.Fatalf("unexpected create data: %+v", createResp.Data)
 	}
 
-	agentID := createResp.Data.ID
+	agentId := createResp.Data.Id
 
 	// 2. List Agent Configs
 	reqList := httptest.NewRequest(http.MethodGet, "/agent-config?page=1&page_size=10", nil)
@@ -866,7 +866,7 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 		"tts_config_id": %d,
 		"system_prompt": "更新后的提示词",
 		"voice": "voice2"
-	}`, agentID, asr.ID, llm.ID, tts.ID))
+	}`, agentId, asr.Id, llm.Id, tts.Id))
 	reqUpdate := httptest.NewRequest(http.MethodPost, "/agent-config/update", bytes.NewReader(updateBody))
 	reqUpdate.Header.Set("Content-Type", "application/json")
 	wUpdate := httptest.NewRecorder()
@@ -876,7 +876,7 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 		t.Fatalf("update agent config failed, code=%d, body=%s", wUpdate.Code, wUpdate.Body.String())
 	}
 
-	found, err := db.FindAgentConfigByID(ctx, agentID)
+	found, err := db.FindAgentConfigById(ctx, agentId)
 	if err != nil {
 		t.Fatalf("find agent config in db failed: %v", err)
 	}
@@ -885,7 +885,7 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 	}
 
 	// 4. Activate Agent Config
-	actBody := []byte(fmt.Sprintf(`{"id": %d}`, agentID))
+	actBody := []byte(fmt.Sprintf(`{"id": %d}`, agentId))
 	reqAct := httptest.NewRequest(http.MethodPost, "/agent-config/activate", bytes.NewReader(actBody))
 	reqAct.Header.Set("Content-Type", "application/json")
 	wAct := httptest.NewRecorder()
@@ -895,7 +895,7 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 	}
 
 	// 5. Delete Agent Config
-	delBody := []byte(fmt.Sprintf(`{"id": %d}`, agentID))
+	delBody := []byte(fmt.Sprintf(`{"id": %d}`, agentId))
 	reqDel := httptest.NewRequest(http.MethodPost, "/agent-config/delete", bytes.NewReader(delBody))
 	reqDel.Header.Set("Content-Type", "application/json")
 	wDel := httptest.NewRecorder()
@@ -905,18 +905,18 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 		t.Fatalf("delete agent config failed, code=%d, body=%s", wDel.Code, wDel.Body.String())
 	}
 
-	_, err = db.FindAgentConfigByID(ctx, agentID)
+	_, err = db.FindAgentConfigById(ctx, agentId)
 	if !errors.Is(err, database.ErrAgentConfigNotFound) {
 		t.Fatalf("expected ErrAgentConfigNotFound after delete, got %v", err)
 	}
 
 	// 6. Batch Delete
-	cfgA := &database.AgentConfig{Name: "A", ASRConfigID: asr.ID, LLMConfigID: llm.ID, TTSConfigID: tts.ID, SystemPrompt: "p1", Voice: "v1"}
-	cfgB := &database.AgentConfig{Name: "B", ASRConfigID: asr.ID, LLMConfigID: llm.ID, TTSConfigID: tts.ID, SystemPrompt: "p2", Voice: "v2"}
+	cfgA := &database.AgentConfig{Name: "A", ASRConfigId: asr.Id, LLMConfigId: llm.Id, TTSConfigId: tts.Id, SystemPrompt: "p1", Voice: "v1"}
+	cfgB := &database.AgentConfig{Name: "B", ASRConfigId: asr.Id, LLMConfigId: llm.Id, TTSConfigId: tts.Id, SystemPrompt: "p2", Voice: "v2"}
 	_ = db.CreateAgentConfig(ctx, cfgA)
 	_ = db.CreateAgentConfig(ctx, cfgB)
 
-	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, cfgA.ID, cfgB.ID))
+	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, cfgA.Id, cfgB.Id))
 	reqBatchDel := httptest.NewRequest(http.MethodPost, "/agent-config/batch-delete", bytes.NewReader(batchDelBody))
 	reqBatchDel.Header.Set("Content-Type", "application/json")
 	wBatchDel := httptest.NewRecorder()
@@ -947,16 +947,16 @@ func TestAdminDeviceTypeEndpoints(t *testing.T) {
 	tts := &database.TTSConfig{Name: "TTS-1", Provider: "bailian", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["v1"]`, ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
 	_ = db.CreateTTSConfig(ctx, tts)
 
-	agent1 := &database.AgentConfig{Name: "Agent-A", ASRConfigID: asr.ID, LLMConfigID: llm.ID, TTSConfigID: tts.ID, SystemPrompt: "prompt A", Voice: "v1", Enabled: true}
+	agent1 := &database.AgentConfig{Name: "Agent-A", ASRConfigId: asr.Id, LLMConfigId: llm.Id, TTSConfigId: tts.Id, SystemPrompt: "prompt A", Voice: "v1", Enabled: true}
 	_ = db.CreateAgentConfig(ctx, agent1)
-	agent2 := &database.AgentConfig{Name: "Agent-B", ASRConfigID: asr.ID, LLMConfigID: llm.ID, TTSConfigID: tts.ID, SystemPrompt: "prompt B", Voice: "v1", Enabled: true}
+	agent2 := &database.AgentConfig{Name: "Agent-B", ASRConfigId: asr.Id, LLMConfigId: llm.Id, TTSConfigId: tts.Id, SystemPrompt: "prompt B", Voice: "v1", Enabled: true}
 	_ = db.CreateAgentConfig(ctx, agent2)
 
 	// 1. Create DeviceType via /device-type/save
 	createBody := []byte(fmt.Sprintf(`{
 		"device_type": "robot-dog",
 		"agent_config_id": %d
-	}`, agent1.ID))
+	}`, agent1.Id))
 	reqCreate := httptest.NewRequest(http.MethodPost, "/device-type/save", bytes.NewReader(createBody))
 	reqCreate.Header.Set("Content-Type", "application/json")
 	wCreate := httptest.NewRecorder()
@@ -973,14 +973,14 @@ func TestAdminDeviceTypeEndpoints(t *testing.T) {
 	if err := json.Unmarshal(wCreate.Body.Bytes(), &createResp); err != nil {
 		t.Fatalf("unmarshal createResp failed: %v", err)
 	}
-	if !createResp.Success || createResp.Data.ID == 0 {
+	if !createResp.Success || createResp.Data.Id == 0 {
 		t.Fatalf("unexpected create response: %+v", createResp)
 	}
-	if createResp.Data.DeviceType != "robot-dog" || createResp.Data.AgentConfigID != agent1.ID || createResp.Data.AgentName != "Agent-A" {
+	if createResp.Data.DeviceType != "robot-dog" || createResp.Data.AgentConfigId != agent1.Id || createResp.Data.AgentName != "Agent-A" {
 		t.Fatalf("unexpected create data: %+v", createResp.Data)
 	}
 
-	dtID := createResp.Data.ID
+	dtId := createResp.Data.Id
 
 	// 2. List DeviceTypes via GET /device-type
 	reqList := httptest.NewRequest(http.MethodGet, "/device-type?page=1&page_size=10", nil)
@@ -1010,7 +1010,7 @@ func TestAdminDeviceTypeEndpoints(t *testing.T) {
 		"id": %d,
 		"device_type": "robot-dog-pro",
 		"agent_config_id": %d
-	}`, dtID, agent2.ID))
+	}`, dtId, agent2.Id))
 	reqUpdate := httptest.NewRequest(http.MethodPost, "/device-type/update", bytes.NewReader(updateBody))
 	reqUpdate.Header.Set("Content-Type", "application/json")
 	wUpdate := httptest.NewRecorder()
@@ -1020,16 +1020,16 @@ func TestAdminDeviceTypeEndpoints(t *testing.T) {
 		t.Fatalf("update device type failed, code=%d, body=%s", wUpdate.Code, wUpdate.Body.String())
 	}
 
-	found, err := db.FindDeviceTypeByID(ctx, dtID)
+	found, err := db.FindDeviceTypeById(ctx, dtId)
 	if err != nil {
 		t.Fatalf("find device type in db failed: %v", err)
 	}
-	if found.DeviceType != "robot-dog-pro" || found.AgentConfigID != agent2.ID {
+	if found.DeviceType != "robot-dog-pro" || found.AgentConfigId != agent2.Id {
 		t.Errorf("unexpected updated fields in DB: %+v", found)
 	}
 
 	// 4. Delete DeviceType via POST /device-type/delete
-	delBody := []byte(fmt.Sprintf(`{"id": %d}`, dtID))
+	delBody := []byte(fmt.Sprintf(`{"id": %d}`, dtId))
 	reqDel := httptest.NewRequest(http.MethodPost, "/device-type/delete", bytes.NewReader(delBody))
 	reqDel.Header.Set("Content-Type", "application/json")
 	wDel := httptest.NewRecorder()
@@ -1039,18 +1039,18 @@ func TestAdminDeviceTypeEndpoints(t *testing.T) {
 		t.Fatalf("delete device type failed, code=%d, body=%s", wDel.Code, wDel.Body.String())
 	}
 
-	_, err = db.FindDeviceTypeByID(ctx, dtID)
+	_, err = db.FindDeviceTypeById(ctx, dtId)
 	if !errors.Is(err, database.ErrDeviceTypeNotFound) {
 		t.Fatalf("expected ErrDeviceTypeNotFound after delete, got %v", err)
 	}
 
 	// 5. Batch Delete
-	dtA := &database.DeviceType{DeviceType: "type-a", AgentConfigID: agent1.ID}
-	dtB := &database.DeviceType{DeviceType: "type-b", AgentConfigID: agent2.ID}
+	dtA := &database.DeviceType{DeviceType: "type-a", AgentConfigId: agent1.Id}
+	dtB := &database.DeviceType{DeviceType: "type-b", AgentConfigId: agent2.Id}
 	_ = db.CreateDeviceType(ctx, dtA)
 	_ = db.CreateDeviceType(ctx, dtB)
 
-	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, dtA.ID, dtB.ID))
+	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, dtA.Id, dtB.Id))
 	reqBatchDel := httptest.NewRequest(http.MethodPost, "/device-type/batch-delete", bytes.NewReader(batchDelBody))
 	reqBatchDel.Header.Set("Content-Type", "application/json")
 	wBatchDel := httptest.NewRecorder()

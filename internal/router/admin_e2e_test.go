@@ -41,7 +41,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	}
 
 	firstSN := genResp.Items[0].SerialNumber
-	firstID := genResp.Items[0].ID
+	firstId := genResp.Items[0].Id
 
 	// 2. 分页查询列表，校验第一条
 	reqList := httptest.NewRequest(http.MethodGet, "/admin-api/device-hmac-credential?page=1&page_size=10", nil)
@@ -82,7 +82,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 
 	// 4. 更新第一条凭证的状态为 blocked (via POST /admin-api/device-hmac-credential/update)
 	updateBody, _ := json.Marshal(UpdateCredentialRequest{
-		ID:               firstID,
+		Id:               firstId,
 		CredentialStatus: "blocked",
 		DeviceType:       "esp32-custom",
 	})
@@ -106,7 +106,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 
 	// 6. 单条删除 (via POST /admin-api/device-hmac-credential/delete)
 	deleteBody, _ := json.Marshal(DeleteCredentialRequest{
-		ID: firstID,
+		Id: firstId,
 	})
 	reqDel := httptest.NewRequest(http.MethodPost, "/admin-api/device-hmac-credential/delete", bytes.NewReader(deleteBody))
 	reqDel.Header.Set("Content-Type", "application/json")
@@ -134,7 +134,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activate device failed: %v", err)
 	}
-	createdActID := initialAct.ID
+	createdActId := initialAct.Id
 
 	// 9. 查询设备激活列表
 	reqActList := httptest.NewRequest(http.MethodGet, "/admin-api/device-activation?serial_number=e2e-sn", nil)
@@ -155,7 +155,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 
 	// 10. 更新激活状态为 frozen
 	updateActBody, _ := json.Marshal(UpdateActivationRequest{
-		ID:               createdActID,
+		Id:               createdActId,
 		ActivationStatus: "frozen",
 	})
 	reqUpdateAct := httptest.NewRequest(http.MethodPost, "/admin-api/device-activation/update", bytes.NewReader(updateActBody))
@@ -169,7 +169,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 
 	// 11. 删除激活记录
 	delActBody, _ := json.Marshal(DeleteActivationRequest{
-		ID: createdActID,
+		Id: createdActId,
 	})
 	reqDelAct := httptest.NewRequest(http.MethodPost, "/admin-api/device-activation/delete", bytes.NewReader(delActBody))
 	reqDelAct.Header.Set("Content-Type", "application/json")
@@ -213,10 +213,10 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    ASRConfigItem `json:"data"`
 	}
 	_ = json.Unmarshal(wASRCreate.Body.Bytes(), &asrCreateResp)
-	if !asrCreateResp.Success || asrCreateResp.Data.ID == 0 || !asrCreateResp.Data.HasAPIKey || asrCreateResp.Data.Provider != "bailian" || asrCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
+	if !asrCreateResp.Success || asrCreateResp.Data.Id == 0 || !asrCreateResp.Data.HasAPIKey || asrCreateResp.Data.Provider != "bailian" || asrCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected asr create resp: %+v", asrCreateResp)
 	}
-	createdASRID := asrCreateResp.Data.ID
+	createdASRId := asrCreateResp.Data.Id
 
 	// 14. ASR 配置列表查询
 	reqASRList := httptest.NewRequest(http.MethodGet, "/admin-api/asr-config?name=E2E", nil)
@@ -236,7 +236,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	}
 
 	// 15. ASR 配置单条删除
-	delASRBody, _ := json.Marshal(DeleteASRConfigRequest{ID: createdASRID})
+	delASRBody, _ := json.Marshal(DeleteASRConfigRequest{Id: createdASRId})
 	reqDelASR := httptest.NewRequest(http.MethodPost, "/admin-api/asr-config/delete", bytes.NewReader(delASRBody))
 	reqDelASR.Header.Set("Content-Type", "application/json")
 	wDelASR := httptest.NewRecorder()
@@ -279,10 +279,10 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    LLMConfigItem `json:"data"`
 	}
 	_ = json.Unmarshal(wLLMCreate.Body.Bytes(), &llmCreateResp)
-	if !llmCreateResp.Success || llmCreateResp.Data.ID == 0 || !llmCreateResp.Data.HasAPIKey || llmCreateResp.Data.Provider != "bailian" || llmCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
+	if !llmCreateResp.Success || llmCreateResp.Data.Id == 0 || !llmCreateResp.Data.HasAPIKey || llmCreateResp.Data.Provider != "bailian" || llmCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected llm create resp: %+v", llmCreateResp)
 	}
-	createdLLMID := llmCreateResp.Data.ID
+	createdLLMId := llmCreateResp.Data.Id
 
 	// 18. LLM 配置列表查询
 	reqLLMList := httptest.NewRequest(http.MethodGet, "/admin-api/llm-config?name=E2E", nil)
@@ -302,7 +302,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	}
 
 	// 19. LLM 配置单条删除
-	delLLMBody, _ := json.Marshal(DeleteLLMConfigRequest{ID: createdLLMID})
+	delLLMBody, _ := json.Marshal(DeleteLLMConfigRequest{Id: createdLLMId})
 	reqDelLLM := httptest.NewRequest(http.MethodPost, "/admin-api/llm-config/delete", bytes.NewReader(delLLMBody))
 	reqDelLLM.Header.Set("Content-Type", "application/json")
 	wDelLLM := httptest.NewRecorder()
@@ -347,10 +347,10 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    TTSConfigItem `json:"data"`
 	}
 	_ = json.Unmarshal(wTTSCreate.Body.Bytes(), &ttsCreateResp)
-	if !ttsCreateResp.Success || ttsCreateResp.Data.ID == 0 || !ttsCreateResp.Data.HasAPIKey || ttsCreateResp.Data.Provider != "bailian" || ttsCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
+	if !ttsCreateResp.Success || ttsCreateResp.Data.Id == 0 || !ttsCreateResp.Data.HasAPIKey || ttsCreateResp.Data.Provider != "bailian" || ttsCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected tts create resp: %+v", ttsCreateResp)
 	}
-	createdTTSID := ttsCreateResp.Data.ID
+	createdTTSId := ttsCreateResp.Data.Id
 
 	// 22. TTS 配置列表查询
 	reqTTSList := httptest.NewRequest(http.MethodGet, "/admin-api/tts-config?name=E2E", nil)
@@ -370,7 +370,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	}
 
 	// 23. TTS 配置单条删除
-	delTTSBody, _ := json.Marshal(DeleteTTSConfigRequest{ID: createdTTSID})
+	delTTSBody, _ := json.Marshal(DeleteTTSConfigRequest{Id: createdTTSId})
 	reqDelTTS := httptest.NewRequest(http.MethodPost, "/admin-api/tts-config/delete", bytes.NewReader(delTTSBody))
 	reqDelTTS.Header.Set("Content-Type", "application/json")
 	wDelTTS := httptest.NewRecorder()
@@ -400,9 +400,9 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	// 26. Agent 配置 E2E 创建
 	createAgentBody, _ := json.Marshal(SaveAgentConfigRequest{
 		Name:         "E2E 智能助手",
-		ASRConfigID:  asrCfg.ID,
-		LLMConfigID:  llmCfg.ID,
-		TTSConfigID:  ttsCfg.ID,
+		ASRConfigId:  asrCfg.Id,
+		LLMConfigId:  llmCfg.Id,
+		TTSConfigId:  ttsCfg.Id,
 		SystemPrompt: "你是一个测试助手。",
 		Voice:        "default-voice",
 		Enabled:      func(b bool) *bool { return &b }(true),
@@ -420,10 +420,10 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    AgentConfigItem `json:"data"`
 	}
 	_ = json.Unmarshal(wAgentCreate.Body.Bytes(), &agentCreateResp)
-	if !agentCreateResp.Success || agentCreateResp.Data.ID == 0 || agentCreateResp.Data.Name != "E2E 智能助手" {
+	if !agentCreateResp.Success || agentCreateResp.Data.Id == 0 || agentCreateResp.Data.Name != "E2E 智能助手" {
 		t.Fatalf("unexpected agent create resp: %+v", agentCreateResp)
 	}
-	createdAgentID := agentCreateResp.Data.ID
+	createdAgentId := agentCreateResp.Data.Id
 
 	// 27. Agent 配置列表查询
 	reqAgentList := httptest.NewRequest(http.MethodGet, "/admin-api/agent-config?name=E2E", nil)
@@ -443,7 +443,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	}
 
 	// 28. Agent 配置单条删除
-	delAgentBody, _ := json.Marshal(DeleteAgentConfigRequest{ID: createdAgentID})
+	delAgentBody, _ := json.Marshal(DeleteAgentConfigRequest{Id: createdAgentId})
 	reqDelAgent := httptest.NewRequest(http.MethodPost, "/admin-api/agent-config/delete", bytes.NewReader(delAgentBody))
 	reqDelAgent.Header.Set("Content-Type", "application/json")
 	wDelAgent := httptest.NewRecorder()
@@ -463,13 +463,13 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	}
 
 	// 30. 创建测试 Agent 用于 DeviceType
-	dtAgent := &database.AgentConfig{Name: "DT-Agent", ASRConfigID: asrCfg.ID, LLMConfigID: llmCfg.ID, TTSConfigID: ttsCfg.ID, SystemPrompt: "prompt", Voice: "v", Enabled: true}
+	dtAgent := &database.AgentConfig{Name: "DT-Agent", ASRConfigId: asrCfg.Id, LLMConfigId: llmCfg.Id, TTSConfigId: ttsCfg.Id, SystemPrompt: "prompt", Voice: "v", Enabled: true}
 	_ = db.CreateAgentConfig(context.Background(), dtAgent)
 
 	// 31. DeviceType 创建
 	createDTBody, _ := json.Marshal(SaveDeviceTypeRequest{
 		DeviceType:    "e2e-robot-type",
-		AgentConfigID: dtAgent.ID,
+		AgentConfigId: dtAgent.Id,
 	})
 	reqDTCreate := httptest.NewRequest(http.MethodPost, "/admin-api/device-type/save", bytes.NewReader(createDTBody))
 	reqDTCreate.Header.Set("Content-Type", "application/json")
@@ -484,10 +484,10 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    DeviceTypeItem `json:"data"`
 	}
 	_ = json.Unmarshal(wDTCreate.Body.Bytes(), &dtCreateResp)
-	if !dtCreateResp.Success || dtCreateResp.Data.ID == 0 || dtCreateResp.Data.DeviceType != "e2e-robot-type" || dtCreateResp.Data.AgentName != "DT-Agent" {
+	if !dtCreateResp.Success || dtCreateResp.Data.Id == 0 || dtCreateResp.Data.DeviceType != "e2e-robot-type" || dtCreateResp.Data.AgentName != "DT-Agent" {
 		t.Fatalf("unexpected device type create resp: %+v", dtCreateResp)
 	}
-	createdDTID := dtCreateResp.Data.ID
+	createdDTId := dtCreateResp.Data.Id
 
 	// 32. DeviceType 列表查询
 	reqDTList := httptest.NewRequest(http.MethodGet, "/admin-api/device-type?device_type=e2e-robot", nil)
@@ -508,9 +508,9 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 
 	// 33. DeviceType 更新
 	updateDTBody, _ := json.Marshal(SaveDeviceTypeRequest{
-		ID:            createdDTID,
+		Id:            createdDTId,
 		DeviceType:    "e2e-robot-pro",
-		AgentConfigID: dtAgent.ID,
+		AgentConfigId: dtAgent.Id,
 	})
 	reqDTUpdate := httptest.NewRequest(http.MethodPost, "/admin-api/device-type/update", bytes.NewReader(updateDTBody))
 	reqDTUpdate.Header.Set("Content-Type", "application/json")
@@ -522,7 +522,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	}
 
 	// 34. DeviceType 单条删除
-	delDTBody, _ := json.Marshal(DeleteDeviceTypeRequest{ID: createdDTID})
+	delDTBody, _ := json.Marshal(DeleteDeviceTypeRequest{Id: createdDTId})
 	reqDelDT := httptest.NewRequest(http.MethodPost, "/admin-api/device-type/delete", bytes.NewReader(delDTBody))
 	reqDelDT.Header.Set("Content-Type", "application/json")
 	wDelDT := httptest.NewRecorder()

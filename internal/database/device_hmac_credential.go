@@ -56,7 +56,7 @@ var (
 // - hmac_key_ciphertext: HMAC Key（统一字段名 hmac_key_ciphertext，64位十六进制字符串，可直接写入 hmac_0），不可为空。
 // - credential_status: 凭证状态（enabled / activated），无索引。
 type DeviceHmacCredential struct {
-	ID                uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Id                uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	SerialNumber      string    `gorm:"uniqueIndex:uk_serial_number;column:serial_number;size:64;not null" json:"serial_number"`
 	AuthMethod        string    `gorm:"column:auth_method;size:32;not null;default:'efuse_hmac'" json:"auth_method"`
 	DeviceType        string    `gorm:"column:device_type;size:32;not null;default:'default'" json:"device_type"` // 设备类型，用于关联 agent
@@ -199,7 +199,7 @@ func (d *Database) ListDeviceHmacCredentials(ctx context.Context, filter DeviceH
 	return creds, total, nil
 }
 
-// UpdateDeviceHmacCredential 更新指定 ID 的凭证字段。
+// UpdateDeviceHmacCredential 更新指定 Id 的凭证字段。
 func (d *Database) UpdateDeviceHmacCredential(ctx context.Context, id uint64, updates map[string]any) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
@@ -239,7 +239,7 @@ func (d *Database) UpdateDeviceHmacCredential(ctx context.Context, id uint64, up
 	return nil
 }
 
-// DeleteDeviceHmacCredential 根据 ID 删除凭证记录。
+// DeleteDeviceHmacCredential 根据 Id 删除凭证记录。
 func (d *Database) DeleteDeviceHmacCredential(ctx context.Context, id uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired

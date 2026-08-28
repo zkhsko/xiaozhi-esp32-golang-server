@@ -110,8 +110,8 @@ type ClientMessage struct {
 	// Kind 消息分类。
 	Kind MessageKind `json:"kind"`
 
-	// SessionID 客户端携带的会话标识（可选）。
-	SessionID string `json:"session_id,omitempty"`
+	// SessionId 客户端携带的会话标识（可选）。
+	SessionId string `json:"session_id,omitempty"`
 
 	// Mode 收音模式（仅在 Kind == KindListenStart 时有效，为 auto 或 manual）。
 	Mode string `json:"mode,omitempty"`
@@ -175,15 +175,15 @@ func ParseClientMessageWithLimit(data []byte, maxBytes int) (*ClientMessage, err
 	msg := &ClientMessage{}
 
 	// 1. 解析可选的 session_id 字段
-	if rawSessionID, ok := rawMap["session_id"]; ok {
-		var sessionID string
-		if err := json.Unmarshal(rawSessionID, &sessionID); err != nil {
+	if rawSessionId, ok := rawMap["session_id"]; ok {
+		var sessionId string
+		if err := json.Unmarshal(rawSessionId, &sessionId); err != nil {
 			return nil, fmt.Errorf("%w: 'session_id' must be string", ErrInvalidFieldType)
 		}
-		if utf8.RuneCountInString(sessionID) > MaxTextFieldLength {
-			return nil, fmt.Errorf("%w: 'session_id' length %d exceeds max %d", ErrFieldTooLong, utf8.RuneCountInString(sessionID), MaxTextFieldLength)
+		if utf8.RuneCountInString(sessionId) > MaxTextFieldLength {
+			return nil, fmt.Errorf("%w: 'session_id' length %d exceeds max %d", ErrFieldTooLong, utf8.RuneCountInString(sessionId), MaxTextFieldLength)
 		}
-		msg.SessionID = sessionID
+		msg.SessionId = sessionId
 	}
 
 	// 2. 解析必填的 type 字段

@@ -18,8 +18,8 @@ var (
 	ErrTTSConfigNotFound = errors.New("tts config not found")
 	// ErrInvalidTTSConfig 表示 TTS 配置结构体为 nil 或非法。
 	ErrInvalidTTSConfig = errors.New("invalid tts config")
-	// ErrInvalidTTSConfigID 表示 TTS 配置 ID 为 0 或非法。
-	ErrInvalidTTSConfigID = errors.New("tts config id cannot be empty or zero")
+	// ErrInvalidTTSConfigId 表示 TTS 配置 Id 为 0 或非法。
+	ErrInvalidTTSConfigId = errors.New("tts config id cannot be empty or zero")
 	// ErrEmptyTTSConfigName 表示 TTS 配置名称为空。
 	ErrEmptyTTSConfigName = errors.New("tts config name cannot be empty")
 	// ErrInvalidTTSConfigNameLength 表示 TTS 配置名称长度超过 128 字节。
@@ -78,7 +78,7 @@ var (
 // - created_at: 创建时间。
 // - updated_at: 更新时间。
 type TTSConfig struct {
-	ID                  uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Id                  uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	Name                string    `gorm:"column:name;size:128;not null" json:"name"`
 	Provider            string    `gorm:"column:provider;size:64;not null;default:''" json:"provider"`
 	Endpoint            string    `gorm:"column:endpoint;size:1024;not null" json:"endpoint"`
@@ -216,13 +216,13 @@ func (d *Database) CreateTTSConfig(ctx context.Context, cfg *TTSConfig) error {
 	return nil
 }
 
-// FindTTSConfigByID 根据 ID 查询 TTS 配置。
-func (d *Database) FindTTSConfigByID(ctx context.Context, id uint64) (*TTSConfig, error) {
+// FindTTSConfigById 根据 Id 查询 TTS 配置。
+func (d *Database) FindTTSConfigById(ctx context.Context, id uint64) (*TTSConfig, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
 	if id == 0 {
-		return nil, ErrInvalidTTSConfigID
+		return nil, ErrInvalidTTSConfigId
 	}
 
 	var cfg TTSConfig
@@ -240,14 +240,14 @@ func (d *Database) FindTTSConfigByID(ctx context.Context, id uint64) (*TTSConfig
 	return &cfg, nil
 }
 
-// UpdateTTSConfigByID 按主键 ID 覆盖更新 TTS 配置。
+// UpdateTTSConfigById 按主键 Id 覆盖更新 TTS 配置。
 // 更新结果影响行数为 0 时返回 ErrTTSConfigNotFound。
-func (d *Database) UpdateTTSConfigByID(ctx context.Context, cfg *TTSConfig) error {
+func (d *Database) UpdateTTSConfigById(ctx context.Context, cfg *TTSConfig) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
 	}
-	if cfg == nil || cfg.ID == 0 {
-		return ErrInvalidTTSConfigID
+	if cfg == nil || cfg.Id == 0 {
+		return ErrInvalidTTSConfigId
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -271,13 +271,13 @@ func (d *Database) UpdateTTSConfigByID(ctx context.Context, cfg *TTSConfig) erro
 
 	res := d.gormDB.WithContext(ctx).
 		Model(&TTSConfig{}).
-		Where("id = ?", cfg.ID).
+		Where("id = ?", cfg.Id).
 		Updates(updates)
 	if res.Error != nil {
 		return fmt.Errorf("update tts config by id: %w", res.Error)
 	}
 	if res.RowsAffected == 0 {
-		return fmt.Errorf("update tts config by id %d: %w", cfg.ID, ErrTTSConfigNotFound)
+		return fmt.Errorf("update tts config by id %d: %w", cfg.Id, ErrTTSConfigNotFound)
 	}
 
 	return nil
@@ -327,13 +327,13 @@ func (d *Database) ListTTSConfigs(ctx context.Context, filter TTSConfigFilter) (
 	return configs, total, nil
 }
 
-// DeleteTTSConfig 删除指定 ID 的 TTS 配置记录。
+// DeleteTTSConfig 删除指定 Id 的 TTS 配置记录。
 func (d *Database) DeleteTTSConfig(ctx context.Context, id uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
 	}
 	if id == 0 {
-		return ErrInvalidTTSConfigID
+		return ErrInvalidTTSConfigId
 	}
 
 	res := d.gormDB.WithContext(ctx).Where("id = ?", id).Delete(&TTSConfig{})
@@ -346,7 +346,7 @@ func (d *Database) DeleteTTSConfig(ctx context.Context, id uint64) error {
 	return nil
 }
 
-// BatchDeleteTTSConfigs 批量删除指定 ID 列表的 TTS 配置记录。
+// BatchDeleteTTSConfigs 批量删除指定 Id 列表的 TTS 配置记录。
 func (d *Database) BatchDeleteTTSConfigs(ctx context.Context, ids []uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
@@ -355,17 +355,17 @@ func (d *Database) BatchDeleteTTSConfigs(ctx context.Context, ids []uint64) erro
 		return nil
 	}
 
-	validIDs := make([]uint64, 0, len(ids))
+	validIds := make([]uint64, 0, len(ids))
 	for _, id := range ids {
 		if id > 0 {
-			validIDs = append(validIDs, id)
+			validIds = append(validIds, id)
 		}
 	}
-	if len(validIDs) == 0 {
+	if len(validIds) == 0 {
 		return nil
 	}
 
-	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIDs).Delete(&TTSConfig{}).Error; err != nil {
+	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIds).Delete(&TTSConfig{}).Error; err != nil {
 		return fmt.Errorf("batch delete tts configs: %w", err)
 	}
 	return nil

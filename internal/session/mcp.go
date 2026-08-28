@@ -37,7 +37,7 @@ type MCPTool struct {
 // mcpRequest 定义下发给设备的 JSON-RPC 2.0 请求对象。
 type mcpRequest struct {
 	JSONRPC string `json:"jsonrpc"`
-	ID      int64  `json:"id"`
+	Id      int64  `json:"id"`
 	Method  string `json:"method"`
 	Params  any    `json:"params,omitempty"`
 }
@@ -45,7 +45,7 @@ type mcpRequest struct {
 // mcpResponse 定义设备返回的 JSON-RPC 2.0 响应对象。
 type mcpResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      int64           `json:"id"`
+	Id      int64           `json:"id"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *mcpError       `json:"error,omitempty"`
 }
@@ -80,25 +80,25 @@ func (s *Session) sendMCPRequest(ctx context.Context, method string, params any)
 		return nil, errors.New("nil session writer")
 	}
 
-	reqID := s.mcpSeq.Add(1)
+	reqId := s.mcpSeq.Add(1)
 	respCh := make(chan *mcpResponse, 1)
 
 	s.mcpMu.Lock()
 	if s.pendingMCP == nil {
 		s.pendingMCP = make(map[int64]chan *mcpResponse)
 	}
-	s.pendingMCP[reqID] = respCh
+	s.pendingMCP[reqId] = respCh
 	s.mcpMu.Unlock()
 
 	defer func() {
 		s.mcpMu.Lock()
-		delete(s.pendingMCP, reqID)
+		delete(s.pendingMCP, reqId)
 		s.mcpMu.Unlock()
 	}()
 
 	rpcReq := mcpRequest{
 		JSONRPC: "2.0",
-		ID:      reqID,
+		Id:      reqId,
 		Method:  method,
 		Params:  params,
 	}
@@ -109,11 +109,11 @@ func (s *Session) sendMCPRequest(ctx context.Context, method string, params any)
 	}
 
 	wrapper := struct {
-		SessionID string          `json:"session_id,omitempty"`
+		SessionId string          `json:"session_id,omitempty"`
 		Type      string          `json:"type"`
 		Payload   json.RawMessage `json:"payload"`
 	}{
-		SessionID: s.SessionID(),
+		SessionId: s.SessionId(),
 		Type:      MessageTypeMCP,
 		Payload:   payloadBytes,
 	}
@@ -141,7 +141,7 @@ func (s *Session) sendMCPRequest(ctx context.Context, method string, params any)
 		}
 		return resp, nil
 	case <-timer.C:
-		return nil, fmt.Errorf("%w (%s, id=%d, timeout=%v)", ErrMCPTimeout, method, reqID, timeout)
+		return nil, fmt.Errorf("%w (%s, id=%d, timeout=%v)", ErrMCPTimeout, method, reqId, timeout)
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-s.ctx.Done():
@@ -158,19 +158,19 @@ func (s *Session) handleIncomingMCP(msg *ClientMessage) {
 	var resp mcpResponse
 	if err := json.Unmarshal(msg.MCPPayload, &resp); err != nil {
 		s.logger.Warn("failed to parse incoming mcp payload",
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"error", err,
 		)
 		return
 	}
 
-	if resp.ID == 0 {
+	if resp.Id == 0 {
 		// 可能是 notification 或无 id 消息，忽略
 		return
 	}
 
 	s.mcpMu.Lock()
-	ch, ok := s.pendingMCP[resp.ID]
+	ch, ok := s.pendingMCP[resp.Id]
 	s.mcpMu.Unlock()
 
 	if ok && ch != nil {
@@ -183,7 +183,7 @@ func (s *Session) handleIncomingMCP(msg *ClientMessage) {
 
 // discoverMCPTools 在会话建立后探测并拉取设备支持的所有 MCP Tools。
 func (s *Session) discoverMCPTools(ctx context.Context) {
-	s.logger.Info("starting mcp tools discovery", "session_id", s.SessionID())
+	s.logger.Info("starting mcp tools discovery", "session_id", s.SessionId())
 
 	// 1. 发送 initialize 请求
 	initParams := map[string]any{
@@ -191,7 +191,7 @@ func (s *Session) discoverMCPTools(ctx context.Context) {
 	}
 	if _, err := s.sendMCPRequest(ctx, "initialize", initParams); err != nil {
 		s.logger.Warn("mcp initialize failed",
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"error", err,
 		)
 		return
@@ -207,7 +207,7 @@ func (s *Session) discoverMCPTools(ctx context.Context) {
 		resp, err := s.sendMCPRequest(ctx, "tools/list", listParams)
 		if err != nil {
 			s.logger.Warn("mcp tools/list failed",
-				"session_id", s.SessionID(),
+				"session_id", s.SessionId(),
 				"page", page,
 				"error", err,
 			)
@@ -217,7 +217,7 @@ func (s *Session) discoverMCPTools(ctx context.Context) {
 		var listResult mcpToolsListResult
 		if err := json.Unmarshal(resp.Result, &listResult); err != nil {
 			s.logger.Warn("failed to unmarshal mcp tools/list result",
-				"session_id", s.SessionID(),
+				"session_id", s.SessionId(),
 				"error", err,
 			)
 			break
@@ -247,7 +247,7 @@ func (s *Session) discoverMCPTools(ctx context.Context) {
 	s.mu.Unlock()
 
 	s.logger.Info("mcp tools discovery completed",
-		"session_id", s.SessionID(),
+		"session_id", s.SessionId(),
 		"tool_count", len(aiTools),
 		"tools", strings.Join(toolNames, ", "),
 	)
@@ -290,7 +290,7 @@ func (s *Session) callMCPTool(ctx context.Context, name string, argumentsJSON st
 	}
 
 	s.logger.Info("executing mcp tool call",
-		"session_id", s.SessionID(),
+		"session_id", s.SessionId(),
 		"tool_name", name,
 	)
 
@@ -327,7 +327,7 @@ func (s *Session) callMCPTool(ctx context.Context, name string, argumentsJSON st
 	}
 
 	s.logger.Info("mcp tool call executed successfully",
-		"session_id", s.SessionID(),
+		"session_id", s.SessionId(),
 		"tool_name", name,
 	)
 

@@ -59,8 +59,8 @@ func TestBindDeviceWithSN_Success_AndWebSocketAuth(t *testing.T) {
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
 	testSN := "sn-with-sn-001"
-	testDeviceID := "11:22:33:44:55:66"
-	testClientID := "client-sn-001"
+	testDeviceId := "11:22:33:44:55:66"
+	testClientId := "client-sn-001"
 
 	err := db.BatchCreateDeviceHmacCredentials(context.Background(), []*database.DeviceHmacCredential{
 		{
@@ -76,7 +76,7 @@ func TestBindDeviceWithSN_Success_AndWebSocketAuth(t *testing.T) {
 	}
 
 	// 1. Pending activation with SerialNumber (simulating OTA phase)
-	pending, err := otaHandler.createPendingActivation(testSN, testDeviceID, testClientID)
+	pending, err := otaHandler.createPendingActivation(testSN, testDeviceId, testClientId)
 	if err != nil {
 		t.Fatalf("createPendingActivation failed: %v", err)
 	}
@@ -109,14 +109,14 @@ func TestBindDeviceWithSN_Success_AndWebSocketAuth(t *testing.T) {
 	if resp.SerialNumber != testSN {
 		t.Errorf("expected SerialNumber %q, got %q", testSN, resp.SerialNumber)
 	}
-	if resp.DeviceID != testDeviceID {
-		t.Errorf("expected DeviceID %q, got %q", testDeviceID, resp.DeviceID)
+	if resp.DeviceId != testDeviceId {
+		t.Errorf("expected DeviceId %q, got %q", testDeviceId, resp.DeviceId)
 	}
-	if resp.ClientID != testClientID {
-		t.Errorf("expected ClientID %q, got %q", testClientID, resp.ClientID)
+	if resp.ClientId != testClientId {
+		t.Errorf("expected ClientId %q, got %q", testClientId, resp.ClientId)
 	}
-	if resp.UserID != MockCurrentUserID {
-		t.Errorf("expected UserID %d, got %d", MockCurrentUserID, resp.UserID)
+	if resp.UserId != MockCurrentUserId {
+		t.Errorf("expected UserId %d, got %d", MockCurrentUserId, resp.UserId)
 	}
 
 	// 3. Verify database state across all tables
@@ -132,8 +132,8 @@ func TestBindDeviceWithSN_Success_AndWebSocketAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindDeviceUserRefBySerialNumber failed: %v", err)
 	}
-	if ref.UserID != MockCurrentUserID {
-		t.Errorf("expected bound user_id %d, got %d", MockCurrentUserID, ref.UserID)
+	if ref.UserId != MockCurrentUserId {
+		t.Errorf("expected bound user_id %d, got %d", MockCurrentUserId, ref.UserId)
 	}
 
 	cred, err := db.FindDeviceHmacCredentialBySerialNumber(context.Background(), testSN)
@@ -168,7 +168,7 @@ func TestBindDeviceWithSN_Success_AndWebSocketAuth(t *testing.T) {
 	wsReq.Header.Set("Authorization", "Bearer "+tok.AccessToken)
 	wsReq.Header.Set("Protocol-Version", "1")
 	wsReq.Header.Set("Serial-Number", testSN)
-	wsReq.Header.Set("Device-Id", testDeviceID)
+	wsReq.Header.Set("Device-Id", testDeviceId)
 	sn, err := session.AuthenticateUpgrade(wsReq, db, 0)
 	if err != nil {
 		t.Fatalf("WebSocket AuthenticateUpgrade failed with newly bound token: %v", err)
@@ -222,8 +222,8 @@ func TestBindDeviceWithSN_DatabaseFailure_RollbackAndCacheRetained_AndRetrySucce
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
 	testSN := "sn-fail-retry-001"
-	testDeviceID := "11:22:33:44:55:66"
-	testClientID := "client-fail-retry"
+	testDeviceId := "11:22:33:44:55:66"
+	testClientId := "client-fail-retry"
 
 	err := db.BatchCreateDeviceHmacCredentials(context.Background(), []*database.DeviceHmacCredential{
 		{
@@ -237,7 +237,7 @@ func TestBindDeviceWithSN_DatabaseFailure_RollbackAndCacheRetained_AndRetrySucce
 		t.Fatalf("BatchCreateDeviceHmacCredentials failed: %v", err)
 	}
 
-	pending, err := otaHandler.createPendingActivation(testSN, testDeviceID, testClientID)
+	pending, err := otaHandler.createPendingActivation(testSN, testDeviceId, testClientId)
 	if err != nil {
 		t.Fatalf("createPendingActivation failed: %v", err)
 	}
@@ -379,10 +379,10 @@ func TestBindDeviceWithSN_Rebind_InvalidatesOldToken(t *testing.T) {
 		t.Fatalf("expected new token auth to succeed, got sn: %q, err: %v", newSN, err)
 	}
 
-	// 5. Verify user binding updated to MockCurrentUserID
+	// 5. Verify user binding updated to MockCurrentUserId
 	ref, err := db.FindDeviceUserRefBySerialNumber(ctx, testSN)
-	if err != nil || ref.UserID != MockCurrentUserID {
-		t.Errorf("expected user_id %d, got ref: %+v, err: %v", MockCurrentUserID, ref, err)
+	if err != nil || ref.UserId != MockCurrentUserId {
+		t.Errorf("expected user_id %d, got ref: %+v, err: %v", MockCurrentUserId, ref, err)
 	}
 }
 
@@ -393,8 +393,8 @@ func TestBindDeviceWithoutSN_Success_AndWebSocketAuth(t *testing.T) {
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
 	testSN := "sn-manual-bind-001"
-	testDeviceID := "11:22:33:44:55:66"
-	testClientID := "client-manual-001"
+	testDeviceId := "11:22:33:44:55:66"
+	testClientId := "client-manual-001"
 	testRawKey := []byte("01234567890123456789012345678901")
 	testHexKey := hex.EncodeToString(testRawKey)
 
@@ -412,7 +412,7 @@ func TestBindDeviceWithoutSN_Success_AndWebSocketAuth(t *testing.T) {
 	}
 
 	// 1. Pending activation without SerialNumber (simulating Legacy / No-SN device OTA)
-	pending, err := otaHandler.createPendingActivation("", testDeviceID, testClientID)
+	pending, err := otaHandler.createPendingActivation("", testDeviceId, testClientId)
 	if err != nil {
 		t.Fatalf("createPendingActivation failed: %v", err)
 	}
@@ -447,14 +447,14 @@ func TestBindDeviceWithoutSN_Success_AndWebSocketAuth(t *testing.T) {
 	if resp.SerialNumber != testSN {
 		t.Errorf("expected SerialNumber %q, got %q", testSN, resp.SerialNumber)
 	}
-	if resp.DeviceID != testDeviceID {
-		t.Errorf("expected DeviceID %q, got %q", testDeviceID, resp.DeviceID)
+	if resp.DeviceId != testDeviceId {
+		t.Errorf("expected DeviceId %q, got %q", testDeviceId, resp.DeviceId)
 	}
-	if resp.ClientID != testClientID {
-		t.Errorf("expected ClientID %q, got %q", testClientID, resp.ClientID)
+	if resp.ClientId != testClientId {
+		t.Errorf("expected ClientId %q, got %q", testClientId, resp.ClientId)
 	}
-	if resp.UserID != MockCurrentUserID {
-		t.Errorf("expected UserID %d, got %d", MockCurrentUserID, resp.UserID)
+	if resp.UserId != MockCurrentUserId {
+		t.Errorf("expected UserId %d, got %d", MockCurrentUserId, resp.UserId)
 	}
 
 	// 3. Verify database state across all tables
@@ -470,8 +470,8 @@ func TestBindDeviceWithoutSN_Success_AndWebSocketAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindDeviceUserRefBySerialNumber failed: %v", err)
 	}
-	if ref.UserID != MockCurrentUserID {
-		t.Errorf("expected bound user_id %d, got %d", MockCurrentUserID, ref.UserID)
+	if ref.UserId != MockCurrentUserId {
+		t.Errorf("expected bound user_id %d, got %d", MockCurrentUserId, ref.UserId)
 	}
 
 	cred, err := db.FindDeviceHmacCredentialBySerialNumber(context.Background(), testSN)
@@ -506,7 +506,7 @@ func TestBindDeviceWithoutSN_Success_AndWebSocketAuth(t *testing.T) {
 	wsReq.Header.Set("Authorization", "Bearer "+tok.AccessToken)
 	wsReq.Header.Set("Protocol-Version", "1")
 	wsReq.Header.Set("Serial-Number", testSN)
-	wsReq.Header.Set("Device-Id", testDeviceID)
+	wsReq.Header.Set("Device-Id", testDeviceId)
 	sn, err := session.AuthenticateUpgrade(wsReq, db, 0)
 	if err != nil {
 		t.Fatalf("WebSocket AuthenticateUpgrade failed with newly bound token: %v", err)
@@ -876,8 +876,8 @@ func TestBindDeviceWithoutSN_DatabaseFailure_RollbackAndCacheRetained_AndRetrySu
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
 	testSN := "sn-fail-retry-no-sn-001"
-	testDeviceID := "11:22:33:44:55:66"
-	testClientID := "client-fail-retry-no-sn"
+	testDeviceId := "11:22:33:44:55:66"
+	testClientId := "client-fail-retry-no-sn"
 	testHexKey := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 	err := db.BatchCreateDeviceHmacCredentials(context.Background(), []*database.DeviceHmacCredential{
@@ -892,7 +892,7 @@ func TestBindDeviceWithoutSN_DatabaseFailure_RollbackAndCacheRetained_AndRetrySu
 		t.Fatalf("BatchCreateDeviceHmacCredentials failed: %v", err)
 	}
 
-	pending, err := otaHandler.createPendingActivation("", testDeviceID, testClientID)
+	pending, err := otaHandler.createPendingActivation("", testDeviceId, testClientId)
 	if err != nil {
 		t.Fatalf("createPendingActivation failed: %v", err)
 	}
@@ -1051,9 +1051,9 @@ func TestBindDeviceWithoutSN_Rebind_InvalidatesOldToken(t *testing.T) {
 		t.Fatalf("expected new token auth to succeed, got sn: %q, err: %v", newSN, err)
 	}
 
-	// 5. Verify user binding updated to MockCurrentUserID
+	// 5. Verify user binding updated to MockCurrentUserId
 	ref, err := db.FindDeviceUserRefBySerialNumber(ctx, testSN)
-	if err != nil || ref.UserID != MockCurrentUserID {
-		t.Errorf("expected user_id %d, got ref: %+v, err: %v", MockCurrentUserID, ref, err)
+	if err != nil || ref.UserId != MockCurrentUserId {
+		t.Errorf("expected user_id %d, got ref: %+v, err: %v", MockCurrentUserId, ref, err)
 	}
 }

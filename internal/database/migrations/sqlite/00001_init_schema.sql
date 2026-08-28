@@ -39,7 +39,7 @@ CREATE INDEX IF NOT EXISTS idx_device_id ON device_activation(device_id);
 CREATE TABLE IF NOT EXISTS device_user_ref (
     id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- 绑定记录自增主键
     serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
-    user_id INTEGER NOT NULL,                                      -- 当前绑定的用户 ID
+    user_id INTEGER NOT NULL,                                      -- 当前绑定的用户 Id
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 绑定记录创建时间
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 绑定关系最近更新时间
     CONSTRAINT uk_serial_number UNIQUE (serial_number)
@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS device_access_token (
 CREATE TABLE IF NOT EXISTS device_type (
     id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- 关联记录自增主键
     device_type VARCHAR(32) NOT NULL,                               -- 设备类型（全局业务唯一）
-    agent_config_id INTEGER NOT NULL,                               -- 关联的 Agent 配置 ID
+    agent_config_id INTEGER NOT NULL,                               -- 关联的 Agent 配置 Id
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 创建时间
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 最近更新时间
     CONSTRAINT uk_device_type UNIQUE (device_type)
@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS device_type (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_agent_config_id: Agent 配置 ID 普通索引
+-- idx_agent_config_id: Agent 配置 Id 普通索引
 CREATE INDEX IF NOT EXISTS idx_agent_config_id ON device_type(agent_config_id);
 -- +goose StatementEnd
 
@@ -159,17 +159,17 @@ CREATE TABLE IF NOT EXISTS agent_config (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_agent_config_asr_config_id: ASR 配置 ID 普通索引
+-- idx_agent_config_asr_config_id: ASR 配置 Id 普通索引
 CREATE INDEX IF NOT EXISTS idx_agent_config_asr_config_id ON agent_config(asr_config_id);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_agent_config_llm_config_id: LLM 配置 ID 普通索引
+-- idx_agent_config_llm_config_id: LLM 配置 Id 普通索引
 CREATE INDEX IF NOT EXISTS idx_agent_config_llm_config_id ON agent_config(llm_config_id);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_agent_config_tts_config_id: TTS 配置 ID 普通索引
+-- idx_agent_config_tts_config_id: TTS 配置 Id 普通索引
 CREATE INDEX IF NOT EXISTS idx_agent_config_tts_config_id ON agent_config(tts_config_id);
 -- +goose StatementEnd
 

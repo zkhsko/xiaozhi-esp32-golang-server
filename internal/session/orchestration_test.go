@@ -150,7 +150,7 @@ func TestConsumeTTSPCM_ExplicitContract_Success(t *testing.T) {
 		writer:     writer,
 		logger:     slog.Default(),
 		events:     make(chan event, 10),
-		sessionID:  "sess-consume-test",
+		sessionId:  "sess-consume-test",
 		generation: 1,
 		state:      StateSpeaking,
 	}
@@ -203,7 +203,7 @@ func TestConsumeTTSPCM_ExplicitContract_StreamError(t *testing.T) {
 		cancel:     cancel,
 		logger:     slog.Default(),
 		events:     make(chan event, 10),
-		sessionID:  "sess-consume-err-test",
+		sessionId:  "sess-consume-err-test",
 		generation: 1,
 		state:      StateSpeaking,
 	}
@@ -252,7 +252,7 @@ func TestConsumeTTSPCM_ExplicitContract_ContextCanceled(t *testing.T) {
 		cancel:     cancel,
 		logger:     slog.Default(),
 		events:     make(chan event, 10),
-		sessionID:  "sess-consume-cancel-test",
+		sessionId:  "sess-consume-cancel-test",
 		generation: 1,
 		state:      StateSpeaking,
 	}
@@ -362,7 +362,7 @@ func TestOrchestrateLLMAndTTS_MultiTurnTools_Success(t *testing.T) {
 				chunks: []string{"正在为您查询当前时间。"},
 				toolCalls: []ai.ToolCall{
 					{
-						ID:   "call_1",
+						Id:   "call_1",
 						Name: ServerToolGetCurrentTime,
 					},
 				},
@@ -381,7 +381,7 @@ func TestOrchestrateLLMAndTTS_MultiTurnTools_Success(t *testing.T) {
 		cancel:     cancel,
 		logger:     slog.Default(),
 		events:     events,
-		sessionID:  "sess-multi-tool-test",
+		sessionId:  "sess-multi-tool-test",
 		generation: 1,
 		state:      StateSpeaking,
 		llmClient:  mockLLM,
@@ -432,7 +432,7 @@ func TestOrchestrateLLMAndTTS_MaxToolIterations_BoundedTermination(t *testing.T)
 				chunks: []string{"正在执行工具调用。"},
 				toolCalls: []ai.ToolCall{
 					{
-						ID:   "call_id",
+						Id:   "call_id",
 						Name: ServerToolGetCurrentTime,
 					},
 				},
@@ -451,7 +451,7 @@ func TestOrchestrateLLMAndTTS_MaxToolIterations_BoundedTermination(t *testing.T)
 		cancel:     cancel,
 		logger:     slog.Default(),
 		events:     events,
-		sessionID:  "sess-max-iterations-test",
+		sessionId:  "sess-max-iterations-test",
 		generation: 1,
 		state:      StateSpeaking,
 		llmClient:  mockLLM,
@@ -506,7 +506,7 @@ func TestOrchestrateLLMAndTTS_MaxToolIterations_ForceBreakIfModelStillReturnsToo
 			chunks: []string{"兜底回复文本。"},
 			toolCalls: []ai.ToolCall{
 				{
-					ID:   "rogue_call",
+					Id:   "rogue_call",
 					Name: ServerToolGetCurrentTime,
 				},
 			},
@@ -519,7 +519,7 @@ func TestOrchestrateLLMAndTTS_MaxToolIterations_ForceBreakIfModelStillReturnsToo
 		cancel:     cancel,
 		logger:     slog.Default(),
 		events:     events,
-		sessionID:  "sess-force-break-test",
+		sessionId:  "sess-force-break-test",
 		generation: 1,
 		state:      StateSpeaking,
 		llmClient:  mockLLM,
@@ -567,7 +567,7 @@ func TestOrchestrateLLMAndTTS_ContextCanceled(t *testing.T) {
 		cancel:     cancel,
 		logger:     slog.Default(),
 		events:     events,
-		sessionID:  "sess-cancel-test",
+		sessionId:  "sess-cancel-test",
 		generation: 1,
 		state:      StateSpeaking,
 		llmClient:  mockLLM,

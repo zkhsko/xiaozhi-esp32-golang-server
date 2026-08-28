@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS `device_activation` (
 CREATE TABLE IF NOT EXISTS `device_user_ref` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '绑定记录自增主键',
     `serial_number` VARCHAR(64) NOT NULL COMMENT '设备序列号，全局业务唯一（一台设备最多绑定一个当前用户）',
-    `user_id` BIGINT UNSIGNED NOT NULL COMMENT '当前绑定的用户 ID',
+    `user_id` BIGINT UNSIGNED NOT NULL COMMENT '当前绑定的用户 Id',
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '绑定记录创建时间',
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '绑定关系最近更新时间',
     PRIMARY KEY (`id`),
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS `device_access_token` (
 CREATE TABLE IF NOT EXISTS `device_type` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '关联记录自增主键',
     `device_type` VARCHAR(32) NOT NULL COMMENT '设备类型，全局业务唯一',
-    `agent_config_id` BIGINT UNSIGNED NOT NULL COMMENT '关联的 Agent 配置 ID',
+    `agent_config_id` BIGINT UNSIGNED NOT NULL COMMENT '关联的 Agent 配置 Id',
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
     PRIMARY KEY (`id`),

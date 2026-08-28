@@ -101,7 +101,7 @@ type Session struct {
 	state              State
 	mode               string
 	generation         uint64
-	sessionID          string
+	sessionId          string
 	manualStopReceived bool
 	promptPlayed       bool
 	closeAfterTurn     bool
@@ -245,7 +245,7 @@ func (s *Session) transitionToSpeaking(gen uint64) {
 	if s.generation == gen && s.state == StateProcessing {
 		s.state = StateSpeaking
 		s.logger.Info("session entered speaking state",
-			"session_id", s.sessionID,
+			"session_id", s.sessionId,
 			"generation", gen,
 		)
 	}
@@ -272,11 +272,11 @@ func (s *Session) Mode() string {
 	return s.mode
 }
 
-// SessionID 返回协商成功的会话标识。
-func (s *Session) SessionID() string {
+// SessionId 返回协商成功的会话标识。
+func (s *Session) SessionId() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.sessionID
+	return s.sessionId
 }
 
 // DeviceKey 返回用于全局唯一标识单设备连接的键（SN 作为设备唯一身份）。
@@ -509,7 +509,7 @@ func (s *Session) handleEvent(ev event) {
 func (s *Session) handleHelloEvent(ev event) {
 	if s.State() != StateConnected {
 		s.logger.Warn("duplicate hello received after handshake",
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"serial_number", s.truncatedSerialNumber(),
 		)
 		s.closeWithReason(websocket.StatusPolicyViolation, ErrDuplicateHello.Error())
@@ -545,7 +545,7 @@ func (s *Session) handleHelloEvent(ev event) {
 
 	s.stopHelloTimer()
 
-	sessionID, err := GenerateSessionID()
+	sessionId, err := GenerateSessionId()
 	if err != nil {
 		s.logger.Error("failed to generate session id",
 			"error", err,
@@ -555,11 +555,11 @@ func (s *Session) handleHelloEvent(ev event) {
 		return
 	}
 
-	respBytes, err := EncodeServerHelloMessage(sessionID)
+	respBytes, err := EncodeServerHelloMessage(sessionId)
 	if err != nil {
 		s.logger.Error("failed to encode server hello",
 			"error", err,
-			"session_id", sessionID,
+			"session_id", sessionId,
 		)
 		s.closeWithReason(websocket.StatusInternalError, "internal server error")
 		return
@@ -568,7 +568,7 @@ func (s *Session) handleHelloEvent(ev event) {
 	if err := s.sendTextMessage(respBytes); err != nil {
 		s.logger.Warn("failed to write server hello",
 			"error", err,
-			"session_id", sessionID,
+			"session_id", sessionId,
 			"serial_number", s.truncatedSerialNumber(),
 		)
 		s.closeWithReason(websocket.StatusInternalError, "failed to write server hello")
@@ -576,7 +576,7 @@ func (s *Session) handleHelloEvent(ev event) {
 	}
 
 	s.mu.Lock()
-	s.sessionID = sessionID
+	s.sessionId = sessionId
 	s.state = StateReady
 	s.mu.Unlock()
 
@@ -585,7 +585,7 @@ func (s *Session) handleHelloEvent(ev event) {
 	}
 
 	s.logger.Info("websocket hello handshake succeeded",
-		"session_id", sessionID,
+		"session_id", sessionId,
 		"serial_number", s.truncatedSerialNumber(),
 	)
 }
@@ -601,7 +601,7 @@ func (s *Session) handleClientTextEvent(ev event) {
 	switch ev.clientMsg.Kind {
 	case KindHello:
 		s.logger.Warn("duplicate hello received after handshake",
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"serial_number", s.truncatedSerialNumber(),
 		)
 		s.closeWithReason(websocket.StatusPolicyViolation, ErrDuplicateHello.Error())
@@ -626,7 +626,7 @@ func (s *Session) handleClientTextEvent(ev event) {
 
 				s.playListenPrompt(gen)
 				s.logger.Info("session playing listen prompt",
-					"session_id", s.SessionID(),
+					"session_id", s.SessionId(),
 					"generation", gen,
 					"mode", mode,
 				)
@@ -644,7 +644,7 @@ func (s *Session) handleClientTextEvent(ev event) {
 				s.startListeningTimer(gen)
 				s.startASRStream(gen, mode)
 				s.logger.Info("session entered listening state",
-					"session_id", s.SessionID(),
+					"session_id", s.SessionId(),
 					"generation", gen,
 					"mode", mode,
 				)
@@ -686,7 +686,7 @@ func (s *Session) handleClientTextEvent(ev event) {
 				s.mu.Unlock()
 
 				s.logger.Info("manual listen.stop received",
-					"session_id", s.SessionID(),
+					"session_id", s.SessionId(),
 					"generation", gen,
 				)
 				s.stopListeningTimer()
@@ -742,7 +742,7 @@ func (s *Session) handleClientAudioEvent(ev event) {
 		s.logger.Warn("invalid opus packet size",
 			"size", packetLen,
 			"max", maxOpusBytes,
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 		)
 		s.closeWithReason(websocket.StatusPolicyViolation, "invalid opus packet size")
 		return
@@ -764,7 +764,7 @@ func (s *Session) handleClientAudioEvent(ev event) {
 
 		if s.decoder == nil {
 			s.logger.Error("opus decoder not initialized",
-				"session_id", s.SessionID(),
+				"session_id", s.SessionId(),
 			)
 			s.closeWithReason(websocket.StatusInternalError, "decoder not initialized")
 			return
@@ -774,7 +774,7 @@ func (s *Session) handleClientAudioEvent(ev event) {
 		if err != nil {
 			s.logger.Warn("failed to decode uplink opus packet",
 				"error", err,
-				"session_id", s.SessionID(),
+				"session_id", s.SessionId(),
 				"generation", s.Generation(),
 			)
 			s.closeWithReason(websocket.StatusPolicyViolation, "opus decode error")
@@ -789,7 +789,7 @@ func (s *Session) handleClientAudioEvent(ev event) {
 			if err := queue.Push(pcmBytes); err != nil {
 				s.logger.Warn("asr audio queue push failed",
 					"error", err,
-					"session_id", s.SessionID(),
+					"session_id", s.SessionId(),
 					"generation", s.Generation(),
 				)
 				s.closeWithReason(websocket.StatusPolicyViolation, "asr queue full or unavailable")
@@ -839,24 +839,24 @@ func (s *Session) handleASRFinalEvent(ev event) {
 		s.mu.Unlock()
 
 		s.logger.Info("empty asr result, session returned to ready state",
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"generation", ev.generation,
 		)
 		return
 	}
 
-	sttBytes, err := EncodeSTTMessage(s.SessionID(), ev.text)
+	sttBytes, err := EncodeSTTMessage(s.SessionId(), ev.text)
 	if err != nil {
 		s.logger.Error("failed to encode stt message",
 			"error", err,
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"generation", ev.generation,
 		)
 	} else {
 		if err := s.sendTextMessage(sttBytes); err != nil {
 			s.logger.Warn("failed to send stt message",
 				"error", err,
-				"session_id", s.SessionID(),
+				"session_id", s.SessionId(),
 				"generation", ev.generation,
 			)
 		}
@@ -868,7 +868,7 @@ func (s *Session) handleASRFinalEvent(ev event) {
 	s.mu.Unlock()
 
 	s.logger.Info("session entered processing state",
-		"session_id", s.SessionID(),
+		"session_id", s.SessionId(),
 		"generation", ev.generation,
 	)
 
@@ -897,11 +897,11 @@ func (s *Session) handleTTSStartedEvent(ev event) {
 		return
 	}
 
-	startBytes, err := EncodeTTSStartMessage(s.SessionID())
+	startBytes, err := EncodeTTSStartMessage(s.SessionId())
 	if err != nil {
 		s.logger.Error("failed to encode tts start message",
 			"error", err,
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 		)
 	} else {
 		_ = s.sendTextMessage(startBytes)
@@ -912,7 +912,7 @@ func (s *Session) handleTTSStartedEvent(ev event) {
 	s.mu.Unlock()
 
 	s.logger.Info("session entered speaking state",
-		"session_id", s.SessionID(),
+		"session_id", s.SessionId(),
 		"generation", ev.generation,
 	)
 }
@@ -935,17 +935,17 @@ func (s *Session) handleTurnFinishedEvent(ev event) {
 
 	var stopSucceeded bool
 	if currentState == StateSpeaking {
-		stopBytes, err := EncodeTTSStopMessage(s.SessionID())
+		stopBytes, err := EncodeTTSStopMessage(s.SessionId())
 		if err != nil {
 			s.logger.Error("failed to encode tts stop message",
 				"error", err,
-				"session_id", s.SessionID(),
+				"session_id", s.SessionId(),
 			)
 		} else {
 			if sendErr := s.sendTextMessage(stopBytes); sendErr != nil {
 				s.logger.Warn("failed to send tts stop message",
 					"error", sendErr,
-					"session_id", s.SessionID(),
+					"session_id", s.SessionId(),
 					"generation", ev.generation,
 				)
 				s.closeWithReason(websocket.StatusInternalError, sendErr.Error())
@@ -979,7 +979,7 @@ func (s *Session) handleTurnFinishedEvent(ev event) {
 
 	if shouldClose {
 		s.logger.Info("closing session after turn finished as requested by server tool",
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"generation", ev.generation,
 		)
 		s.closeWithReason(websocket.StatusNormalClosure, "session closed by user command")
@@ -987,7 +987,7 @@ func (s *Session) handleTurnFinishedEvent(ev event) {
 	}
 
 	s.logger.Info("session returned to ready state",
-		"session_id", s.SessionID(),
+		"session_id", s.SessionId(),
 		"generation", ev.generation,
 	)
 }
@@ -1023,11 +1023,11 @@ func (s *Session) handleAbortEvent(reason string) {
 	}
 
 	if wasSpeaking {
-		stopBytes, err := EncodeTTSStopMessage(s.SessionID())
+		stopBytes, err := EncodeTTSStopMessage(s.SessionId())
 		if err != nil {
 			s.logger.Error("failed to encode tts stop message on abort",
 				"error", err,
-				"session_id", s.SessionID(),
+				"session_id", s.SessionId(),
 			)
 		} else {
 			_ = s.sendTextMessage(stopBytes)
@@ -1035,7 +1035,7 @@ func (s *Session) handleAbortEvent(reason string) {
 	}
 
 	s.logger.Info("session aborted and reset to ready",
-		"session_id", s.SessionID(),
+		"session_id", s.SessionId(),
 		"new_generation", newGen,
 		"reason", logger.TruncateString(reason),
 		"was_speaking", wasSpeaking,
@@ -1057,7 +1057,7 @@ func (s *Session) handleTimeoutEvent(ev event) {
 	if ev.text == "max listening duration exceeded" {
 		if ev.generation == s.Generation() && s.State() == StateListening {
 			s.logger.Warn("max listening duration exceeded",
-				"session_id", s.SessionID(),
+				"session_id", s.SessionId(),
 				"generation", ev.generation,
 			)
 			s.closeWithReason(websocket.StatusPolicyViolation, "max listening duration exceeded")
@@ -1068,7 +1068,7 @@ func (s *Session) handleTimeoutEvent(ev event) {
 	if ev.text == "asr recognition timeout" {
 		if ev.generation == s.Generation() && s.State() == StateListening {
 			s.logger.Warn("asr recognition timeout exceeded",
-				"session_id", s.SessionID(),
+				"session_id", s.SessionId(),
 				"generation", ev.generation,
 			)
 			s.closeWithReason(websocket.StatusPolicyViolation, "asr recognition timeout")
@@ -1078,7 +1078,7 @@ func (s *Session) handleTimeoutEvent(ev event) {
 
 	if ev.generation == s.Generation() || ev.generation == 0 {
 		s.logger.Warn("session timeout exceeded",
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"generation", ev.generation,
 			"reason", logger.TruncateString(ev.text),
 		)
@@ -1099,7 +1099,7 @@ func (s *Session) handleErrorEvent(ev event) {
 	if ev.fatal {
 		s.stopPacer()
 		if s.State() == StateSpeaking {
-			stopBytes, _ := EncodeTTSStopMessage(s.SessionID())
+			stopBytes, _ := EncodeTTSStopMessage(s.SessionId())
 			if len(stopBytes) > 0 {
 				_ = s.sendTextMessage(stopBytes)
 			}
@@ -1208,18 +1208,18 @@ func (s *Session) readLoop() {
 			var closeErr websocket.CloseError
 			if errors.As(err, &closeErr) {
 				s.logger.Info("websocket session disconnected by client",
-					"session_id", s.SessionID(),
+					"session_id", s.SessionId(),
 					"status_code", closeErr.Code,
 					"reason", closeErr.Reason,
 				)
 			} else if errors.Is(err, io.EOF) {
 				s.logger.Info("websocket session closed by client",
-					"session_id", s.SessionID(),
+					"session_id", s.SessionId(),
 					"reason", "EOF",
 				)
 			} else if !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
 				s.logger.Warn("websocket read error",
-					"session_id", s.SessionID(),
+					"session_id", s.SessionId(),
 					"error", err,
 				)
 			}
@@ -1256,7 +1256,7 @@ func (s *Session) readLoop() {
 		if err != nil {
 			s.logger.Warn("failed to parse client text message",
 				"error", err,
-				"session_id", s.SessionID(),
+				"session_id", s.SessionId(),
 			)
 			s.postEvent(event{
 				kind:      eventKindError,
@@ -1375,7 +1375,7 @@ func (s *Session) playListenPrompt(gen uint64) {
 	if err != nil {
 		s.logger.Error("failed to get listen prompt opus packets",
 			"error", err,
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"generation", gen,
 		)
 		s.postEvent(event{
@@ -1440,7 +1440,7 @@ func (s *Session) startASRStream(gen uint64, mode string) {
 	if err != nil {
 		s.logger.Error("failed to create asr stream",
 			"error", err,
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"generation", gen,
 		)
 		s.postEvent(event{
@@ -1476,7 +1476,7 @@ func (s *Session) readASRResultAuto(ctx context.Context, stream ai.ASRStream, ge
 		}
 		s.logger.Warn("asr recognition failed in auto mode",
 			"error", err,
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"generation", gen,
 		)
 		s.postEvent(event{
@@ -1506,7 +1506,7 @@ func (s *Session) readASRResultManual(ctx context.Context, stream ai.ASRStream, 
 				}
 				s.logger.Warn("asr audio queue finished with error",
 					"error", qErr,
-					"session_id", s.SessionID(),
+					"session_id", s.SessionId(),
 					"generation", gen,
 				)
 				s.postEvent(event{
@@ -1529,7 +1529,7 @@ func (s *Session) readASRResultManual(ctx context.Context, stream ai.ASRStream, 
 		}
 		s.logger.Warn("asr recognition failed in manual mode",
 			"error", err,
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"generation", gen,
 		)
 		s.postEvent(event{
@@ -1584,6 +1584,6 @@ func (s *Session) logDiag(msg string, args ...any) {
 	if s.diagLimiter != nil && !s.diagLimiter.Allow() {
 		return
 	}
-	allArgs := append([]any{"session_id", s.SessionID(), "serial_number", s.truncatedSerialNumber()}, args...)
+	allArgs := append([]any{"session_id", s.SessionId(), "serial_number", s.truncatedSerialNumber()}, args...)
 	s.logger.Warn(msg, allArgs...)
 }

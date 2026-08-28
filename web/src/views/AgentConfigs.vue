@@ -64,7 +64,7 @@
         style="width: 100%;"
       >
         <el-table-column type="selection" width="50" align="center" />
-        <el-table-column prop="id" label="ID" width="75" align="center" />
+        <el-table-column prop="id" label="Id" width="75" align="center" />
 
         <el-table-column prop="name" label="配置名称" min-width="160">
           <template #default="{ row }">
@@ -81,7 +81,7 @@
               <el-tag effect="plain" size="small" type="primary">
                 {{ row.asr_name || `ASR #${row.asr_config_id}` }}
               </el-tag>
-              <el-tooltip :content="`ASR 配置 ID: ${row.asr_config_id}`" placement="top">
+              <el-tooltip :content="`ASR 配置 Id: ${row.asr_config_id}`" placement="top">
                 <span class="id-badge">#{{ row.asr_config_id }}</span>
               </el-tooltip>
             </div>
@@ -94,7 +94,7 @@
               <el-tag effect="plain" size="small" type="success">
                 {{ row.llm_name || `LLM #${row.llm_config_id}` }}
               </el-tag>
-              <el-tooltip :content="`LLM 配置 ID: ${row.llm_config_id}`" placement="top">
+              <el-tooltip :content="`LLM 配置 Id: ${row.llm_config_id}`" placement="top">
                 <span class="id-badge">#{{ row.llm_config_id }}</span>
               </el-tooltip>
             </div>
@@ -107,7 +107,7 @@
               <el-tag effect="plain" size="small" type="warning">
                 {{ row.tts_name || `TTS #${row.tts_config_id}` }}
               </el-tag>
-              <el-tooltip :content="`TTS 配置 ID: ${row.tts_config_id}`" placement="top">
+              <el-tooltip :content="`TTS 配置 Id: ${row.tts_config_id}`" placement="top">
                 <span class="id-badge">#{{ row.tts_config_id }}</span>
               </el-tooltip>
             </div>
@@ -468,9 +468,9 @@ const suggestedVoices = computed(() => {
   return []
 })
 
-function handleTTSChange(newTTSID: number) {
+function handleTTSChange(newTTSId: number) {
   // 若当前音色为空，且选中的 TTS 有推荐音色，自动填入首个音色
-  const selectedTTS = ttsOptions.value.find((t) => t.id === newTTSID)
+  const selectedTTS = ttsOptions.value.find((t) => t.id === newTTSId)
   if (selectedTTS && selectedTTS.voices && !configDialog.form.voice) {
     try {
       const parsed = JSON.parse(selectedTTS.voices)

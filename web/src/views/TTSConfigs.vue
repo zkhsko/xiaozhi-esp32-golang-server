@@ -76,7 +76,7 @@
         style="width: 100%;"
       >
         <el-table-column type="selection" width="50" align="center" />
-        <el-table-column prop="id" label="ID" width="75" align="center" />
+        <el-table-column prop="id" label="Id" width="75" align="center" />
 
         <el-table-column prop="name" label="配置名称" min-width="160">
           <template #default="{ row }">

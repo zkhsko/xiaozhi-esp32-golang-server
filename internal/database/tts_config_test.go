@@ -31,14 +31,14 @@ func TestTTSConfig_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTTSConfig failed: %v", err)
 	}
-	if cfg.ID == 0 {
-		t.Fatalf("expected non-zero ID after create")
+	if cfg.Id == 0 {
+		t.Fatalf("expected non-zero Id after create")
 	}
 
-	// 2. Find by ID
-	found, err := db.FindTTSConfigByID(ctx, cfg.ID)
+	// 2. Find by Id
+	found, err := db.FindTTSConfigById(ctx, cfg.Id)
 	if err != nil {
-		t.Fatalf("FindTTSConfigByID failed: %v", err)
+		t.Fatalf("FindTTSConfigById failed: %v", err)
 	}
 	if found.Name != "百炼语音合成" {
 		t.Errorf("expected name %q, got %q", "百炼语音合成", found.Name)
@@ -74,7 +74,7 @@ func TestTTSConfig_CRUD(t *testing.T) {
 		t.Errorf("expected enabled true, got false")
 	}
 
-	// 3. Update by ID
+	// 3. Update by Id
 	found.Name = "百炼语音合成-更新版"
 	found.Provider = "volcengine"
 	found.Endpoint = "ws://localhost:9000/tts"
@@ -87,15 +87,15 @@ func TestTTSConfig_CRUD(t *testing.T) {
 	found.SentenceTimeoutMS = 15000
 	found.Enabled = false
 
-	err = db.UpdateTTSConfigByID(ctx, found)
+	err = db.UpdateTTSConfigById(ctx, found)
 	if err != nil {
-		t.Fatalf("UpdateTTSConfigByID failed: %v", err)
+		t.Fatalf("UpdateTTSConfigById failed: %v", err)
 	}
 
 	// 4. Verify Update
-	updated, err := db.FindTTSConfigByID(ctx, cfg.ID)
+	updated, err := db.FindTTSConfigById(ctx, cfg.Id)
 	if err != nil {
-		t.Fatalf("FindTTSConfigByID after update failed: %v", err)
+		t.Fatalf("FindTTSConfigById after update failed: %v", err)
 	}
 	if updated.Name != "百炼语音合成-更新版" {
 		t.Errorf("expected updated name %q, got %q", "百炼语音合成-更新版", updated.Name)
@@ -131,9 +131,9 @@ func TestTTSConfig_CRUD(t *testing.T) {
 		t.Errorf("expected updated enabled false, got %v", updated.Enabled)
 	}
 
-	// 5. Update non-existent ID
+	// 5. Update non-existent Id
 	nonExistent := &TTSConfig{
-		ID:                  999999,
+		Id:                  999999,
 		Name:                "不存在的TTS配置",
 		Endpoint:            "wss://example.com/tts",
 		Model:               "model-v1",
@@ -143,30 +143,30 @@ func TestTTSConfig_CRUD(t *testing.T) {
 		SentenceTimeoutMS:   10000,
 		Enabled:             true,
 	}
-	err = db.UpdateTTSConfigByID(ctx, nonExistent)
+	err = db.UpdateTTSConfigById(ctx, nonExistent)
 	if !errors.Is(err, ErrTTSConfigNotFound) {
 		t.Fatalf("expected ErrTTSConfigNotFound, got %v", err)
 	}
 
-	// 6. Find non-existent ID
-	_, err = db.FindTTSConfigByID(ctx, 999999)
+	// 6. Find non-existent Id
+	_, err = db.FindTTSConfigById(ctx, 999999)
 	if !errors.Is(err, ErrTTSConfigNotFound) {
 		t.Fatalf("expected ErrTTSConfigNotFound, got %v", err)
 	}
 
 	// 7. Delete TTSConfig
-	err = db.DeleteTTSConfig(ctx, cfg.ID)
+	err = db.DeleteTTSConfig(ctx, cfg.Id)
 	if err != nil {
 		t.Fatalf("DeleteTTSConfig failed: %v", err)
 	}
 
 	// 8. Verify Deleted
-	_, err = db.FindTTSConfigByID(ctx, cfg.ID)
+	_, err = db.FindTTSConfigById(ctx, cfg.Id)
 	if !errors.Is(err, ErrTTSConfigNotFound) {
 		t.Fatalf("expected ErrTTSConfigNotFound after delete, got %v", err)
 	}
 
-	// 9. Delete non-existent ID
+	// 9. Delete non-existent Id
 	err = db.DeleteTTSConfig(ctx, 999999)
 	if !errors.Is(err, ErrTTSConfigNotFound) {
 		t.Fatalf("expected ErrTTSConfigNotFound for non-existent delete, got %v", err)
@@ -210,7 +210,7 @@ func TestTTSConfig_BatchDelete(t *testing.T) {
 		t.Fatalf("expected 2 configs before batch delete, got total %d", total)
 	}
 
-	err := db.BatchDeleteTTSConfigs(ctx, []uint64{cfg1.ID, cfg2.ID})
+	err := db.BatchDeleteTTSConfigs(ctx, []uint64{cfg1.Id, cfg2.Id})
 	if err != nil {
 		t.Fatalf("BatchDeleteTTSConfigs failed: %v", err)
 	}
@@ -249,9 +249,9 @@ func TestTTSConfig_LargeVoices(t *testing.T) {
 		t.Fatalf("CreateTTSConfig with large voices failed: %v", err)
 	}
 
-	found, err := db.FindTTSConfigByID(ctx, cfg.ID)
+	found, err := db.FindTTSConfigById(ctx, cfg.Id)
 	if err != nil {
-		t.Fatalf("FindTTSConfigByID failed: %v", err)
+		t.Fatalf("FindTTSConfigById failed: %v", err)
 	}
 	if found.Voices != largeVoices {
 		t.Fatalf("expected voices length %d, got %d", len(largeVoices), len(found.Voices))
@@ -277,9 +277,9 @@ func TestTTSConfig_EmptyVoicesDefault(t *testing.T) {
 		t.Fatalf("CreateTTSConfig with empty voices failed: %v", err)
 	}
 
-	found, err := db.FindTTSConfigByID(ctx, cfg.ID)
+	found, err := db.FindTTSConfigById(ctx, cfg.Id)
 	if err != nil {
-		t.Fatalf("FindTTSConfigByID failed: %v", err)
+		t.Fatalf("FindTTSConfigById failed: %v", err)
 	}
 	if found.Voices != "[]" {
 		t.Errorf("expected default voices '[]', got %q", found.Voices)
@@ -319,8 +319,8 @@ func TestTTSConfig_DuplicateNameAllowed(t *testing.T) {
 	if err := db.CreateTTSConfig(ctx, cfg2); err != nil {
 		t.Fatalf("failed to create second config with same name: %v", err)
 	}
-	if cfg1.ID == cfg2.ID {
-		t.Fatalf("expected distinct IDs for duplicate names, got %d and %d", cfg1.ID, cfg2.ID)
+	if cfg1.Id == cfg2.Id {
+		t.Fatalf("expected distinct Ids for duplicate names, got %d and %d", cfg1.Id, cfg2.Id)
 	}
 	if cfg1.Provider != "" || cfg2.Provider != "" {
 		t.Fatalf("expected empty default provider, got %q and %q", cfg1.Provider, cfg2.Provider)
@@ -718,10 +718,10 @@ func TestTTSConfig_NilDB(t *testing.T) {
 	if err := nilDB.CreateTTSConfig(ctx, &TTSConfig{}); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
-	if _, err := nilDB.FindTTSConfigByID(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
+	if _, err := nilDB.FindTTSConfigById(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
-	if err := nilDB.UpdateTTSConfigByID(ctx, &TTSConfig{ID: 1}); !errors.Is(err, ErrDatabaseInstanceRequired) {
+	if err := nilDB.UpdateTTSConfigById(ctx, &TTSConfig{Id: 1}); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
 	if _, _, err := nilDB.ListTTSConfigs(ctx, TTSConfigFilter{}); !errors.Is(err, ErrDatabaseInstanceRequired) {

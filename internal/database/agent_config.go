@@ -21,11 +21,11 @@ var (
 	ErrEmptyAgentConfigName = errors.New("agent config name cannot be empty")
 	// ErrInvalidAgentConfigNameLength 表示 Agent 配置名称长度超过 128 字节。
 	ErrInvalidAgentConfigNameLength = errors.New("agent config name length exceeds 128 bytes")
-	// ErrInvalidASRConfigReference 表示引用的 ASR 配置 ID 为 0 或非法。
+	// ErrInvalidASRConfigReference 表示引用的 ASR 配置 Id 为 0 或非法。
 	ErrInvalidASRConfigReference = errors.New("asr config id cannot be empty or zero")
-	// ErrInvalidLLMConfigReference 表示引用的 LLM 配置 ID 为 0 或非法。
+	// ErrInvalidLLMConfigReference 表示引用的 LLM 配置 Id 为 0 或非法。
 	ErrInvalidLLMConfigReference = errors.New("llm config id cannot be empty or zero")
-	// ErrInvalidTTSConfigReference 表示引用的 TTS 配置 ID 为 0 或非法。
+	// ErrInvalidTTSConfigReference 表示引用的 TTS 配置 Id 为 0 或非法。
 	ErrInvalidTTSConfigReference = errors.New("tts config id cannot be empty or zero")
 	// ErrEmptySystemPrompt 表示 Agent 系统提示词为空。
 	ErrEmptySystemPrompt = errors.New("system prompt cannot be empty")
@@ -69,11 +69,11 @@ var (
 // - created_at: 创建时间。
 // - updated_at: 更新时间。
 type AgentConfig struct {
-	ID           uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Id           uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	Name         string    `gorm:"column:name;size:128;not null" json:"name"`
-	ASRConfigID  uint64    `gorm:"column:asr_config_id;not null;index:idx_agent_config_asr_config_id" json:"asr_config_id"`
-	LLMConfigID  uint64    `gorm:"column:llm_config_id;not null;index:idx_agent_config_llm_config_id" json:"llm_config_id"`
-	TTSConfigID  uint64    `gorm:"column:tts_config_id;not null;index:idx_agent_config_tts_config_id" json:"tts_config_id"`
+	ASRConfigId  uint64    `gorm:"column:asr_config_id;not null;index:idx_agent_config_asr_config_id" json:"asr_config_id"`
+	LLMConfigId  uint64    `gorm:"column:llm_config_id;not null;index:idx_agent_config_llm_config_id" json:"llm_config_id"`
+	TTSConfigId  uint64    `gorm:"column:tts_config_id;not null;index:idx_agent_config_tts_config_id" json:"tts_config_id"`
 	SystemPrompt string    `gorm:"column:system_prompt;type:text;not null" json:"system_prompt"`
 	Voice        string    `gorm:"column:voice;size:128;not null" json:"voice"`
 	Enabled      bool      `gorm:"column:enabled;not null;index:idx_agent_config_enabled;default:false" json:"enabled"`
@@ -88,7 +88,7 @@ func (AgentConfig) TableName() string {
 
 // AgentSnapshot 包含运行时 Agent 的基本信息。
 type AgentSnapshot struct {
-	ID           uint64 `json:"id"`
+	Id           uint64 `json:"id"`
 	Name         string `json:"name"`
 	SystemPrompt string `json:"system_prompt"`
 	Voice        string `json:"voice"`
@@ -117,13 +117,13 @@ func (c *AgentConfig) Validate() error {
 		return ErrInvalidAgentConfigNameLength
 	}
 
-	if c.ASRConfigID == 0 {
+	if c.ASRConfigId == 0 {
 		return ErrInvalidASRConfigReference
 	}
-	if c.LLMConfigID == 0 {
+	if c.LLMConfigId == 0 {
 		return ErrInvalidLLMConfigReference
 	}
-	if c.TTSConfigID == 0 {
+	if c.TTSConfigId == 0 {
 		return ErrInvalidTTSConfigReference
 	}
 
@@ -155,9 +155,9 @@ type AgentConfigFilter struct {
 }
 
 // validateComponentReferences 校验引用的三个组件是否存在且处于启用状态。
-func validateComponentReferences(ctx context.Context, tx *gorm.DB, asrID, llmID, ttsID uint64) error {
+func validateComponentReferences(ctx context.Context, tx *gorm.DB, asrId, llmId, ttsId uint64) error {
 	var asr ASRConfig
-	if err := tx.WithContext(ctx).Where("id = ?", asrID).Take(&asr).Error; err != nil {
+	if err := tx.WithContext(ctx).Where("id = ?", asrId).Take(&asr).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrReferencedASRNotFound
 		}
@@ -168,7 +168,7 @@ func validateComponentReferences(ctx context.Context, tx *gorm.DB, asrID, llmID,
 	}
 
 	var llm LLMConfig
-	if err := tx.WithContext(ctx).Where("id = ?", llmID).Take(&llm).Error; err != nil {
+	if err := tx.WithContext(ctx).Where("id = ?", llmId).Take(&llm).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrReferencedLLMNotFound
 		}
@@ -179,7 +179,7 @@ func validateComponentReferences(ctx context.Context, tx *gorm.DB, asrID, llmID,
 	}
 
 	var tts TTSConfig
-	if err := tx.WithContext(ctx).Where("id = ?", ttsID).Take(&tts).Error; err != nil {
+	if err := tx.WithContext(ctx).Where("id = ?", ttsId).Take(&tts).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrReferencedTTSNotFound
 		}
@@ -210,7 +210,7 @@ func (d *Database) CreateAgentConfig(ctx context.Context, cfg *AgentConfig) erro
 	cfg.Voice = strings.TrimSpace(cfg.Voice)
 
 	return d.gormDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := validateComponentReferences(ctx, tx, cfg.ASRConfigID, cfg.LLMConfigID, cfg.TTSConfigID); err != nil {
+		if err := validateComponentReferences(ctx, tx, cfg.ASRConfigId, cfg.LLMConfigId, cfg.TTSConfigId); err != nil {
 			return err
 		}
 
@@ -221,13 +221,13 @@ func (d *Database) CreateAgentConfig(ctx context.Context, cfg *AgentConfig) erro
 	})
 }
 
-// FindAgentConfigByID 根据 ID 查询 Agent 配置。
-func (d *Database) FindAgentConfigByID(ctx context.Context, id uint64) (*AgentConfig, error) {
+// FindAgentConfigById 根据 Id 查询 Agent 配置。
+func (d *Database) FindAgentConfigById(ctx context.Context, id uint64) (*AgentConfig, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
 	if id == 0 {
-		return nil, ErrInvalidAgentConfigID
+		return nil, ErrInvalidAgentConfigId
 	}
 
 	var cfg AgentConfig
@@ -245,14 +245,14 @@ func (d *Database) FindAgentConfigByID(ctx context.Context, id uint64) (*AgentCo
 	return &cfg, nil
 }
 
-// UpdateAgentConfigByID 按主键 ID 覆盖更新 Agent 配置（更新组合、提示词和音色）。
+// UpdateAgentConfigById 按主键 Id 覆盖更新 Agent 配置（更新组合、提示词和音色）。
 // 更新结果影响行数为 0 时返回 ErrAgentConfigNotFound。
-func (d *Database) UpdateAgentConfigByID(ctx context.Context, cfg *AgentConfig) error {
+func (d *Database) UpdateAgentConfigById(ctx context.Context, cfg *AgentConfig) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
 	}
-	if cfg == nil || cfg.ID == 0 {
-		return ErrInvalidAgentConfigID
+	if cfg == nil || cfg.Id == 0 {
+		return ErrInvalidAgentConfigId
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -261,33 +261,33 @@ func (d *Database) UpdateAgentConfigByID(ctx context.Context, cfg *AgentConfig) 
 
 	return d.gormDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing AgentConfig
-		if err := tx.Where("id = ?", cfg.ID).Take(&existing).Error; err != nil {
+		if err := tx.Where("id = ?", cfg.Id).Take(&existing).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("update agent config by id %d: %w", cfg.ID, ErrAgentConfigNotFound)
+				return fmt.Errorf("update agent config by id %d: %w", cfg.Id, ErrAgentConfigNotFound)
 			}
 			return fmt.Errorf("query agent config by id: %w", err)
 		}
 
-		if err := validateComponentReferences(ctx, tx, cfg.ASRConfigID, cfg.LLMConfigID, cfg.TTSConfigID); err != nil {
+		if err := validateComponentReferences(ctx, tx, cfg.ASRConfigId, cfg.LLMConfigId, cfg.TTSConfigId); err != nil {
 			return err
 		}
 
 		updates := map[string]any{
 			"name":          strings.TrimSpace(cfg.Name),
-			"asr_config_id": cfg.ASRConfigID,
-			"llm_config_id": cfg.LLMConfigID,
-			"tts_config_id": cfg.TTSConfigID,
+			"asr_config_id": cfg.ASRConfigId,
+			"llm_config_id": cfg.LLMConfigId,
+			"tts_config_id": cfg.TTSConfigId,
 			"system_prompt": strings.TrimSpace(cfg.SystemPrompt),
 			"voice":         strings.TrimSpace(cfg.Voice),
 			"updated_at":    time.Now(),
 		}
 
-		res := tx.Model(&AgentConfig{}).Where("id = ?", cfg.ID).Updates(updates)
+		res := tx.Model(&AgentConfig{}).Where("id = ?", cfg.Id).Updates(updates)
 		if res.Error != nil {
 			return fmt.Errorf("update agent config by id: %w", res.Error)
 		}
 		if res.RowsAffected == 0 {
-			return fmt.Errorf("update agent config by id %d: %w", cfg.ID, ErrAgentConfigNotFound)
+			return fmt.Errorf("update agent config by id %d: %w", cfg.Id, ErrAgentConfigNotFound)
 		}
 
 		return nil
@@ -303,26 +303,26 @@ func (d *Database) UpdateAgentConfigByID(ctx context.Context, cfg *AgentConfig) 
 // 4. 将目标 Agent 的 enabled 更新为 true；
 // 5. 校验事务内 enabled=true 的 Agent 数量恰好为 1 条；
 // 6. 提交事务。
-func (d *Database) ActivateAgent(ctx context.Context, agentID uint64) error {
+func (d *Database) ActivateAgent(ctx context.Context, agentId uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
 	}
-	if agentID == 0 {
-		return ErrInvalidAgentConfigID
+	if agentId == 0 {
+		return ErrInvalidAgentConfigId
 	}
 
 	return d.gormDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var target AgentConfig
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ?", agentID).
+			Where("id = ?", agentId).
 			Take(&target).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("activate agent by id %d: %w", agentID, ErrAgentConfigNotFound)
+				return fmt.Errorf("activate agent by id %d: %w", agentId, ErrAgentConfigNotFound)
 			}
 			return fmt.Errorf("lock target agent config: %w", err)
 		}
 
-		if err := validateComponentReferences(ctx, tx, target.ASRConfigID, target.LLMConfigID, target.TTSConfigID); err != nil {
+		if err := validateComponentReferences(ctx, tx, target.ASRConfigId, target.LLMConfigId, target.TTSConfigId); err != nil {
 			return err
 		}
 
@@ -330,12 +330,12 @@ func (d *Database) ActivateAgent(ctx context.Context, agentID uint64) error {
 			return fmt.Errorf("reset all agent configs enabled: %w", err)
 		}
 
-		res := tx.Model(&AgentConfig{}).Where("id = ?", agentID).Update("enabled", true)
+		res := tx.Model(&AgentConfig{}).Where("id = ?", agentId).Update("enabled", true)
 		if res.Error != nil {
 			return fmt.Errorf("activate target agent: %w", res.Error)
 		}
 		if res.RowsAffected == 0 {
-			return fmt.Errorf("activate agent by id %d: %w", agentID, ErrAgentConfigNotFound)
+			return fmt.Errorf("activate agent by id %d: %w", agentId, ErrAgentConfigNotFound)
 		}
 
 		var count int64
@@ -353,14 +353,14 @@ func (d *Database) ActivateAgent(ctx context.Context, agentID uint64) error {
 // snapshotRow 用于接收 Agent JOIN 三个组件配置的单行查询结果。
 type snapshotRow struct {
 	// Agent 字段
-	AgentID           uint64 `gorm:"column:agent_id"`
+	AgentId           uint64 `gorm:"column:agent_id"`
 	AgentName         string `gorm:"column:agent_name"`
 	AgentSystemPrompt string `gorm:"column:agent_system_prompt"`
 	AgentVoice        string `gorm:"column:agent_voice"`
 	AgentEnabled      bool   `gorm:"column:agent_enabled"`
 
 	// ASR 字段
-	ASRID               uint64    `gorm:"column:asr_id"`
+	ASRId               uint64    `gorm:"column:asr_id"`
 	ASRName             string    `gorm:"column:asr_name"`
 	ASRProvider         string    `gorm:"column:asr_provider"`
 	ASREndpoint         string    `gorm:"column:asr_endpoint"`
@@ -373,7 +373,7 @@ type snapshotRow struct {
 	ASRUpdatedAt        time.Time `gorm:"column:asr_updated_at"`
 
 	// LLM 字段
-	LLMID                  uint64    `gorm:"column:llm_id"`
+	LLMId                  uint64    `gorm:"column:llm_id"`
 	LLMName                string    `gorm:"column:llm_name"`
 	LLMProvider            string    `gorm:"column:llm_provider"`
 	LLMEndpoint            string    `gorm:"column:llm_endpoint"`
@@ -386,7 +386,7 @@ type snapshotRow struct {
 	LLMUpdatedAt           time.Time `gorm:"column:llm_updated_at"`
 
 	// TTS 字段
-	TTSID                  uint64    `gorm:"column:tts_id"`
+	TTSId                  uint64    `gorm:"column:tts_id"`
 	TTSName                string    `gorm:"column:tts_name"`
 	TTSProvider            string    `gorm:"column:tts_provider"`
 	TTSEndpoint            string    `gorm:"column:tts_endpoint"`
@@ -411,25 +411,25 @@ const snapshotSelectSQL = `
 // toAgentRuntimeSnapshot 将单行 JOIN 结果转换为运行时快照对象。
 func (row *snapshotRow) toAgentRuntimeSnapshot() (*AgentRuntimeSnapshot, error) {
 	if !row.ASREnabled {
-		return nil, fmt.Errorf("active agent references disabled asr config (id=%d): %w", row.ASRID, ErrReferencedASRDisabled)
+		return nil, fmt.Errorf("active agent references disabled asr config (id=%d): %w", row.ASRId, ErrReferencedASRDisabled)
 	}
 	if !row.LLMEnabled {
-		return nil, fmt.Errorf("active agent references disabled llm config (id=%d): %w", row.LLMID, ErrReferencedLLMDisabled)
+		return nil, fmt.Errorf("active agent references disabled llm config (id=%d): %w", row.LLMId, ErrReferencedLLMDisabled)
 	}
 	if !row.TTSEnabled {
-		return nil, fmt.Errorf("active agent references disabled tts config (id=%d): %w", row.TTSID, ErrReferencedTTSDisabled)
+		return nil, fmt.Errorf("active agent references disabled tts config (id=%d): %w", row.TTSId, ErrReferencedTTSDisabled)
 	}
 
 	return &AgentRuntimeSnapshot{
 		Agent: AgentSnapshot{
-			ID:           row.AgentID,
+			Id:           row.AgentId,
 			Name:         row.AgentName,
 			SystemPrompt: row.AgentSystemPrompt,
 			Voice:        row.AgentVoice,
 			Enabled:      row.AgentEnabled,
 		},
 		ASRConfig: ASRConfig{
-			ID:               row.ASRID,
+			Id:               row.ASRId,
 			Name:             row.ASRName,
 			Provider:         row.ASRProvider,
 			Endpoint:         row.ASREndpoint,
@@ -442,7 +442,7 @@ func (row *snapshotRow) toAgentRuntimeSnapshot() (*AgentRuntimeSnapshot, error) 
 			UpdatedAt:        row.ASRUpdatedAt,
 		},
 		LLMConfig: LLMConfig{
-			ID:                  row.LLMID,
+			Id:                  row.LLMId,
 			Name:                row.LLMName,
 			Provider:            row.LLMProvider,
 			Endpoint:            row.LLMEndpoint,
@@ -455,7 +455,7 @@ func (row *snapshotRow) toAgentRuntimeSnapshot() (*AgentRuntimeSnapshot, error) 
 			UpdatedAt:           row.LLMUpdatedAt,
 		},
 		TTSConfig: TTSConfig{
-			ID:                  row.TTSID,
+			Id:                  row.TTSId,
 			Name:                row.TTSName,
 			Provider:            row.TTSProvider,
 			Endpoint:            row.TTSEndpoint,
@@ -505,13 +505,13 @@ func (d *Database) FindActiveAgentRuntimeSnapshot(ctx context.Context) (*AgentRu
 	return row.toAgentRuntimeSnapshot()
 }
 
-// FindAgentRuntimeSnapshotByID JOIN 查询指定 ID 的 Agent 及其引用的 ASR、LLM、TTS 完整配置快照。
-func (d *Database) FindAgentRuntimeSnapshotByID(ctx context.Context, id uint64) (*AgentRuntimeSnapshot, error) {
+// FindAgentRuntimeSnapshotById JOIN 查询指定 Id 的 Agent 及其引用的 ASR、LLM、TTS 完整配置快照。
+func (d *Database) FindAgentRuntimeSnapshotById(ctx context.Context, id uint64) (*AgentRuntimeSnapshot, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
 	if id == 0 {
-		return nil, ErrInvalidAgentConfigID
+		return nil, ErrInvalidAgentConfigId
 	}
 
 	var row snapshotRow
@@ -574,13 +574,13 @@ func (d *Database) ListAgentConfigs(ctx context.Context, filter AgentConfigFilte
 	return configs, total, nil
 }
 
-// DeleteAgentConfig 删除指定 ID 的 Agent 配置记录。
+// DeleteAgentConfig 删除指定 Id 的 Agent 配置记录。
 func (d *Database) DeleteAgentConfig(ctx context.Context, id uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
 	}
 	if id == 0 {
-		return ErrInvalidAgentConfigID
+		return ErrInvalidAgentConfigId
 	}
 
 	res := d.gormDB.WithContext(ctx).Where("id = ?", id).Delete(&AgentConfig{})
@@ -593,7 +593,7 @@ func (d *Database) DeleteAgentConfig(ctx context.Context, id uint64) error {
 	return nil
 }
 
-// BatchDeleteAgentConfigs 批量删除指定 ID 列表的 Agent 配置记录。
+// BatchDeleteAgentConfigs 批量删除指定 Id 列表的 Agent 配置记录。
 func (d *Database) BatchDeleteAgentConfigs(ctx context.Context, ids []uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
@@ -602,17 +602,17 @@ func (d *Database) BatchDeleteAgentConfigs(ctx context.Context, ids []uint64) er
 		return nil
 	}
 
-	validIDs := make([]uint64, 0, len(ids))
+	validIds := make([]uint64, 0, len(ids))
 	for _, id := range ids {
 		if id > 0 {
-			validIDs = append(validIDs, id)
+			validIds = append(validIds, id)
 		}
 	}
-	if len(validIDs) == 0 {
+	if len(validIds) == 0 {
 		return nil
 	}
 
-	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIDs).Delete(&AgentConfig{}).Error; err != nil {
+	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIds).Delete(&AgentConfig{}).Error; err != nil {
 		return fmt.Errorf("batch delete agent configs: %w", err)
 	}
 	return nil

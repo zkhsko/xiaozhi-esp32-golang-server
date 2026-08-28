@@ -109,10 +109,10 @@ func NewDownlinkPacer(ctx context.Context, session *Session, gen uint64, queueCa
 	}
 }
 
-// sessionID 返回关联会话的会话标识。
-func (p *DownlinkPacer) sessionID() string {
+// sessionId 返回关联会话的会话标识。
+func (p *DownlinkPacer) sessionId() string {
 	if p.session != nil {
-		id := p.session.SessionID()
+		id := p.session.SessionId()
 		if id != "" {
 			return id
 		}
@@ -289,8 +289,8 @@ func (p *DownlinkPacer) sendTTSStart() error {
 		return nil
 	}
 
-	sessionID := p.sessionID()
-	startBytes, err := EncodeTTSStartMessage(sessionID)
+	sessionId := p.sessionId()
+	startBytes, err := EncodeTTSStartMessage(sessionId)
 	if err != nil {
 		return fmt.Errorf("encode tts start message: %w", err)
 	}

@@ -77,8 +77,8 @@ func TestOTAActivateWithHMAC_Success(t *testing.T) {
 	if act.ActivationStatus != database.ActivationStatusActive {
 		t.Errorf("expected activation_status %q, got %q", database.ActivationStatusActive, act.ActivationStatus)
 	}
-	if act.DeviceID != "11:22:33:44:55:66" {
-		t.Errorf("expected DeviceID %q, got %q", "11:22:33:44:55:66", act.DeviceID)
+	if act.DeviceId != "11:22:33:44:55:66" {
+		t.Errorf("expected DeviceId %q, got %q", "11:22:33:44:55:66", act.DeviceId)
 	}
 
 	// 2. Verify credential status updated to activated

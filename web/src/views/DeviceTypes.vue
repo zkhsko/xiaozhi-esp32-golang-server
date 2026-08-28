@@ -67,7 +67,7 @@
         style="width: 100%;"
       >
         <el-table-column type="selection" width="50" align="center" />
-        <el-table-column prop="id" label="ID" width="75" align="center" />
+        <el-table-column prop="id" label="Id" width="75" align="center" />
 
         <el-table-column prop="device_type" label="设备类型标识 (Device Type)" min-width="220">
           <template #default="{ row }">
@@ -93,7 +93,7 @@
               <el-tag effect="plain" size="small" type="success">
                 {{ row.agent_name || `智能体 #${row.agent_config_id}` }}
               </el-tag>
-              <el-tooltip :content="`智能体 ID: ${row.agent_config_id}`" placement="top">
+              <el-tooltip :content="`智能体 Id: ${row.agent_config_id}`" placement="top">
                 <span class="id-badge">#{{ row.agent_config_id }}</span>
               </el-tooltip>
             </div>
@@ -189,7 +189,7 @@
             <el-option
               v-for="item in agentOptions"
               :key="item.id"
-              :label="`${item.name} (ID: ${item.id})`"
+              :label="`${item.name} (Id: ${item.id})`"
               :value="item.id"
             />
           </el-select>

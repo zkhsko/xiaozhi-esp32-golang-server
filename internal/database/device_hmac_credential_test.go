@@ -73,7 +73,7 @@ func TestDeviceHmacCredentialCRUD(t *testing.T) {
 	}
 
 	// Test Update
-	err = db.UpdateDeviceHmacCredential(ctx, found.ID, map[string]any{
+	err = db.UpdateDeviceHmacCredential(ctx, found.Id, map[string]any{
 		"credential_status": CredentialStatusBlocked,
 		"device_type":       "robot-cat",
 	})
@@ -104,7 +104,7 @@ func TestDeviceHmacCredentialCRUD(t *testing.T) {
 	}
 
 	// Test Delete
-	err = db.DeleteDeviceHmacCredential(ctx, found.ID)
+	err = db.DeleteDeviceHmacCredential(ctx, found.Id)
 	if err != nil {
 		t.Fatalf("DeleteDeviceHmacCredential failed: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestDeviceHmacCredentialListAndBatchDelete(t *testing.T) {
 	}
 
 	// Batch delete
-	ids := []uint64{list[0].ID, list[1].ID}
+	ids := []uint64{list[0].Id, list[1].Id}
 	err = db.BatchDeleteDeviceHmacCredentials(ctx, ids)
 	if err != nil {
 		t.Fatalf("BatchDeleteDeviceHmacCredentials failed: %v", err)

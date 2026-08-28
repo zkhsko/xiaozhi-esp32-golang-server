@@ -51,9 +51,9 @@ func createTestAgent(t *testing.T, db *Database, ctx context.Context, name strin
 
 	agent := &AgentConfig{
 		Name:         "测试Agent-" + name,
-		ASRConfigID:  asr.ID,
-		LLMConfigID:  llm.ID,
-		TTSConfigID:  tts.ID,
+		ASRConfigId:  asr.Id,
+		LLMConfigId:  llm.Id,
+		TTSConfigId:  tts.Id,
 		SystemPrompt: "你是一个助手",
 		Voice:        "voice1",
 		Enabled:      true,
@@ -61,41 +61,41 @@ func createTestAgent(t *testing.T, db *Database, ctx context.Context, name strin
 	if err := db.CreateAgentConfig(ctx, agent); err != nil {
 		t.Fatalf("create test agent failed: %v", err)
 	}
-	return agent.ID
+	return agent.Id
 }
 
 func TestDeviceTypeCRUD(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	agent1ID := createTestAgent(t, db, ctx, "1")
-	agent2ID := createTestAgent(t, db, ctx, "2")
+	agent1Id := createTestAgent(t, db, ctx, "1")
+	agent2Id := createTestAgent(t, db, ctx, "2")
 
 	// 1. Create DeviceType
 	dt1 := &DeviceType{
 		DeviceType:    "robot-dog",
-		AgentConfigID: agent1ID,
+		AgentConfigId: agent1Id,
 	}
 	if err := db.CreateDeviceType(ctx, dt1); err != nil {
 		t.Fatalf("CreateDeviceType failed: %v", err)
 	}
-	if dt1.ID == 0 {
-		t.Errorf("expected non-zero ID, got %d", dt1.ID)
+	if dt1.Id == 0 {
+		t.Errorf("expected non-zero Id, got %d", dt1.Id)
 	}
 	if dt1.DeviceType != "robot-dog" {
 		t.Errorf("expected device_type robot-dog, got %s", dt1.DeviceType)
 	}
-	if dt1.AgentConfigID != agent1ID {
-		t.Errorf("expected agent_config_id %d, got %d", agent1ID, dt1.AgentConfigID)
+	if dt1.AgentConfigId != agent1Id {
+		t.Errorf("expected agent_config_id %d, got %d", agent1Id, dt1.AgentConfigId)
 	}
 
-	// 2. Find by ID
-	foundByID, err := db.FindDeviceTypeByID(ctx, dt1.ID)
+	// 2. Find by Id
+	foundById, err := db.FindDeviceTypeById(ctx, dt1.Id)
 	if err != nil {
-		t.Fatalf("FindDeviceTypeByID failed: %v", err)
+		t.Fatalf("FindDeviceTypeById failed: %v", err)
 	}
-	if foundByID.ID != dt1.ID || foundByID.DeviceType != "robot-dog" || foundByID.AgentConfigID != agent1ID {
-		t.Errorf("FindDeviceTypeByID mismatch: %+v", foundByID)
+	if foundById.Id != dt1.Id || foundById.DeviceType != "robot-dog" || foundById.AgentConfigId != agent1Id {
+		t.Errorf("FindDeviceTypeById mismatch: %+v", foundById)
 	}
 
 	// 3. Find by device_type
@@ -103,43 +103,43 @@ func TestDeviceTypeCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindDeviceTypeByDeviceType failed: %v", err)
 	}
-	if found.ID != dt1.ID || found.AgentConfigID != agent1ID {
-		t.Errorf("expected found ID=%d agent_config_id=%d, got ID=%d agent_config_id=%d",
-			dt1.ID, agent1ID, found.ID, found.AgentConfigID)
+	if found.Id != dt1.Id || found.AgentConfigId != agent1Id {
+		t.Errorf("expected found Id=%d agent_config_id=%d, got Id=%d agent_config_id=%d",
+			dt1.Id, agent1Id, found.Id, found.AgentConfigId)
 	}
 
-	// 4. Update DeviceType by ID
-	dt1.AgentConfigID = agent2ID
+	// 4. Update DeviceType by Id
+	dt1.AgentConfigId = agent2Id
 	dt1.DeviceType = "robot-dog-updated"
-	if err := db.UpdateDeviceTypeByID(ctx, dt1); err != nil {
-		t.Fatalf("UpdateDeviceTypeByID failed: %v", err)
+	if err := db.UpdateDeviceTypeById(ctx, dt1); err != nil {
+		t.Fatalf("UpdateDeviceTypeById failed: %v", err)
 	}
 
-	foundAfterUpdate, err := db.FindDeviceTypeByID(ctx, dt1.ID)
+	foundAfterUpdate, err := db.FindDeviceTypeById(ctx, dt1.Id)
 	if err != nil {
-		t.Fatalf("FindDeviceTypeByID after update failed: %v", err)
+		t.Fatalf("FindDeviceTypeById after update failed: %v", err)
 	}
-	if foundAfterUpdate.DeviceType != "robot-dog-updated" || foundAfterUpdate.AgentConfigID != agent2ID {
+	if foundAfterUpdate.DeviceType != "robot-dog-updated" || foundAfterUpdate.AgentConfigId != agent2Id {
 		t.Errorf("expected updated DeviceType robot-dog-updated and agent %d, got %s and %d",
-			agent2ID, foundAfterUpdate.DeviceType, foundAfterUpdate.AgentConfigID)
+			agent2Id, foundAfterUpdate.DeviceType, foundAfterUpdate.AgentConfigId)
 	}
 
 	// 5. Add second device type
 	dt2 := &DeviceType{
 		DeviceType:    "smart-speaker",
-		AgentConfigID: agent2ID,
+		AgentConfigId: agent2Id,
 	}
 	if err := db.CreateDeviceType(ctx, dt2); err != nil {
 		t.Fatalf("CreateDeviceType dt2 failed: %v", err)
 	}
 
 	// 6. Find by agent_config_id
-	typesByAgent, err := db.FindDeviceTypesByAgentConfigID(ctx, agent2ID)
+	typesByAgent, err := db.FindDeviceTypesByAgentConfigId(ctx, agent2Id)
 	if err != nil {
-		t.Fatalf("FindDeviceTypesByAgentConfigID failed: %v", err)
+		t.Fatalf("FindDeviceTypesByAgentConfigId failed: %v", err)
 	}
 	if len(typesByAgent) != 2 {
-		t.Fatalf("expected 2 types for agent %d, got %d", agent2ID, len(typesByAgent))
+		t.Fatalf("expected 2 types for agent %d, got %d", agent2Id, len(typesByAgent))
 	}
 
 	// 7. List with filter
@@ -161,7 +161,7 @@ func TestDeviceTypeCRUD(t *testing.T) {
 	}
 
 	// Filter by agent_config_id
-	agentFiltered, agentTotal, err := db.ListDeviceTypes(ctx, DeviceTypeFilter{AgentConfigID: agent2ID})
+	agentFiltered, agentTotal, err := db.ListDeviceTypes(ctx, DeviceTypeFilter{AgentConfigId: agent2Id})
 	if err != nil {
 		t.Fatalf("ListDeviceTypes by agent failed: %v", err)
 	}
@@ -169,19 +169,19 @@ func TestDeviceTypeCRUD(t *testing.T) {
 		t.Fatalf("expected 2 for agent filter, got total=%d", agentTotal)
 	}
 
-	// 8. Delete by ID
-	err = db.DeleteDeviceType(ctx, dt1.ID)
+	// 8. Delete by Id
+	err = db.DeleteDeviceType(ctx, dt1.Id)
 	if err != nil {
 		t.Fatalf("DeleteDeviceType failed: %v", err)
 	}
 
-	_, err = db.FindDeviceTypeByID(ctx, dt1.ID)
+	_, err = db.FindDeviceTypeById(ctx, dt1.Id)
 	if !errors.Is(err, ErrDeviceTypeNotFound) {
 		t.Errorf("expected ErrDeviceTypeNotFound after delete, got %v", err)
 	}
 
 	// 9. Batch delete remaining
-	err = db.BatchDeleteDeviceTypes(ctx, []uint64{dt2.ID})
+	err = db.BatchDeleteDeviceTypes(ctx, []uint64{dt2.Id})
 	if err != nil {
 		t.Fatalf("BatchDeleteDeviceTypes failed: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestDeviceTypeUpsertCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertDeviceType failed: %v", err)
 	}
-	if dt1.ID == 0 || dt1.DeviceType != "robot-dog" || dt1.AgentConfigID != 101 {
+	if dt1.Id == 0 || dt1.DeviceType != "robot-dog" || dt1.AgentConfigId != 101 {
 		t.Errorf("UpsertDeviceType mismatch: %+v", dt1)
 	}
 
@@ -213,7 +213,7 @@ func TestDeviceTypeUpsertCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpsertDeviceType update failed: %v", err)
 	}
-	if updated.ID != dt1.ID || updated.AgentConfigID != 202 {
+	if updated.Id != dt1.Id || updated.AgentConfigId != 202 {
 		t.Errorf("UpsertDeviceType update mismatch: %+v", updated)
 	}
 
@@ -233,7 +233,7 @@ func TestDeviceTypeValidation(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	agentID := createTestAgent(t, db, ctx, "val")
+	agentId := createTestAgent(t, db, ctx, "val")
 
 	// Nil struct
 	err := db.CreateDeviceType(ctx, nil)
@@ -242,60 +242,60 @@ func TestDeviceTypeValidation(t *testing.T) {
 	}
 
 	// Empty device type
-	err = db.CreateDeviceType(ctx, &DeviceType{DeviceType: "   ", AgentConfigID: agentID})
+	err = db.CreateDeviceType(ctx, &DeviceType{DeviceType: "   ", AgentConfigId: agentId})
 	if !errors.Is(err, ErrEmptyDeviceType) {
 		t.Errorf("expected ErrEmptyDeviceType, got %v", err)
 	}
 
 	// Exceeds 32 chars
-	err = db.CreateDeviceType(ctx, &DeviceType{DeviceType: strings.Repeat("a", 33), AgentConfigID: agentID})
+	err = db.CreateDeviceType(ctx, &DeviceType{DeviceType: strings.Repeat("a", 33), AgentConfigId: agentId})
 	if !errors.Is(err, ErrInvalidDeviceTypeLength) {
 		t.Errorf("expected ErrInvalidDeviceTypeLength, got %v", err)
 	}
 
 	// Zero agent config id
-	err = db.CreateDeviceType(ctx, &DeviceType{DeviceType: "box", AgentConfigID: 0})
-	if !errors.Is(err, ErrInvalidAgentConfigID) {
-		t.Errorf("expected ErrInvalidAgentConfigID, got %v", err)
+	err = db.CreateDeviceType(ctx, &DeviceType{DeviceType: "box", AgentConfigId: 0})
+	if !errors.Is(err, ErrInvalidAgentConfigId) {
+		t.Errorf("expected ErrInvalidAgentConfigId, got %v", err)
 	}
 
 	// Non-existent agent config id
-	err = db.CreateDeviceType(ctx, &DeviceType{DeviceType: "box", AgentConfigID: 99999})
+	err = db.CreateDeviceType(ctx, &DeviceType{DeviceType: "box", AgentConfigId: 99999})
 	if !errors.Is(err, ErrReferencedAgentNotFound) {
 		t.Errorf("expected ErrReferencedAgentNotFound, got %v", err)
 	}
 
 	// Duplicate device type create
-	validDt := &DeviceType{DeviceType: "box", AgentConfigID: agentID}
+	validDt := &DeviceType{DeviceType: "box", AgentConfigId: agentId}
 	if err := db.CreateDeviceType(ctx, validDt); err != nil {
 		t.Fatalf("CreateDeviceType validDt failed: %v", err)
 	}
 
-	dupDt := &DeviceType{DeviceType: "box", AgentConfigID: agentID}
+	dupDt := &DeviceType{DeviceType: "box", AgentConfigId: agentId}
 	err = db.CreateDeviceType(ctx, dupDt)
 	if !errors.Is(err, ErrDeviceTypeAlreadyExists) {
 		t.Errorf("expected ErrDeviceTypeAlreadyExists, got %v", err)
 	}
 
-	// Find by non-existent ID
-	_, err = db.FindDeviceTypeByID(ctx, 99999)
+	// Find by non-existent Id
+	_, err = db.FindDeviceTypeById(ctx, 99999)
 	if !errors.Is(err, ErrDeviceTypeNotFound) {
 		t.Errorf("expected ErrDeviceTypeNotFound, got %v", err)
 	}
 
-	// Find by zero ID
-	_, err = db.FindDeviceTypeByID(ctx, 0)
-	if !errors.Is(err, ErrInvalidDeviceTypeID) {
-		t.Errorf("expected ErrInvalidDeviceTypeID, got %v", err)
+	// Find by zero Id
+	_, err = db.FindDeviceTypeById(ctx, 0)
+	if !errors.Is(err, ErrInvalidDeviceTypeId) {
+		t.Errorf("expected ErrInvalidDeviceTypeId, got %v", err)
 	}
 
-	// Update non-existent ID
-	err = db.UpdateDeviceTypeByID(ctx, &DeviceType{ID: 99999, DeviceType: "new-box", AgentConfigID: agentID})
+	// Update non-existent Id
+	err = db.UpdateDeviceTypeById(ctx, &DeviceType{Id: 99999, DeviceType: "new-box", AgentConfigId: agentId})
 	if !errors.Is(err, ErrDeviceTypeNotFound) {
 		t.Errorf("expected ErrDeviceTypeNotFound, got %v", err)
 	}
 
-	// Delete non-existent ID
+	// Delete non-existent Id
 	err = db.DeleteDeviceType(ctx, 99999)
 	if !errors.Is(err, ErrDeviceTypeNotFound) {
 		t.Errorf("expected ErrDeviceTypeNotFound, got %v", err)
@@ -307,11 +307,11 @@ func TestDeviceTypeValidation(t *testing.T) {
 	if !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Errorf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
-	_, err = nilDB.FindDeviceTypeByID(ctx, 1)
+	_, err = nilDB.FindDeviceTypeById(ctx, 1)
 	if !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Errorf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
-	err = nilDB.UpdateDeviceTypeByID(ctx, validDt)
+	err = nilDB.UpdateDeviceTypeById(ctx, validDt)
 	if !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Errorf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}

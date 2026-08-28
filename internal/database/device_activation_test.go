@@ -12,8 +12,8 @@ func TestActivateDeviceBySerialNumber_InitialActivation(t *testing.T) {
 	ctx := context.Background()
 
 	testSN := "sn-initial-001"
-	testDeviceID := "11:22:33:44:55:66"
-	testClientID := "client-001"
+	testDeviceId := "11:22:33:44:55:66"
+	testClientId := "client-001"
 
 	// Preset credential as enabled
 	err := db.BatchCreateDeviceHmacCredentials(ctx, []*DeviceHmacCredential{
@@ -28,18 +28,18 @@ func TestActivateDeviceBySerialNumber_InitialActivation(t *testing.T) {
 		t.Fatalf("BatchCreateDeviceHmacCredentials failed: %v", err)
 	}
 
-	act, err := db.ActivateDeviceBySerialNumber(ctx, testSN, testDeviceID, testClientID)
+	act, err := db.ActivateDeviceBySerialNumber(ctx, testSN, testDeviceId, testClientId)
 	if err != nil {
 		t.Fatalf("ActivateDeviceBySerialNumber failed: %v", err)
 	}
 	if act.SerialNumber != testSN {
 		t.Errorf("expected SN %q, got %q", testSN, act.SerialNumber)
 	}
-	if act.DeviceID != testDeviceID {
-		t.Errorf("expected DeviceID %q, got %q", testDeviceID, act.DeviceID)
+	if act.DeviceId != testDeviceId {
+		t.Errorf("expected DeviceId %q, got %q", testDeviceId, act.DeviceId)
 	}
-	if act.ClientID != testClientID {
-		t.Errorf("expected ClientID %q, got %q", testClientID, act.ClientID)
+	if act.ClientId != testClientId {
+		t.Errorf("expected ClientId %q, got %q", testClientId, act.ClientId)
 	}
 	if act.ActivationStatus != ActivationStatusActive {
 		t.Errorf("expected status %q, got %q", ActivationStatusActive, act.ActivationStatus)
@@ -60,8 +60,8 @@ func TestActivateDeviceBySerialNumber_ReactivationClearsOldBindingAndToken(t *te
 	ctx := context.Background()
 
 	testSN := "sn-reactivate-db-001"
-	testDeviceID := "11:22:33:44:55:66"
-	testClientID := "client-001"
+	testDeviceId := "11:22:33:44:55:66"
+	testClientId := "client-001"
 
 	// 1. Setup initial activation, user binding, and access token
 	err := db.BatchCreateDeviceHmacCredentials(ctx, []*DeviceHmacCredential{
@@ -76,7 +76,7 @@ func TestActivateDeviceBySerialNumber_ReactivationClearsOldBindingAndToken(t *te
 		t.Fatalf("BatchCreateDeviceHmacCredentials failed: %v", err)
 	}
 
-	_, err = db.ActivateDeviceBySerialNumber(ctx, testSN, testDeviceID, testClientID)
+	_, err = db.ActivateDeviceBySerialNumber(ctx, testSN, testDeviceId, testClientId)
 	if err != nil {
 		t.Fatalf("initial ActivateDeviceBySerialNumber failed: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestActivateDeviceBySerialNumber_ReactivationClearsOldBindingAndToken(t *te
 
 	// Verify before reactivation that binding and token exist
 	ref, err := db.FindDeviceUserRefBySerialNumber(ctx, testSN)
-	if err != nil || ref.UserID != 42 {
+	if err != nil || ref.UserId != 42 {
 		t.Fatalf("expected user binding 42, got ref: %+v, err: %v", ref, err)
 	}
 	tok, err := db.FindDeviceAccessTokenByAccessToken(ctx, oldToken)
@@ -107,15 +107,15 @@ func TestActivateDeviceBySerialNumber_ReactivationClearsOldBindingAndToken(t *te
 	}
 
 	// 2. Reactivate with updated device_id / client_id
-	newDeviceID := "AA:BB:CC:DD:EE:FF"
-	newClientID := "client-002"
-	act, err := db.ActivateDeviceBySerialNumber(ctx, testSN, newDeviceID, newClientID)
+	newDeviceId := "AA:BB:CC:DD:EE:FF"
+	newClientId := "client-002"
+	act, err := db.ActivateDeviceBySerialNumber(ctx, testSN, newDeviceId, newClientId)
 	if err != nil {
 		t.Fatalf("reactivate ActivateDeviceBySerialNumber failed: %v", err)
 	}
-	if act.DeviceID != newDeviceID || act.ClientID != newClientID {
-		t.Errorf("expected updated device/client IDs (%s, %s), got (%s, %s)",
-			newDeviceID, newClientID, act.DeviceID, act.ClientID)
+	if act.DeviceId != newDeviceId || act.ClientId != newClientId {
+		t.Errorf("expected updated device/client Ids (%s, %s), got (%s, %s)",
+			newDeviceId, newClientId, act.DeviceId, act.ClientId)
 	}
 
 	// 3. User binding must be deleted
@@ -139,8 +139,8 @@ func TestActivateDeviceBySerialNumber_TransactionRollbackOnContextCancel(t *test
 	db := setupTestDB(t)
 
 	testSN := "sn-rollback-001"
-	testDeviceID := "11:22:33:44:55:66"
-	testClientID := "client-001"
+	testDeviceId := "11:22:33:44:55:66"
+	testClientId := "client-001"
 
 	err := db.BatchCreateDeviceHmacCredentials(context.Background(), []*DeviceHmacCredential{
 		{
@@ -158,7 +158,7 @@ func TestActivateDeviceBySerialNumber_TransactionRollbackOnContextCancel(t *test
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = db.ActivateDeviceBySerialNumber(canceledCtx, testSN, testDeviceID, testClientID)
+	_, err = db.ActivateDeviceBySerialNumber(canceledCtx, testSN, testDeviceId, testClientId)
 	if err == nil {
 		t.Fatal("expected error with canceled context, got nil")
 	}
@@ -184,10 +184,10 @@ func TestBindDeviceWithSN_InitialSuccess(t *testing.T) {
 	ctx := context.Background()
 
 	testSN := "sn-bind-db-001"
-	testDeviceID := "11:22:33:44:55:66"
-	testClientID := "client-bind-001"
+	testDeviceId := "11:22:33:44:55:66"
+	testClientId := "client-bind-001"
 	testToken := "token-bind-11112222333344445555666677778888"
-	testUserID := uint64(101)
+	testUserId := uint64(101)
 	testDeviceType := "esp32-s3-robot"
 
 	// Preset credential as enabled with specific device_type
@@ -204,13 +204,13 @@ func TestBindDeviceWithSN_InitialSuccess(t *testing.T) {
 		t.Fatalf("BatchCreateDeviceHmacCredentials failed: %v", err)
 	}
 
-	act, err := db.BindDeviceWithSN(ctx, testSN, testDeviceID, testClientID, testToken, testUserID)
+	act, err := db.BindDeviceWithSN(ctx, testSN, testDeviceId, testClientId, testToken, testUserId)
 	if err != nil {
 		t.Fatalf("BindDeviceWithSN failed: %v", err)
 	}
 
 	// 1. Verify activation record
-	if act.SerialNumber != testSN || act.DeviceID != testDeviceID || act.ClientID != testClientID {
+	if act.SerialNumber != testSN || act.DeviceId != testDeviceId || act.ClientId != testClientId {
 		t.Errorf("unexpected activation: %+v", act)
 	}
 	if act.ActivationStatus != ActivationStatusActive {
@@ -222,8 +222,8 @@ func TestBindDeviceWithSN_InitialSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindDeviceUserRefBySerialNumber failed: %v", err)
 	}
-	if ref.UserID != testUserID {
-		t.Errorf("expected user_id %d, got %d", testUserID, ref.UserID)
+	if ref.UserId != testUserId {
+		t.Errorf("expected user_id %d, got %d", testUserId, ref.UserId)
 	}
 
 	// 3. Verify credential status transitioned to activated
@@ -253,32 +253,32 @@ func TestBindDeviceWithSN_RebindUpdatesAllTables(t *testing.T) {
 	ctx := context.Background()
 
 	testSN := "sn-rebind-db-001"
-	oldDeviceID := "11:22:33:44:55:66"
-	oldClientID := "client-old"
+	oldDeviceId := "11:22:33:44:55:66"
+	oldClientId := "client-old"
 	oldToken := "old-token-11112222333344445555666677778888"
-	oldUserID := uint64(10)
+	oldUserId := uint64(10)
 
 	// 1. Initial binding
-	_, err := db.BindDeviceWithSN(ctx, testSN, oldDeviceID, oldClientID, oldToken, oldUserID)
+	_, err := db.BindDeviceWithSN(ctx, testSN, oldDeviceId, oldClientId, oldToken, oldUserId)
 	if err != nil {
 		t.Fatalf("initial BindDeviceWithSN failed: %v", err)
 	}
 
 	// 2. Re-bind to a different user with new device/client/token
-	newDeviceID := "AA:BB:CC:DD:EE:FF"
-	newClientID := "client-new"
+	newDeviceId := "AA:BB:CC:DD:EE:FF"
+	newClientId := "client-new"
 	newToken := "new-token-99998888777766665555444433332222"
-	newUserID := uint64(20)
+	newUserId := uint64(20)
 
-	act, err := db.BindDeviceWithSN(ctx, testSN, newDeviceID, newClientID, newToken, newUserID)
+	act, err := db.BindDeviceWithSN(ctx, testSN, newDeviceId, newClientId, newToken, newUserId)
 	if err != nil {
 		t.Fatalf("rebind BindDeviceWithSN failed: %v", err)
 	}
 
 	// 3. Verify activation updated
-	if act.DeviceID != newDeviceID || act.ClientID != newClientID {
+	if act.DeviceId != newDeviceId || act.ClientId != newClientId {
 		t.Errorf("expected updated device/client (%s, %s), got (%s, %s)",
-			newDeviceID, newClientID, act.DeviceID, act.ClientID)
+			newDeviceId, newClientId, act.DeviceId, act.ClientId)
 	}
 
 	// 4. Verify user binding updated to new user
@@ -286,8 +286,8 @@ func TestBindDeviceWithSN_RebindUpdatesAllTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindDeviceUserRefBySerialNumber failed: %v", err)
 	}
-	if ref.UserID != newUserID {
-		t.Errorf("expected user_id %d, got %d", newUserID, ref.UserID)
+	if ref.UserId != newUserId {
+		t.Errorf("expected user_id %d, got %d", newUserId, ref.UserId)
 	}
 
 	// 5. Verify old token no longer exists, new token is valid
@@ -309,10 +309,10 @@ func TestBindDeviceWithSN_TransactionRollbackOnContextCancel(t *testing.T) {
 	db := setupTestDB(t)
 
 	testSN := "sn-rollback-bind-001"
-	testDeviceID := "11:22:33:44:55:66"
-	testClientID := "client-001"
+	testDeviceId := "11:22:33:44:55:66"
+	testClientId := "client-001"
 	testToken := "token-rollback-1111222233334444"
-	testUserID := uint64(99)
+	testUserId := uint64(99)
 
 	err := db.BatchCreateDeviceHmacCredentials(context.Background(), []*DeviceHmacCredential{
 		{
@@ -329,7 +329,7 @@ func TestBindDeviceWithSN_TransactionRollbackOnContextCancel(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err = db.BindDeviceWithSN(canceledCtx, testSN, testDeviceID, testClientID, testToken, testUserID)
+	_, err = db.BindDeviceWithSN(canceledCtx, testSN, testDeviceId, testClientId, testToken, testUserId)
 	if err == nil {
 		t.Fatal("expected error with canceled context, got nil")
 	}
@@ -376,10 +376,10 @@ func TestBindDeviceWithSN_ValidationErrors(t *testing.T) {
 		t.Errorf("expected ErrEmptyAccessToken, got: %v", err)
 	}
 
-	// Zero UserID
+	// Zero UserId
 	_, err = db.BindDeviceWithSN(ctx, "sn", "dev", "cli", "tok", 0)
-	if !errors.Is(err, ErrEmptyUserID) {
-		t.Errorf("expected ErrEmptyUserID, got: %v", err)
+	if !errors.Is(err, ErrEmptyUserId) {
+		t.Errorf("expected ErrEmptyUserId, got: %v", err)
 	}
 }
 
@@ -428,15 +428,15 @@ func TestDeviceActivationCRUDAndFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ActivateDeviceBySerialNumber act1 failed: %v", err)
 	}
-	if act1.ID == 0 {
-		t.Fatalf("expected non-zero ID for act1")
+	if act1.Id == 0 {
+		t.Fatalf("expected non-zero Id for act1")
 	}
 
 	act2, err := db.ActivateDeviceBySerialNumber(ctx, "sn-act-crud-002", "dev-id-002", "client-id-002")
 	if err != nil {
 		t.Fatalf("ActivateDeviceBySerialNumber act2 failed: %v", err)
 	}
-	_ = db.UpdateDeviceActivation(ctx, act2.ID, map[string]any{"activation_status": ActivationStatusFrozen})
+	_ = db.UpdateDeviceActivation(ctx, act2.Id, map[string]any{"activation_status": ActivationStatusFrozen})
 
 	// 2. List with pagination
 	list, total, err := db.ListDeviceActivations(ctx, DeviceActivationFilter{
@@ -476,7 +476,7 @@ func TestDeviceActivationCRUDAndFiltering(t *testing.T) {
 	}
 
 	// 5. Update activation
-	err = db.UpdateDeviceActivation(ctx, act1.ID, map[string]any{
+	err = db.UpdateDeviceActivation(ctx, act1.Id, map[string]any{
 		"device_id":         "dev-id-001-updated",
 		"activation_status": ActivationStatusRevoked,
 	})
@@ -488,15 +488,15 @@ func TestDeviceActivationCRUDAndFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindDeviceActivationBySerialNumber failed: %v", err)
 	}
-	if updatedAct.DeviceID != "dev-id-001-updated" {
-		t.Errorf("expected updated device_id, got %q", updatedAct.DeviceID)
+	if updatedAct.DeviceId != "dev-id-001-updated" {
+		t.Errorf("expected updated device_id, got %q", updatedAct.DeviceId)
 	}
 	if updatedAct.ActivationStatus != ActivationStatusRevoked {
 		t.Errorf("expected status revoked, got %q", updatedAct.ActivationStatus)
 	}
 
 	// 6. Delete single activation
-	if err := db.DeleteDeviceActivation(ctx, act1.ID); err != nil {
+	if err := db.DeleteDeviceActivation(ctx, act1.Id); err != nil {
 		t.Fatalf("DeleteDeviceActivation failed: %v", err)
 	}
 	_, err = db.FindDeviceActivationBySerialNumber(ctx, "sn-act-crud-001")
@@ -507,7 +507,7 @@ func TestDeviceActivationCRUDAndFiltering(t *testing.T) {
 	// 7. Batch delete activations
 	act3, _ := db.ActivateDeviceBySerialNumber(ctx, "sn-act-crud-003", "dev-id-003", "")
 
-	if err := db.BatchDeleteDeviceActivations(ctx, []uint64{act2.ID, act3.ID}); err != nil {
+	if err := db.BatchDeleteDeviceActivations(ctx, []uint64{act2.Id, act3.Id}); err != nil {
 		t.Fatalf("BatchDeleteDeviceActivations failed: %v", err)
 	}
 

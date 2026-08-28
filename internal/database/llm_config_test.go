@@ -28,14 +28,14 @@ func TestLLMConfig_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLLMConfig failed: %v", err)
 	}
-	if cfg.ID == 0 {
-		t.Fatalf("expected non-zero ID after create")
+	if cfg.Id == 0 {
+		t.Fatalf("expected non-zero Id after create")
 	}
 
-	// 2. Find by ID
-	found, err := db.FindLLMConfigByID(ctx, cfg.ID)
+	// 2. Find by Id
+	found, err := db.FindLLMConfigById(ctx, cfg.Id)
 	if err != nil {
-		t.Fatalf("FindLLMConfigByID failed: %v", err)
+		t.Fatalf("FindLLMConfigById failed: %v", err)
 	}
 	if found.Name != "百炼大语言模型" {
 		t.Errorf("expected name %q, got %q", "百炼大语言模型", found.Name)
@@ -65,7 +65,7 @@ func TestLLMConfig_CRUD(t *testing.T) {
 		t.Errorf("expected enabled true, got false")
 	}
 
-	// 3. Update by ID
+	// 3. Update by Id
 	found.Name = "百炼大语言模型-更新版"
 	found.Provider = "openai"
 	found.Endpoint = "http://localhost:8000/v1/chat/completions"
@@ -76,15 +76,15 @@ func TestLLMConfig_CRUD(t *testing.T) {
 	found.OverallTimeoutMS = 45000
 	found.Enabled = false
 
-	err = db.UpdateLLMConfigByID(ctx, found)
+	err = db.UpdateLLMConfigById(ctx, found)
 	if err != nil {
-		t.Fatalf("UpdateLLMConfigByID failed: %v", err)
+		t.Fatalf("UpdateLLMConfigById failed: %v", err)
 	}
 
 	// 4. Verify Update
-	updated, err := db.FindLLMConfigByID(ctx, cfg.ID)
+	updated, err := db.FindLLMConfigById(ctx, cfg.Id)
 	if err != nil {
-		t.Fatalf("FindLLMConfigByID after update failed: %v", err)
+		t.Fatalf("FindLLMConfigById after update failed: %v", err)
 	}
 	if updated.Name != "百炼大语言模型-更新版" {
 		t.Errorf("expected updated name %q, got %q", "百炼大语言模型-更新版", updated.Name)
@@ -114,9 +114,9 @@ func TestLLMConfig_CRUD(t *testing.T) {
 		t.Errorf("expected updated enabled false, got %v", updated.Enabled)
 	}
 
-	// 5. Update non-existent ID
+	// 5. Update non-existent Id
 	nonExistent := &LLMConfig{
-		ID:                  999999,
+		Id:                  999999,
 		Name:                "不存在的LLM配置",
 		Endpoint:            "https://example.com/llm",
 		Model:               "model-v1",
@@ -124,13 +124,13 @@ func TestLLMConfig_CRUD(t *testing.T) {
 		OverallTimeoutMS:    30000,
 		Enabled:             true,
 	}
-	err = db.UpdateLLMConfigByID(ctx, nonExistent)
+	err = db.UpdateLLMConfigById(ctx, nonExistent)
 	if !errors.Is(err, ErrLLMConfigNotFound) {
 		t.Fatalf("expected ErrLLMConfigNotFound, got %v", err)
 	}
 
-	// 6. Find non-existent ID
-	_, err = db.FindLLMConfigByID(ctx, 999999)
+	// 6. Find non-existent Id
+	_, err = db.FindLLMConfigById(ctx, 999999)
 	if !errors.Is(err, ErrLLMConfigNotFound) {
 		t.Fatalf("expected ErrLLMConfigNotFound, got %v", err)
 	}
@@ -165,8 +165,8 @@ func TestLLMConfig_DuplicateNameAllowed(t *testing.T) {
 	if err := db.CreateLLMConfig(ctx, cfg2); err != nil {
 		t.Fatalf("failed to create second config with same name: %v", err)
 	}
-	if cfg1.ID == cfg2.ID {
-		t.Fatalf("expected distinct IDs for duplicate names, got %d and %d", cfg1.ID, cfg2.ID)
+	if cfg1.Id == cfg2.Id {
+		t.Fatalf("expected distinct Ids for duplicate names, got %d and %d", cfg1.Id, cfg2.Id)
 	}
 	if cfg1.Provider != "" || cfg2.Provider != "" {
 		t.Fatalf("expected empty default provider, got %q and %q", cfg1.Provider, cfg2.Provider)
@@ -505,10 +505,10 @@ func TestLLMConfig_NilDB(t *testing.T) {
 	if err := nilDB.CreateLLMConfig(ctx, &LLMConfig{}); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
-	if _, err := nilDB.FindLLMConfigByID(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
+	if _, err := nilDB.FindLLMConfigById(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
-	if err := nilDB.UpdateLLMConfigByID(ctx, &LLMConfig{ID: 1}); !errors.Is(err, ErrDatabaseInstanceRequired) {
+	if err := nilDB.UpdateLLMConfigById(ctx, &LLMConfig{Id: 1}); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
 	if _, _, err := nilDB.ListLLMConfigs(ctx, LLMConfigFilter{}); !errors.Is(err, ErrDatabaseInstanceRequired) {
@@ -526,12 +526,12 @@ func TestLLMConfig_Delete(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	// 1. Delete invalid ID
-	if err := db.DeleteLLMConfig(ctx, 0); !errors.Is(err, ErrInvalidLLMConfigID) {
-		t.Fatalf("expected ErrInvalidLLMConfigID, got %v", err)
+	// 1. Delete invalid Id
+	if err := db.DeleteLLMConfig(ctx, 0); !errors.Is(err, ErrInvalidLLMConfigId) {
+		t.Fatalf("expected ErrInvalidLLMConfigId, got %v", err)
 	}
 
-	// 2. Delete non-existent ID
+	// 2. Delete non-existent Id
 	if err := db.DeleteLLMConfig(ctx, 99999); !errors.Is(err, ErrLLMConfigNotFound) {
 		t.Fatalf("expected ErrLLMConfigNotFound, got %v", err)
 	}
@@ -549,12 +549,12 @@ func TestLLMConfig_Delete(t *testing.T) {
 		t.Fatalf("CreateLLMConfig failed: %v", err)
 	}
 
-	if err := db.DeleteLLMConfig(ctx, cfg.ID); err != nil {
+	if err := db.DeleteLLMConfig(ctx, cfg.Id); err != nil {
 		t.Fatalf("DeleteLLMConfig failed: %v", err)
 	}
 
 	// 4. Verify deleted
-	_, err := db.FindLLMConfigByID(ctx, cfg.ID)
+	_, err := db.FindLLMConfigById(ctx, cfg.Id)
 	if !errors.Is(err, ErrLLMConfigNotFound) {
 		t.Fatalf("expected ErrLLMConfigNotFound after delete, got %v", err)
 	}
@@ -565,23 +565,23 @@ func TestLLMConfig_Delete(t *testing.T) {
 	_ = db.CreateLLMConfig(ctx, cfgA)
 	_ = db.CreateLLMConfig(ctx, cfgB)
 
-	// empty IDs should be no-op
+	// empty Ids should be no-op
 	if err := db.BatchDeleteLLMConfigs(ctx, []uint64{}); err != nil {
 		t.Fatalf("BatchDelete with empty list failed: %v", err)
 	}
 	if err := db.BatchDeleteLLMConfigs(ctx, []uint64{0}); err != nil {
-		t.Fatalf("BatchDelete with zero ID failed: %v", err)
+		t.Fatalf("BatchDelete with zero Id failed: %v", err)
 	}
 
-	if err := db.BatchDeleteLLMConfigs(ctx, []uint64{cfgA.ID, cfgB.ID}); err != nil {
+	if err := db.BatchDeleteLLMConfigs(ctx, []uint64{cfgA.Id, cfgB.Id}); err != nil {
 		t.Fatalf("BatchDeleteLLMConfigs failed: %v", err)
 	}
 
-	_, err = db.FindLLMConfigByID(ctx, cfgA.ID)
+	_, err = db.FindLLMConfigById(ctx, cfgA.Id)
 	if !errors.Is(err, ErrLLMConfigNotFound) {
 		t.Fatalf("expected ErrLLMConfigNotFound for cfgA, got %v", err)
 	}
-	_, err = db.FindLLMConfigByID(ctx, cfgB.ID)
+	_, err = db.FindLLMConfigById(ctx, cfgB.Id)
 	if !errors.Is(err, ErrLLMConfigNotFound) {
 		t.Fatalf("expected ErrLLMConfigNotFound for cfgB, got %v", err)
 	}

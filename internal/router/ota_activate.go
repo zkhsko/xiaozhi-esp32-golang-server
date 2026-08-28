@@ -123,15 +123,15 @@ func (h *OTAHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. 在单一数据库事务中完成激活、旧绑定/旧Token清理及凭证状态更新
-	deviceID := headers.DeviceID
-	clientID := headers.ClientID
+	deviceId := headers.DeviceId
+	clientId := headers.ClientId
 	authSN := cred.SerialNumber
 
-	act, err := h.db.ActivateDeviceBySerialNumber(r.Context(), authSN, deviceID, clientID)
+	act, err := h.db.ActivateDeviceBySerialNumber(r.Context(), authSN, deviceId, clientId)
 	if err != nil {
 		h.logger.Error("failed to activate device",
 			"serial_number", logger.TruncateString(authSN),
-			"device_id", logger.TruncateString(deviceID),
+			"device_id", logger.TruncateString(deviceId),
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -149,8 +149,8 @@ func (h *OTAHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Info("device activated successfully via hmac challenge",
 		"serial_number", logger.TruncateString(act.SerialNumber),
-		"device_id", logger.TruncateString(act.DeviceID),
-		"client_id", logger.TruncateString(act.ClientID),
+		"device_id", logger.TruncateString(act.DeviceId),
+		"client_id", logger.TruncateString(act.ClientId),
 		"activation_status", act.ActivationStatus,
 	)
 

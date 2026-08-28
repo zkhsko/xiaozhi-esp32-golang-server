@@ -28,14 +28,14 @@ func TestASRConfig_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateASRConfig failed: %v", err)
 	}
-	if cfg.ID == 0 {
-		t.Fatalf("expected non-zero ID after create")
+	if cfg.Id == 0 {
+		t.Fatalf("expected non-zero Id after create")
 	}
 
-	// 2. Find by ID
-	found, err := db.FindASRConfigByID(ctx, cfg.ID)
+	// 2. Find by Id
+	found, err := db.FindASRConfigById(ctx, cfg.Id)
 	if err != nil {
-		t.Fatalf("FindASRConfigByID failed: %v", err)
+		t.Fatalf("FindASRConfigById failed: %v", err)
 	}
 	if found.Name != "百炼语音识别" {
 		t.Errorf("expected name %q, got %q", "百炼语音识别", found.Name)
@@ -65,7 +65,7 @@ func TestASRConfig_CRUD(t *testing.T) {
 		t.Errorf("expected enabled true, got false")
 	}
 
-	// 3. Update by ID
+	// 3. Update by Id
 	found.Name = "百炼语音识别-更新版"
 	found.Provider = "volcengine"
 	found.Endpoint = "ws://localhost:9000/asr"
@@ -76,15 +76,15 @@ func TestASRConfig_CRUD(t *testing.T) {
 	found.ConnectTimeoutMS = 10000
 	found.Enabled = false
 
-	err = db.UpdateASRConfigByID(ctx, found)
+	err = db.UpdateASRConfigById(ctx, found)
 	if err != nil {
-		t.Fatalf("UpdateASRConfigByID failed: %v", err)
+		t.Fatalf("UpdateASRConfigById failed: %v", err)
 	}
 
 	// 4. Verify Update
-	updated, err := db.FindASRConfigByID(ctx, cfg.ID)
+	updated, err := db.FindASRConfigById(ctx, cfg.Id)
 	if err != nil {
-		t.Fatalf("FindASRConfigByID after update failed: %v", err)
+		t.Fatalf("FindASRConfigById after update failed: %v", err)
 	}
 	if updated.Name != "百炼语音识别-更新版" {
 		t.Errorf("expected updated name %q, got %q", "百炼语音识别-更新版", updated.Name)
@@ -114,22 +114,22 @@ func TestASRConfig_CRUD(t *testing.T) {
 		t.Errorf("expected updated enabled false, got %v", updated.Enabled)
 	}
 
-	// 5. Update non-existent ID
+	// 5. Update non-existent Id
 	nonExistent := &ASRConfig{
-		ID:               999999,
+		Id:               999999,
 		Name:             "不存在的配置",
 		Endpoint:         "wss://example.com/asr",
 		Model:            "model-v1",
 		ConnectTimeoutMS: 5000,
 		Enabled:          true,
 	}
-	err = db.UpdateASRConfigByID(ctx, nonExistent)
+	err = db.UpdateASRConfigById(ctx, nonExistent)
 	if !errors.Is(err, ErrASRConfigNotFound) {
 		t.Fatalf("expected ErrASRConfigNotFound, got %v", err)
 	}
 
-	// 6. Find non-existent ID
-	_, err = db.FindASRConfigByID(ctx, 999999)
+	// 6. Find non-existent Id
+	_, err = db.FindASRConfigById(ctx, 999999)
 	if !errors.Is(err, ErrASRConfigNotFound) {
 		t.Fatalf("expected ErrASRConfigNotFound, got %v", err)
 	}
@@ -159,9 +159,9 @@ func TestASRConfig_LargeHotwords(t *testing.T) {
 		t.Fatalf("CreateASRConfig with large hotwords failed: %v", err)
 	}
 
-	found, err := db.FindASRConfigByID(ctx, cfg.ID)
+	found, err := db.FindASRConfigById(ctx, cfg.Id)
 	if err != nil {
-		t.Fatalf("FindASRConfigByID failed: %v", err)
+		t.Fatalf("FindASRConfigById failed: %v", err)
 	}
 	if found.Hotwords != largeHotwords {
 		t.Fatalf("expected hotwords length %d, got %d", len(largeHotwords), len(found.Hotwords))
@@ -195,8 +195,8 @@ func TestASRConfig_DuplicateNameAllowed(t *testing.T) {
 	if err := db.CreateASRConfig(ctx, cfg2); err != nil {
 		t.Fatalf("failed to create second config with same name: %v", err)
 	}
-	if cfg1.ID == cfg2.ID {
-		t.Fatalf("expected distinct IDs for duplicate names, got %d and %d", cfg1.ID, cfg2.ID)
+	if cfg1.Id == cfg2.Id {
+		t.Fatalf("expected distinct Ids for duplicate names, got %d and %d", cfg1.Id, cfg2.Id)
 	}
 	if cfg1.Provider != "" || cfg2.Provider != "" {
 		t.Fatalf("expected empty default provider, got %q and %q", cfg1.Provider, cfg2.Provider)
@@ -508,10 +508,10 @@ func TestASRConfig_NilDB(t *testing.T) {
 	if err := nilDB.CreateASRConfig(ctx, &ASRConfig{}); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
-	if _, err := nilDB.FindASRConfigByID(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
+	if _, err := nilDB.FindASRConfigById(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
-	if err := nilDB.UpdateASRConfigByID(ctx, &ASRConfig{ID: 1}); !errors.Is(err, ErrDatabaseInstanceRequired) {
+	if err := nilDB.UpdateASRConfigById(ctx, &ASRConfig{Id: 1}); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
 	if _, _, err := nilDB.ListASRConfigs(ctx, ASRConfigFilter{}); !errors.Is(err, ErrDatabaseInstanceRequired) {
@@ -556,23 +556,23 @@ func TestASRConfig_DeleteAndBatchDelete(t *testing.T) {
 	_ = db.CreateASRConfig(ctx, cfg3)
 
 	// 1. Delete single config
-	if err := db.DeleteASRConfig(ctx, cfg1.ID); err != nil {
+	if err := db.DeleteASRConfig(ctx, cfg1.Id); err != nil {
 		t.Fatalf("DeleteASRConfig failed: %v", err)
 	}
 
 	// Verify deleted
-	_, err := db.FindASRConfigByID(ctx, cfg1.ID)
+	_, err := db.FindASRConfigById(ctx, cfg1.Id)
 	if !errors.Is(err, ErrASRConfigNotFound) {
 		t.Fatalf("expected ErrASRConfigNotFound after delete, got %v", err)
 	}
 
 	// Delete non-existent
 	if err := db.DeleteASRConfig(ctx, 99999); !errors.Is(err, ErrASRConfigNotFound) {
-		t.Fatalf("expected ErrASRConfigNotFound for non-existent ID, got %v", err)
+		t.Fatalf("expected ErrASRConfigNotFound for non-existent Id, got %v", err)
 	}
 
 	// 2. Batch delete
-	if err := db.BatchDeleteASRConfigs(ctx, []uint64{cfg2.ID, cfg3.ID}); err != nil {
+	if err := db.BatchDeleteASRConfigs(ctx, []uint64{cfg2.Id, cfg3.Id}); err != nil {
 		t.Fatalf("BatchDeleteASRConfigs failed: %v", err)
 	}
 

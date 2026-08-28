@@ -100,7 +100,7 @@ func NewTTSClient(cfg *config.Config) (*TTSClient, error) {
 
 type ttsRequestHeader struct {
 	Action    string `json:"action"`
-	TaskID    string `json:"task_id"`
+	TaskId    string `json:"task_id"`
 	Streaming string `json:"streaming"`
 }
 
@@ -152,7 +152,7 @@ type ttsCancelTaskMessage struct {
 type ttsResponseMessage struct {
 	Header struct {
 		Action       string `json:"action"`
-		TaskID       string `json:"task_id"`
+		TaskId       string `json:"task_id"`
 		Event        string `json:"event"`
 		ErrorCode    string `json:"error_code"`
 		ErrorMessage string `json:"error_message"`
@@ -186,11 +186,11 @@ func (c *TTSClient) CreateStream(ctx context.Context) (ai.TTSStream, error) {
 	}
 	conn.SetReadLimit(maxTTSReadMessageBytes)
 
-	taskID := newUUID()
+	taskId := newUUID()
 	runMsg := ttsRunTaskMessage{
 		Header: ttsRequestHeader{
 			Action:    "run-task",
-			TaskID:    taskID,
+			TaskId:    taskId,
 			Streaming: "duplex",
 		},
 		Payload: ttsRunPayload{
@@ -261,7 +261,7 @@ func (c *TTSClient) CreateStream(ctx context.Context) (ai.TTSStream, error) {
 
 	stream := &TTSStream{
 		conn:              conn,
-		taskID:            taskID,
+		taskId:            taskId,
 		firstAudioTimeout: c.firstAudioTimeout,
 		sentenceTimeout:   c.sentenceTimeout,
 		ctx:               streamCtx,
@@ -277,7 +277,7 @@ func (c *TTSClient) CreateStream(ctx context.Context) (ai.TTSStream, error) {
 // TTSStream 实现百炼流式语音合成会话。
 type TTSStream struct {
 	conn   *websocket.Conn
-	taskID string
+	taskId string
 
 	firstAudioTimeout time.Duration
 	sentenceTimeout   time.Duration
@@ -524,13 +524,13 @@ func (s *TTSStream) SendSentence(ctx context.Context, text string) error {
 		s.mu.RUnlock()
 		return err
 	}
-	taskID := s.taskID
+	taskId := s.taskId
 	s.mu.RUnlock()
 
 	msg := ttsContinueTaskMessage{
 		Header: ttsRequestHeader{
 			Action:    "continue-task",
-			TaskID:    taskID,
+			TaskId:    taskId,
 			Streaming: "duplex",
 		},
 		Payload: ttsContinuePayload{
@@ -593,13 +593,13 @@ func (s *TTSStream) Finish(ctx context.Context) error {
 		return err
 	}
 	s.finished = true
-	taskID := s.taskID
+	taskId := s.taskId
 	s.mu.Unlock()
 
 	finishMsg := ttsFinishTaskMessage{
 		Header: ttsRequestHeader{
 			Action:    "finish-task",
-			TaskID:    taskID,
+			TaskId:    taskId,
 			Streaming: "duplex",
 		},
 	}
@@ -693,13 +693,13 @@ func (s *TTSStream) Cancel(ctx context.Context) error {
 		s.mu.Unlock()
 		return s.Close()
 	}
-	taskID := s.taskID
+	taskId := s.taskId
 	s.mu.Unlock()
 
 	cancelMsg := ttsCancelTaskMessage{
 		Header: ttsRequestHeader{
 			Action:    "cancel-task",
-			TaskID:    taskID,
+			TaskId:    taskId,
 			Streaming: "duplex",
 		},
 	}

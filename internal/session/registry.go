@@ -105,8 +105,8 @@ func (r *Registry) Register(s *Session, release ...func()) (func(), bool) {
 			oldSession = old
 			r.logger.Info("evicting duplicate session for device",
 				"device_key", logger.TruncateString(deviceKey),
-				"old_session_id", old.SessionID(),
-				"new_session_id", s.SessionID(),
+				"old_session_id", old.SessionId(),
+				"new_session_id", s.SessionId(),
 			)
 		}
 		r.byDevice[deviceKey] = s

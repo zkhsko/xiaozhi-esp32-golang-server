@@ -34,7 +34,7 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 			}
 			h.logger.Info("device activation not found, issuing challenge only",
 				"serial_number", logger.TruncateString(headers.SerialNumber),
-				"device_id", logger.TruncateString(headers.DeviceID),
+				"device_id", logger.TruncateString(headers.DeviceId),
 			)
 		} else {
 			if !act.IsActive() {
@@ -59,16 +59,16 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 				}
 
 				// 设备已激活但未绑定用户：生成 6 位激活码并返回 code 和 message
-				deviceID := headers.DeviceID
-				if deviceID == "" {
-					deviceID = act.DeviceID
+				deviceId := headers.DeviceId
+				if deviceId == "" {
+					deviceId = act.DeviceId
 				}
-				clientID := headers.ClientID
-				if clientID == "" {
-					clientID = act.ClientID
+				clientId := headers.ClientId
+				if clientId == "" {
+					clientId = act.ClientId
 				}
 
-				pending, err := h.createPendingActivation(headers.SerialNumber, deviceID, clientID)
+				pending, err := h.createPendingActivation(headers.SerialNumber, deviceId, clientId)
 				if err != nil {
 					h.logger.Error("failed to create pending binding code",
 						"serial_number", logger.TruncateString(headers.SerialNumber),
@@ -80,7 +80,7 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 
 				h.logger.Info("device activated but unbound to user, issuing binding code",
 					"serial_number", logger.TruncateString(headers.SerialNumber),
-					"device_id", logger.TruncateString(deviceID),
+					"device_id", logger.TruncateString(deviceId),
 					"code", logger.TruncateString(pending.Code),
 				)
 
@@ -99,8 +99,8 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 			// 设备已激活且已绑定用户：正常返回 WebSocket 配置
 			h.logger.Info("device activation and user binding verified",
 				"serial_number", logger.TruncateString(act.SerialNumber),
-				"device_id", logger.TruncateString(act.DeviceID),
-				"user_id", userRef.UserID,
+				"device_id", logger.TruncateString(act.DeviceId),
+				"user_id", userRef.UserId,
 				"activation_status", act.ActivationStatus,
 				"activated_at", act.ActivatedAt,
 			)
@@ -139,7 +139,7 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 设备未激活（激活表中不存在记录）或未配置数据库：生成 challenge 挑战值并仅返回 challenge
-	pending, err := h.createPendingActivation(headers.SerialNumber, headers.DeviceID, headers.ClientID)
+	pending, err := h.createPendingActivation(headers.SerialNumber, headers.DeviceId, headers.ClientId)
 	if err != nil {
 		h.logger.Error("failed to create pending challenge",
 			"serial_number", logger.TruncateString(headers.SerialNumber),

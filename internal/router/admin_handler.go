@@ -33,7 +33,7 @@ type GenerateCredentialRequest struct {
 
 // CredentialItem 表示单条生成的设备 HMAC 凭证 DTO。
 type CredentialItem struct {
-	ID               uint64    `json:"id"`
+	Id               uint64    `json:"id"`
 	SerialNumber     string    `json:"serial_number"`
 	HMACKey          string    `json:"hmac_key"` // 16 进制 hex 编码密钥
 	AuthMethod       string    `json:"auth_method"`
@@ -68,7 +68,7 @@ type DeviceCredentialListData struct {
 
 // UpdateCredentialRequest 更新凭据请求体。
 type UpdateCredentialRequest struct {
-	ID               uint64 `json:"id"`
+	Id               uint64 `json:"id"`
 	DeviceType       string `json:"device_type"`
 	CredentialStatus string `json:"credential_status"`
 	AuthMethod       string `json:"auth_method"`
@@ -76,20 +76,20 @@ type UpdateCredentialRequest struct {
 
 // DeleteCredentialRequest 删除单条凭据请求体。
 type DeleteCredentialRequest struct {
-	ID uint64 `json:"id"`
+	Id uint64 `json:"id"`
 }
 
 // BatchDeleteCredentialRequest 批量删除请求体。
 type BatchDeleteCredentialRequest struct {
-	IDs []uint64 `json:"ids"`
+	Ids []uint64 `json:"ids"`
 }
 
 // ActivationItem 表示单条设备激活关系 DTO。
 type ActivationItem struct {
-	ID               uint64    `json:"id"`
+	Id               uint64    `json:"id"`
 	SerialNumber     string    `json:"serial_number"`
-	DeviceID         string    `json:"device_id"`
-	ClientID         string    `json:"client_id,omitempty"`
+	DeviceId         string    `json:"device_id"`
+	ClientId         string    `json:"client_id,omitempty"`
 	ActivationStatus string    `json:"activation_status"`
 	ActivatedAt      time.Time `json:"activated_at"`
 	CreatedAt        time.Time `json:"created_at"`
@@ -106,25 +106,25 @@ type DeviceActivationListData struct {
 
 // UpdateActivationRequest 更新激活记录请求体。
 type UpdateActivationRequest struct {
-	ID               uint64 `json:"id"`
-	DeviceID         string `json:"device_id"`
-	ClientID         string `json:"client_id"`
+	Id               uint64 `json:"id"`
+	DeviceId         string `json:"device_id"`
+	ClientId         string `json:"client_id"`
 	ActivationStatus string `json:"activation_status"`
 }
 
 // DeleteActivationRequest 删除单条激活记录请求体。
 type DeleteActivationRequest struct {
-	ID uint64 `json:"id"`
+	Id uint64 `json:"id"`
 }
 
 // BatchDeleteActivationRequest 批量删除激活记录请求体。
 type BatchDeleteActivationRequest struct {
-	IDs []uint64 `json:"ids"`
+	Ids []uint64 `json:"ids"`
 }
 
 // ASRConfigItem 表示单条 ASR 配置 DTO（api_key 脱敏为 has_api_key）。
 type ASRConfigItem struct {
-	ID               uint64    `json:"id"`
+	Id               uint64    `json:"id"`
 	Name             string    `json:"name"`
 	Provider         string    `json:"provider"`
 	Endpoint         string    `json:"endpoint"`
@@ -148,7 +148,7 @@ type ASRConfigListData struct {
 
 // SaveASRConfigRequest 保存或更新 ASR 配置请求体。
 type SaveASRConfigRequest struct {
-	ID               uint64 `json:"id"`
+	Id               uint64 `json:"id"`
 	Name             string `json:"name"`
 	Provider         string `json:"provider"`
 	Endpoint         string `json:"endpoint"`
@@ -162,17 +162,17 @@ type SaveASRConfigRequest struct {
 
 // DeleteASRConfigRequest 删除单条 ASR 配置请求体。
 type DeleteASRConfigRequest struct {
-	ID uint64 `json:"id"`
+	Id uint64 `json:"id"`
 }
 
 // BatchDeleteASRConfigRequest 批量删除 ASR 配置请求体。
 type BatchDeleteASRConfigRequest struct {
-	IDs []uint64 `json:"ids"`
+	Ids []uint64 `json:"ids"`
 }
 
 // LLMConfigItem 表示单条 LLM 配置 DTO（api_key 脱敏为 has_api_key）。
 type LLMConfigItem struct {
-	ID                  uint64    `json:"id"`
+	Id                  uint64    `json:"id"`
 	Name                string    `json:"name"`
 	Provider            string    `json:"provider"`
 	Endpoint            string    `json:"endpoint"`
@@ -196,7 +196,7 @@ type LLMConfigListData struct {
 
 // SaveLLMConfigRequest 保存或更新 LLM 配置请求体。
 type SaveLLMConfigRequest struct {
-	ID                  uint64 `json:"id"`
+	Id                  uint64 `json:"id"`
 	Name                string `json:"name"`
 	Provider            string `json:"provider"`
 	Endpoint            string `json:"endpoint"`
@@ -210,17 +210,17 @@ type SaveLLMConfigRequest struct {
 
 // DeleteLLMConfigRequest 删除单条 LLM 配置请求体。
 type DeleteLLMConfigRequest struct {
-	ID uint64 `json:"id"`
+	Id uint64 `json:"id"`
 }
 
 // BatchDeleteLLMConfigRequest 批量删除 LLM 配置请求体。
 type BatchDeleteLLMConfigRequest struct {
-	IDs []uint64 `json:"ids"`
+	Ids []uint64 `json:"ids"`
 }
 
 // TTSConfigItem 表示单条 TTS 配置 DTO（api_key 脱敏为 has_api_key）。
 type TTSConfigItem struct {
-	ID                  uint64    `json:"id"`
+	Id                  uint64    `json:"id"`
 	Name                string    `json:"name"`
 	Provider            string    `json:"provider"`
 	Endpoint            string    `json:"endpoint"`
@@ -246,7 +246,7 @@ type TTSConfigListData struct {
 
 // SaveTTSConfigRequest 保存或更新 TTS 配置请求体。
 type SaveTTSConfigRequest struct {
-	ID                  uint64 `json:"id"`
+	Id                  uint64 `json:"id"`
 	Name                string `json:"name"`
 	Provider            string `json:"provider"`
 	Endpoint            string `json:"endpoint"`
@@ -262,23 +262,23 @@ type SaveTTSConfigRequest struct {
 
 // DeleteTTSConfigRequest 删除单条 TTS 配置请求体。
 type DeleteTTSConfigRequest struct {
-	ID uint64 `json:"id"`
+	Id uint64 `json:"id"`
 }
 
 // BatchDeleteTTSConfigRequest 批量删除 TTS 配置请求体。
 type BatchDeleteTTSConfigRequest struct {
-	IDs []uint64 `json:"ids"`
+	Ids []uint64 `json:"ids"`
 }
 
 // AgentConfigItem 表示单条 Agent 配置 DTO。
 type AgentConfigItem struct {
-	ID           uint64    `json:"id"`
+	Id           uint64    `json:"id"`
 	Name         string    `json:"name"`
-	ASRConfigID  uint64    `json:"asr_config_id"`
+	ASRConfigId  uint64    `json:"asr_config_id"`
 	ASRName      string    `json:"asr_name,omitempty"`
-	LLMConfigID  uint64    `json:"llm_config_id"`
+	LLMConfigId  uint64    `json:"llm_config_id"`
 	LLMName      string    `json:"llm_name,omitempty"`
-	TTSConfigID  uint64    `json:"tts_config_id"`
+	TTSConfigId  uint64    `json:"tts_config_id"`
 	TTSName      string    `json:"tts_name,omitempty"`
 	SystemPrompt string    `json:"system_prompt"`
 	Voice        string    `json:"voice"`
@@ -297,11 +297,11 @@ type AgentConfigListData struct {
 
 // SaveAgentConfigRequest 保存或更新 Agent 配置请求体。
 type SaveAgentConfigRequest struct {
-	ID           uint64 `json:"id"`
+	Id           uint64 `json:"id"`
 	Name         string `json:"name"`
-	ASRConfigID  uint64 `json:"asr_config_id"`
-	LLMConfigID  uint64 `json:"llm_config_id"`
-	TTSConfigID  uint64 `json:"tts_config_id"`
+	ASRConfigId  uint64 `json:"asr_config_id"`
+	LLMConfigId  uint64 `json:"llm_config_id"`
+	TTSConfigId  uint64 `json:"tts_config_id"`
 	SystemPrompt string `json:"system_prompt"`
 	Voice        string `json:"voice"`
 	Enabled      *bool  `json:"enabled"`
@@ -309,24 +309,24 @@ type SaveAgentConfigRequest struct {
 
 // DeleteAgentConfigRequest 删除单条 Agent 配置请求体。
 type DeleteAgentConfigRequest struct {
-	ID uint64 `json:"id"`
+	Id uint64 `json:"id"`
 }
 
 // BatchDeleteAgentConfigRequest 批量删除 Agent 配置请求体。
 type BatchDeleteAgentConfigRequest struct {
-	IDs []uint64 `json:"ids"`
+	Ids []uint64 `json:"ids"`
 }
 
 // ActivateAgentConfigRequest 激活单条 Agent 配置请求体。
 type ActivateAgentConfigRequest struct {
-	ID uint64 `json:"id"`
+	Id uint64 `json:"id"`
 }
 
 // DeviceTypeItem 表示单条设备类型与 Agent 关联配置 DTO。
 type DeviceTypeItem struct {
-	ID            uint64    `json:"id"`
+	Id            uint64    `json:"id"`
 	DeviceType    string    `json:"device_type"`
-	AgentConfigID uint64    `json:"agent_config_id"`
+	AgentConfigId uint64    `json:"agent_config_id"`
 	AgentName     string    `json:"agent_name,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
@@ -342,19 +342,19 @@ type DeviceTypeListData struct {
 
 // SaveDeviceTypeRequest 保存或更新设备类型配置请求体。
 type SaveDeviceTypeRequest struct {
-	ID            uint64 `json:"id"`
+	Id            uint64 `json:"id"`
 	DeviceType    string `json:"device_type"`
-	AgentConfigID uint64 `json:"agent_config_id"`
+	AgentConfigId uint64 `json:"agent_config_id"`
 }
 
 // DeleteDeviceTypeRequest 删除单条设备类型配置请求体。
 type DeleteDeviceTypeRequest struct {
-	ID uint64 `json:"id"`
+	Id uint64 `json:"id"`
 }
 
 // BatchDeleteDeviceTypeRequest 批量删除设备类型配置请求体。
 type BatchDeleteDeviceTypeRequest struct {
-	IDs []uint64 `json:"ids"`
+	Ids []uint64 `json:"ids"`
 }
 
 
@@ -479,7 +479,7 @@ func (h *AdminHandler) handleListCredentials(w http.ResponseWriter, r *http.Requ
 	items := make([]CredentialItem, 0, len(creds))
 	for _, c := range creds {
 		items = append(items, CredentialItem{
-			ID:               c.ID,
+			Id:               c.Id,
 			SerialNumber:     c.SerialNumber,
 			HMACKey:          c.HMACKeyCiphertext,
 			AuthMethod:       c.AuthMethod,
@@ -515,7 +515,7 @@ func (h *AdminHandler) handleUpdateCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
 		return
 	}
@@ -539,12 +539,12 @@ func (h *AdminHandler) handleUpdateCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if err := h.db.UpdateDeviceHmacCredential(r.Context(), req.ID, updates); err != nil {
+	if err := h.db.UpdateDeviceHmacCredential(r.Context(), req.Id, updates); err != nil {
 		if errors.Is(err, database.ErrCredentialNotFound) {
 			http.Error(w, "credential not found", http.StatusNotFound)
 			return
 		}
-		h.logger.Error("failed to update credential", "id", req.ID, "error", err)
+		h.logger.Error("failed to update credential", "id", req.Id, "error", err)
 		http.Error(w, "failed to update credential", http.StatusInternalServerError)
 		return
 	}
@@ -569,17 +569,17 @@ func (h *AdminHandler) handleDeleteCredential(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.DeleteDeviceHmacCredential(r.Context(), req.ID); err != nil {
+	if err := h.db.DeleteDeviceHmacCredential(r.Context(), req.Id); err != nil {
 		if errors.Is(err, database.ErrCredentialNotFound) {
 			http.Error(w, "credential not found", http.StatusNotFound)
 			return
 		}
-		h.logger.Error("failed to delete credential", "id", req.ID, "error", err)
+		h.logger.Error("failed to delete credential", "id", req.Id, "error", err)
 		http.Error(w, "failed to delete credential", http.StatusInternalServerError)
 		return
 	}
@@ -604,12 +604,12 @@ func (h *AdminHandler) handleBatchDeleteCredentials(w http.ResponseWriter, r *ht
 		return
 	}
 
-	if len(req.IDs) == 0 {
+	if len(req.Ids) == 0 {
 		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.BatchDeleteDeviceHmacCredentials(r.Context(), req.IDs); err != nil {
+	if err := h.db.BatchDeleteDeviceHmacCredentials(r.Context(), req.Ids); err != nil {
 		h.logger.Error("failed to batch delete credentials", "error", err)
 		http.Error(w, "failed to batch delete credentials", http.StatusInternalServerError)
 		return
@@ -695,9 +695,9 @@ func (h *AdminHandler) handleGenerateCredential(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// 补充数据库生成的自增 ID 和时间戳
+	// 补充数据库生成的自增 Id 和时间戳
 	for i := range records {
-		items[i].ID = records[i].ID
+		items[i].Id = records[i].Id
 		items[i].CreatedAt = records[i].CreatedAt
 		items[i].UpdatedAt = records[i].UpdatedAt
 	}
@@ -817,8 +817,8 @@ func (h *AdminHandler) handleListActivations(w http.ResponseWriter, r *http.Requ
 
 	filter := database.DeviceActivationFilter{
 		SerialNumber:     query.Get("serial_number"),
-		DeviceID:         query.Get("device_id"),
-		ClientID:         query.Get("client_id"),
+		DeviceId:         query.Get("device_id"),
+		ClientId:         query.Get("client_id"),
 		ActivationStatus: query.Get("activation_status"),
 		Page:             page,
 		PageSize:         pageSize,
@@ -834,10 +834,10 @@ func (h *AdminHandler) handleListActivations(w http.ResponseWriter, r *http.Requ
 	items := make([]ActivationItem, 0, len(acts))
 	for _, a := range acts {
 		items = append(items, ActivationItem{
-			ID:               a.ID,
+			Id:               a.Id,
 			SerialNumber:     a.SerialNumber,
-			DeviceID:         a.DeviceID,
-			ClientID:         a.ClientID,
+			DeviceId:         a.DeviceId,
+			ClientId:         a.ClientId,
 			ActivationStatus: a.ActivationStatus,
 			ActivatedAt:      a.ActivatedAt,
 			CreatedAt:        a.CreatedAt,
@@ -870,17 +870,17 @@ func (h *AdminHandler) handleUpdateActivation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
 		return
 	}
 
 	updates := make(map[string]any)
-	if req.DeviceID != "" {
-		updates["device_id"] = strings.TrimSpace(req.DeviceID)
+	if req.DeviceId != "" {
+		updates["device_id"] = strings.TrimSpace(req.DeviceId)
 	}
-	if req.ClientID != "" {
-		updates["client_id"] = strings.TrimSpace(req.ClientID)
+	if req.ClientId != "" {
+		updates["client_id"] = strings.TrimSpace(req.ClientId)
 	}
 	if req.ActivationStatus != "" {
 		updates["activation_status"] = strings.TrimSpace(req.ActivationStatus)
@@ -894,12 +894,12 @@ func (h *AdminHandler) handleUpdateActivation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if err := h.db.UpdateDeviceActivation(r.Context(), req.ID, updates); err != nil {
+	if err := h.db.UpdateDeviceActivation(r.Context(), req.Id, updates); err != nil {
 		if errors.Is(err, database.ErrActivationNotFound) {
 			http.Error(w, "activation not found", http.StatusNotFound)
 			return
 		}
-		h.logger.Error("failed to update activation", "id", req.ID, "error", err)
+		h.logger.Error("failed to update activation", "id", req.Id, "error", err)
 		http.Error(w, "failed to update activation", http.StatusInternalServerError)
 		return
 	}
@@ -924,17 +924,17 @@ func (h *AdminHandler) handleDeleteActivation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.DeleteDeviceActivation(r.Context(), req.ID); err != nil {
+	if err := h.db.DeleteDeviceActivation(r.Context(), req.Id); err != nil {
 		if errors.Is(err, database.ErrActivationNotFound) {
 			http.Error(w, "activation not found", http.StatusNotFound)
 			return
 		}
-		h.logger.Error("failed to delete activation", "id", req.ID, "error", err)
+		h.logger.Error("failed to delete activation", "id", req.Id, "error", err)
 		http.Error(w, "failed to delete activation", http.StatusInternalServerError)
 		return
 	}
@@ -959,12 +959,12 @@ func (h *AdminHandler) handleBatchDeleteActivations(w http.ResponseWriter, r *ht
 		return
 	}
 
-	if len(req.IDs) == 0 {
+	if len(req.Ids) == 0 {
 		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.BatchDeleteDeviceActivations(r.Context(), req.IDs); err != nil {
+	if err := h.db.BatchDeleteDeviceActivations(r.Context(), req.Ids); err != nil {
 		h.logger.Error("failed to batch delete activations", "error", err)
 		http.Error(w, "failed to batch delete activations", http.StatusInternalServerError)
 		return
@@ -1019,7 +1019,7 @@ func (h *AdminHandler) handleListASRConfigs(w http.ResponseWriter, r *http.Reque
 	items := make([]ASRConfigItem, 0, len(configs))
 	for _, cfg := range configs {
 		items = append(items, ASRConfigItem{
-			ID:               cfg.ID,
+			Id:               cfg.Id,
 			Name:             cfg.Name,
 			Provider:         cfg.Provider,
 			Endpoint:         cfg.Endpoint,
@@ -1045,7 +1045,7 @@ func (h *AdminHandler) handleListASRConfigs(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleSaveASRConfig 创建或更新 ASR 语音识别配置（ID 为 0 时创建，ID > 0 时按 ID 覆盖）。
+// handleSaveASRConfig 创建或更新 ASR 语音识别配置（Id 为 0 时创建，Id > 0 时按 Id 覆盖）。
 func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		h.logger.Error("database dependency not properly initialized")
@@ -1071,7 +1071,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 
 	provider := strings.TrimSpace(req.Provider)
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		// 创建新配置
 		cfg := &database.ASRConfig{
 			Name:             strings.TrimSpace(req.Name),
@@ -1094,7 +1094,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 			Success: true,
 			Message: "ASR 配置创建成功",
 			Data: ASRConfigItem{
-				ID:               cfg.ID,
+				Id:               cfg.Id,
 				Name:             cfg.Name,
 				Provider:         cfg.Provider,
 				Endpoint:         cfg.Endpoint,
@@ -1112,7 +1112,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 覆盖更新已有配置
-	existing, err := h.db.FindASRConfigByID(r.Context(), req.ID)
+	existing, err := h.db.FindASRConfigById(r.Context(), req.Id)
 	if err != nil {
 		if errors.Is(err, database.ErrASRConfigNotFound) {
 			http.Error(w, "asr config not found", http.StatusNotFound)
@@ -1136,7 +1136,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 	}
 
 	updatedCfg := &database.ASRConfig{
-		ID:               req.ID,
+		Id:               req.Id,
 		Name:             strings.TrimSpace(req.Name),
 		Provider:         provider,
 		Endpoint:         strings.TrimSpace(req.Endpoint),
@@ -1148,7 +1148,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 		Enabled:          enabled,
 	}
 
-	if err := h.db.UpdateASRConfigByID(r.Context(), updatedCfg); err != nil {
+	if err := h.db.UpdateASRConfigById(r.Context(), updatedCfg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1157,7 +1157,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 		Success: true,
 		Message: "ASR 配置更新成功",
 		Data: ASRConfigItem{
-			ID:               updatedCfg.ID,
+			Id:               updatedCfg.Id,
 			Name:             updatedCfg.Name,
 			Provider:         updatedCfg.Provider,
 			Endpoint:         updatedCfg.Endpoint,
@@ -1172,7 +1172,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// handleDeleteASRConfig 删除指定 ID 的 ASR 配置记录。
+// handleDeleteASRConfig 删除指定 Id 的 ASR 配置记录。
 func (h *AdminHandler) handleDeleteASRConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		h.logger.Error("database dependency not properly initialized")
@@ -1186,17 +1186,17 @@ func (h *AdminHandler) handleDeleteASRConfig(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.DeleteASRConfig(r.Context(), req.ID); err != nil {
+	if err := h.db.DeleteASRConfig(r.Context(), req.Id); err != nil {
 		if errors.Is(err, database.ErrASRConfigNotFound) {
 			http.Error(w, "asr config not found", http.StatusNotFound)
 			return
 		}
-		h.logger.Error("failed to delete asr config", "id", req.ID, "error", err)
+		h.logger.Error("failed to delete asr config", "id", req.Id, "error", err)
 		http.Error(w, "failed to delete asr config", http.StatusInternalServerError)
 		return
 	}
@@ -1221,12 +1221,12 @@ func (h *AdminHandler) handleBatchDeleteASRConfigs(w http.ResponseWriter, r *htt
 		return
 	}
 
-	if len(req.IDs) == 0 {
+	if len(req.Ids) == 0 {
 		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.BatchDeleteASRConfigs(r.Context(), req.IDs); err != nil {
+	if err := h.db.BatchDeleteASRConfigs(r.Context(), req.Ids); err != nil {
 		h.logger.Error("failed to batch delete asr configs", "error", err)
 		http.Error(w, "failed to batch delete asr configs", http.StatusInternalServerError)
 		return
@@ -1234,7 +1234,7 @@ func (h *AdminHandler) handleBatchDeleteASRConfigs(w http.ResponseWriter, r *htt
 
 	writeJSON(w, http.StatusOK, AdminResponse{
 		Success: true,
-		Message: fmt.Sprintf("成功批量删除 %d 条 ASR 配置", len(req.IDs)),
+		Message: fmt.Sprintf("成功批量删除 %d 条 ASR 配置", len(req.Ids)),
 	})
 }
 
@@ -1281,7 +1281,7 @@ func (h *AdminHandler) handleListLLMConfigs(w http.ResponseWriter, r *http.Reque
 	items := make([]LLMConfigItem, 0, len(configs))
 	for _, cfg := range configs {
 		items = append(items, LLMConfigItem{
-			ID:                  cfg.ID,
+			Id:                  cfg.Id,
 			Name:                cfg.Name,
 			Provider:            cfg.Provider,
 			Endpoint:            cfg.Endpoint,
@@ -1307,7 +1307,7 @@ func (h *AdminHandler) handleListLLMConfigs(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleSaveLLMConfig 创建或更新 LLM 大语言模型配置（ID 为 0 时创建，ID > 0 时按 ID 覆盖）。
+// handleSaveLLMConfig 创建或更新 LLM 大语言模型配置（Id 为 0 时创建，Id > 0 时按 Id 覆盖）。
 func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		h.logger.Error("database dependency not properly initialized")
@@ -1338,7 +1338,7 @@ func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Reques
 
 	provider := strings.TrimSpace(req.Provider)
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		// 创建新配置
 		cfg := &database.LLMConfig{
 			Name:                strings.TrimSpace(req.Name),
@@ -1361,7 +1361,7 @@ func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Reques
 			Success: true,
 			Message: "LLM 配置创建成功",
 			Data: LLMConfigItem{
-				ID:                  cfg.ID,
+				Id:                  cfg.Id,
 				Name:                cfg.Name,
 				Provider:            cfg.Provider,
 				Endpoint:            cfg.Endpoint,
@@ -1379,7 +1379,7 @@ func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 覆盖更新已有配置
-	existing, err := h.db.FindLLMConfigByID(r.Context(), req.ID)
+	existing, err := h.db.FindLLMConfigById(r.Context(), req.Id)
 	if err != nil {
 		if errors.Is(err, database.ErrLLMConfigNotFound) {
 			http.Error(w, "llm config not found", http.StatusNotFound)
@@ -1403,7 +1403,7 @@ func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Reques
 	}
 
 	updatedCfg := &database.LLMConfig{
-		ID:                  req.ID,
+		Id:                  req.Id,
 		Name:                strings.TrimSpace(req.Name),
 		Provider:            provider,
 		Endpoint:            strings.TrimSpace(req.Endpoint),
@@ -1415,7 +1415,7 @@ func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Reques
 		Enabled:             enabled,
 	}
 
-	if err := h.db.UpdateLLMConfigByID(r.Context(), updatedCfg); err != nil {
+	if err := h.db.UpdateLLMConfigById(r.Context(), updatedCfg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1424,7 +1424,7 @@ func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Reques
 		Success: true,
 		Message: "LLM 配置更新成功",
 		Data: LLMConfigItem{
-			ID:                  updatedCfg.ID,
+			Id:                  updatedCfg.Id,
 			Name:                updatedCfg.Name,
 			Provider:            updatedCfg.Provider,
 			Endpoint:            updatedCfg.Endpoint,
@@ -1439,7 +1439,7 @@ func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// handleDeleteLLMConfig 删除指定 ID 的 LLM 配置记录。
+// handleDeleteLLMConfig 删除指定 Id 的 LLM 配置记录。
 func (h *AdminHandler) handleDeleteLLMConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		h.logger.Error("database dependency not properly initialized")
@@ -1453,17 +1453,17 @@ func (h *AdminHandler) handleDeleteLLMConfig(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.DeleteLLMConfig(r.Context(), req.ID); err != nil {
+	if err := h.db.DeleteLLMConfig(r.Context(), req.Id); err != nil {
 		if errors.Is(err, database.ErrLLMConfigNotFound) {
 			http.Error(w, "llm config not found", http.StatusNotFound)
 			return
 		}
-		h.logger.Error("failed to delete llm config", "id", req.ID, "error", err)
+		h.logger.Error("failed to delete llm config", "id", req.Id, "error", err)
 		http.Error(w, "failed to delete llm config", http.StatusInternalServerError)
 		return
 	}
@@ -1488,12 +1488,12 @@ func (h *AdminHandler) handleBatchDeleteLLMConfigs(w http.ResponseWriter, r *htt
 		return
 	}
 
-	if len(req.IDs) == 0 {
+	if len(req.Ids) == 0 {
 		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.BatchDeleteLLMConfigs(r.Context(), req.IDs); err != nil {
+	if err := h.db.BatchDeleteLLMConfigs(r.Context(), req.Ids); err != nil {
 		h.logger.Error("failed to batch delete llm configs", "error", err)
 		http.Error(w, "failed to batch delete llm configs", http.StatusInternalServerError)
 		return
@@ -1501,7 +1501,7 @@ func (h *AdminHandler) handleBatchDeleteLLMConfigs(w http.ResponseWriter, r *htt
 
 	writeJSON(w, http.StatusOK, AdminResponse{
 		Success: true,
-		Message: fmt.Sprintf("成功批量删除 %d 条 LLM 配置", len(req.IDs)),
+		Message: fmt.Sprintf("成功批量删除 %d 条 LLM 配置", len(req.Ids)),
 	})
 }
 
@@ -1548,7 +1548,7 @@ func (h *AdminHandler) handleListTTSConfigs(w http.ResponseWriter, r *http.Reque
 	items := make([]TTSConfigItem, 0, len(configs))
 	for _, cfg := range configs {
 		items = append(items, TTSConfigItem{
-			ID:                  cfg.ID,
+			Id:                  cfg.Id,
 			Name:                cfg.Name,
 			Provider:            cfg.Provider,
 			Endpoint:            cfg.Endpoint,
@@ -1576,7 +1576,7 @@ func (h *AdminHandler) handleListTTSConfigs(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleSaveTTSConfig 创建或更新 TTS 语音合成配置（ID 为 0 时创建，ID > 0 时按 ID 覆盖）。
+// handleSaveTTSConfig 创建或更新 TTS 语音合成配置（Id 为 0 时创建，Id > 0 时按 Id 覆盖）。
 func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		h.logger.Error("database dependency not properly initialized")
@@ -1617,7 +1617,7 @@ func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Reques
 		voices = "[]"
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		// 创建新配置
 		cfg := &database.TTSConfig{
 			Name:                strings.TrimSpace(req.Name),
@@ -1642,7 +1642,7 @@ func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Reques
 			Success: true,
 			Message: "TTS 配置创建成功",
 			Data: TTSConfigItem{
-				ID:                  cfg.ID,
+				Id:                  cfg.Id,
 				Name:                cfg.Name,
 				Provider:            cfg.Provider,
 				Endpoint:            cfg.Endpoint,
@@ -1662,7 +1662,7 @@ func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 覆盖更新已有配置
-	existing, err := h.db.FindTTSConfigByID(r.Context(), req.ID)
+	existing, err := h.db.FindTTSConfigById(r.Context(), req.Id)
 	if err != nil {
 		if errors.Is(err, database.ErrTTSConfigNotFound) {
 			http.Error(w, "tts config not found", http.StatusNotFound)
@@ -1690,7 +1690,7 @@ func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Reques
 	}
 
 	updatedCfg := &database.TTSConfig{
-		ID:                  req.ID,
+		Id:                  req.Id,
 		Name:                strings.TrimSpace(req.Name),
 		Provider:            provider,
 		Endpoint:            strings.TrimSpace(req.Endpoint),
@@ -1704,7 +1704,7 @@ func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Reques
 		Enabled:             enabled,
 	}
 
-	if err := h.db.UpdateTTSConfigByID(r.Context(), updatedCfg); err != nil {
+	if err := h.db.UpdateTTSConfigById(r.Context(), updatedCfg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -1713,7 +1713,7 @@ func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Reques
 		Success: true,
 		Message: "TTS 配置更新成功",
 		Data: TTSConfigItem{
-			ID:                  updatedCfg.ID,
+			Id:                  updatedCfg.Id,
 			Name:                updatedCfg.Name,
 			Provider:            updatedCfg.Provider,
 			Endpoint:            updatedCfg.Endpoint,
@@ -1730,7 +1730,7 @@ func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Reques
 	})
 }
 
-// handleDeleteTTSConfig 删除指定 ID 的 TTS 配置记录。
+// handleDeleteTTSConfig 删除指定 Id 的 TTS 配置记录。
 func (h *AdminHandler) handleDeleteTTSConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		h.logger.Error("database dependency not properly initialized")
@@ -1744,17 +1744,17 @@ func (h *AdminHandler) handleDeleteTTSConfig(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.DeleteTTSConfig(r.Context(), req.ID); err != nil {
+	if err := h.db.DeleteTTSConfig(r.Context(), req.Id); err != nil {
 		if errors.Is(err, database.ErrTTSConfigNotFound) {
 			http.Error(w, "tts config not found", http.StatusNotFound)
 			return
 		}
-		h.logger.Error("failed to delete tts config", "id", req.ID, "error", err)
+		h.logger.Error("failed to delete tts config", "id", req.Id, "error", err)
 		http.Error(w, "failed to delete tts config", http.StatusInternalServerError)
 		return
 	}
@@ -1779,12 +1779,12 @@ func (h *AdminHandler) handleBatchDeleteTTSConfigs(w http.ResponseWriter, r *htt
 		return
 	}
 
-	if len(req.IDs) == 0 {
+	if len(req.Ids) == 0 {
 		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.BatchDeleteTTSConfigs(r.Context(), req.IDs); err != nil {
+	if err := h.db.BatchDeleteTTSConfigs(r.Context(), req.Ids); err != nil {
 		h.logger.Error("failed to batch delete tts configs", "error", err)
 		http.Error(w, "failed to batch delete tts configs", http.StatusInternalServerError)
 		return
@@ -1792,7 +1792,7 @@ func (h *AdminHandler) handleBatchDeleteTTSConfigs(w http.ResponseWriter, r *htt
 
 	writeJSON(w, http.StatusOK, AdminResponse{
 		Success: true,
-		Message: fmt.Sprintf("成功批量删除 %d 条 TTS 配置", len(req.IDs)),
+		Message: fmt.Sprintf("成功批量删除 %d 条 TTS 配置", len(req.Ids)),
 	})
 }
 
@@ -1835,29 +1835,29 @@ func (h *AdminHandler) handleListAgentConfigs(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// 收集引用的 ASR, LLM, TTS ID 并填充名称
+	// 收集引用的 ASR, LLM, TTS Id 并填充名称
 	asrMap := make(map[uint64]string)
 	llmMap := make(map[uint64]string)
 	ttsMap := make(map[uint64]string)
 	for _, cfg := range configs {
-		if cfg.ASRConfigID > 0 {
-			if _, ok := asrMap[cfg.ASRConfigID]; !ok {
-				if asr, err := h.db.FindASRConfigByID(r.Context(), cfg.ASRConfigID); err == nil && asr != nil {
-					asrMap[cfg.ASRConfigID] = asr.Name
+		if cfg.ASRConfigId > 0 {
+			if _, ok := asrMap[cfg.ASRConfigId]; !ok {
+				if asr, err := h.db.FindASRConfigById(r.Context(), cfg.ASRConfigId); err == nil && asr != nil {
+					asrMap[cfg.ASRConfigId] = asr.Name
 				}
 			}
 		}
-		if cfg.LLMConfigID > 0 {
-			if _, ok := llmMap[cfg.LLMConfigID]; !ok {
-				if llm, err := h.db.FindLLMConfigByID(r.Context(), cfg.LLMConfigID); err == nil && llm != nil {
-					llmMap[cfg.LLMConfigID] = llm.Name
+		if cfg.LLMConfigId > 0 {
+			if _, ok := llmMap[cfg.LLMConfigId]; !ok {
+				if llm, err := h.db.FindLLMConfigById(r.Context(), cfg.LLMConfigId); err == nil && llm != nil {
+					llmMap[cfg.LLMConfigId] = llm.Name
 				}
 			}
 		}
-		if cfg.TTSConfigID > 0 {
-			if _, ok := ttsMap[cfg.TTSConfigID]; !ok {
-				if tts, err := h.db.FindTTSConfigByID(r.Context(), cfg.TTSConfigID); err == nil && tts != nil {
-					ttsMap[cfg.TTSConfigID] = tts.Name
+		if cfg.TTSConfigId > 0 {
+			if _, ok := ttsMap[cfg.TTSConfigId]; !ok {
+				if tts, err := h.db.FindTTSConfigById(r.Context(), cfg.TTSConfigId); err == nil && tts != nil {
+					ttsMap[cfg.TTSConfigId] = tts.Name
 				}
 			}
 		}
@@ -1866,14 +1866,14 @@ func (h *AdminHandler) handleListAgentConfigs(w http.ResponseWriter, r *http.Req
 	items := make([]AgentConfigItem, 0, len(configs))
 	for _, cfg := range configs {
 		items = append(items, AgentConfigItem{
-			ID:           cfg.ID,
+			Id:           cfg.Id,
 			Name:         cfg.Name,
-			ASRConfigID:  cfg.ASRConfigID,
-			ASRName:      asrMap[cfg.ASRConfigID],
-			LLMConfigID:  cfg.LLMConfigID,
-			LLMName:      llmMap[cfg.LLMConfigID],
-			TTSConfigID:  cfg.TTSConfigID,
-			TTSName:      ttsMap[cfg.TTSConfigID],
+			ASRConfigId:  cfg.ASRConfigId,
+			ASRName:      asrMap[cfg.ASRConfigId],
+			LLMConfigId:  cfg.LLMConfigId,
+			LLMName:      llmMap[cfg.LLMConfigId],
+			TTSConfigId:  cfg.TTSConfigId,
+			TTSName:      ttsMap[cfg.TTSConfigId],
 			SystemPrompt: cfg.SystemPrompt,
 			Voice:        cfg.Voice,
 			Enabled:      cfg.Enabled,
@@ -1893,7 +1893,7 @@ func (h *AdminHandler) handleListAgentConfigs(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// handleSaveAgentConfig 创建或更新 Agent 配置（ID 为 0 时创建，ID > 0 时按 ID 覆盖）。
+// handleSaveAgentConfig 创建或更新 Agent 配置（Id 为 0 时创建，Id > 0 时按 Id 覆盖）。
 func (h *AdminHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		h.logger.Error("database dependency not properly initialized")
@@ -1912,13 +1912,13 @@ func (h *AdminHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http.Requ
 		enabled = *req.Enabled
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		// 创建新配置
 		cfg := &database.AgentConfig{
 			Name:         strings.TrimSpace(req.Name),
-			ASRConfigID:  req.ASRConfigID,
-			LLMConfigID:  req.LLMConfigID,
-			TTSConfigID:  req.TTSConfigID,
+			ASRConfigId:  req.ASRConfigId,
+			LLMConfigId:  req.LLMConfigId,
+			TTSConfigId:  req.TTSConfigId,
 			SystemPrompt: strings.TrimSpace(req.SystemPrompt),
 			Voice:        strings.TrimSpace(req.Voice),
 			Enabled:      false,
@@ -1930,8 +1930,8 @@ func (h *AdminHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http.Requ
 		}
 
 		if enabled {
-			if err := h.db.ActivateAgent(r.Context(), cfg.ID); err != nil {
-				h.logger.Warn("failed to activate newly created agent", "id", cfg.ID, "error", err)
+			if err := h.db.ActivateAgent(r.Context(), cfg.Id); err != nil {
+				h.logger.Warn("failed to activate newly created agent", "id", cfg.Id, "error", err)
 			} else {
 				cfg.Enabled = true
 			}
@@ -1941,11 +1941,11 @@ func (h *AdminHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http.Requ
 			Success: true,
 			Message: "Agent 配置创建成功",
 			Data: AgentConfigItem{
-				ID:           cfg.ID,
+				Id:           cfg.Id,
 				Name:         cfg.Name,
-				ASRConfigID:  cfg.ASRConfigID,
-				LLMConfigID:  cfg.LLMConfigID,
-				TTSConfigID:  cfg.TTSConfigID,
+				ASRConfigId:  cfg.ASRConfigId,
+				LLMConfigId:  cfg.LLMConfigId,
+				TTSConfigId:  cfg.TTSConfigId,
 				SystemPrompt: cfg.SystemPrompt,
 				Voice:        cfg.Voice,
 				Enabled:      cfg.Enabled,
@@ -1957,7 +1957,7 @@ func (h *AdminHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http.Requ
 	}
 
 	// 覆盖更新已有配置
-	existing, err := h.db.FindAgentConfigByID(r.Context(), req.ID)
+	existing, err := h.db.FindAgentConfigById(r.Context(), req.Id)
 	if err != nil {
 		if errors.Is(err, database.ErrAgentConfigNotFound) {
 			http.Error(w, "agent config not found", http.StatusNotFound)
@@ -1967,17 +1967,17 @@ func (h *AdminHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	asrID := existing.ASRConfigID
-	if req.ASRConfigID > 0 {
-		asrID = req.ASRConfigID
+	asrId := existing.ASRConfigId
+	if req.ASRConfigId > 0 {
+		asrId = req.ASRConfigId
 	}
-	llmID := existing.LLMConfigID
-	if req.LLMConfigID > 0 {
-		llmID = req.LLMConfigID
+	llmId := existing.LLMConfigId
+	if req.LLMConfigId > 0 {
+		llmId = req.LLMConfigId
 	}
-	ttsID := existing.TTSConfigID
-	if req.TTSConfigID > 0 {
-		ttsID = req.TTSConfigID
+	ttsId := existing.TTSConfigId
+	if req.TTSConfigId > 0 {
+		ttsId = req.TTSConfigId
 	}
 
 	name := existing.Name
@@ -1996,23 +1996,23 @@ func (h *AdminHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http.Requ
 	}
 
 	updatedCfg := &database.AgentConfig{
-		ID:           req.ID,
+		Id:           req.Id,
 		Name:         name,
-		ASRConfigID:  asrID,
-		LLMConfigID:  llmID,
-		TTSConfigID:  ttsID,
+		ASRConfigId:  asrId,
+		LLMConfigId:  llmId,
+		TTSConfigId:  ttsId,
 		SystemPrompt: systemPrompt,
 		Voice:        voice,
 		Enabled:      existing.Enabled,
 	}
 
-	if err := h.db.UpdateAgentConfigByID(r.Context(), updatedCfg); err != nil {
+	if err := h.db.UpdateAgentConfigById(r.Context(), updatedCfg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	if req.Enabled != nil && *req.Enabled && !existing.Enabled {
-		if err := h.db.ActivateAgent(r.Context(), req.ID); err != nil {
+		if err := h.db.ActivateAgent(r.Context(), req.Id); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -2023,11 +2023,11 @@ func (h *AdminHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http.Requ
 		Success: true,
 		Message: "Agent 配置更新成功",
 		Data: AgentConfigItem{
-			ID:           updatedCfg.ID,
+			Id:           updatedCfg.Id,
 			Name:         updatedCfg.Name,
-			ASRConfigID:  updatedCfg.ASRConfigID,
-			LLMConfigID:  updatedCfg.LLMConfigID,
-			TTSConfigID:  updatedCfg.TTSConfigID,
+			ASRConfigId:  updatedCfg.ASRConfigId,
+			LLMConfigId:  updatedCfg.LLMConfigId,
+			TTSConfigId:  updatedCfg.TTSConfigId,
 			SystemPrompt: updatedCfg.SystemPrompt,
 			Voice:        updatedCfg.Voice,
 			Enabled:      updatedCfg.Enabled,
@@ -2036,7 +2036,7 @@ func (h *AdminHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// handleDeleteAgentConfig 删除指定 ID 的 Agent 配置记录。
+// handleDeleteAgentConfig 删除指定 Id 的 Agent 配置记录。
 func (h *AdminHandler) handleDeleteAgentConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		h.logger.Error("database dependency not properly initialized")
@@ -2050,17 +2050,17 @@ func (h *AdminHandler) handleDeleteAgentConfig(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.DeleteAgentConfig(r.Context(), req.ID); err != nil {
+	if err := h.db.DeleteAgentConfig(r.Context(), req.Id); err != nil {
 		if errors.Is(err, database.ErrAgentConfigNotFound) {
 			http.Error(w, "agent config not found", http.StatusNotFound)
 			return
 		}
-		h.logger.Error("failed to delete agent config", "id", req.ID, "error", err)
+		h.logger.Error("failed to delete agent config", "id", req.Id, "error", err)
 		http.Error(w, "failed to delete agent config", http.StatusInternalServerError)
 		return
 	}
@@ -2085,12 +2085,12 @@ func (h *AdminHandler) handleBatchDeleteAgentConfigs(w http.ResponseWriter, r *h
 		return
 	}
 
-	if len(req.IDs) == 0 {
+	if len(req.Ids) == 0 {
 		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.BatchDeleteAgentConfigs(r.Context(), req.IDs); err != nil {
+	if err := h.db.BatchDeleteAgentConfigs(r.Context(), req.Ids); err != nil {
 		h.logger.Error("failed to batch delete agent configs", "error", err)
 		http.Error(w, "failed to batch delete agent configs", http.StatusInternalServerError)
 		return
@@ -2098,11 +2098,11 @@ func (h *AdminHandler) handleBatchDeleteAgentConfigs(w http.ResponseWriter, r *h
 
 	writeJSON(w, http.StatusOK, AdminResponse{
 		Success: true,
-		Message: fmt.Sprintf("成功批量删除 %d 条 Agent 配置", len(req.IDs)),
+		Message: fmt.Sprintf("成功批量删除 %d 条 Agent 配置", len(req.Ids)),
 	})
 }
 
-// handleActivateAgentConfig 激活指定 ID 的 Agent 配置。
+// handleActivateAgentConfig 激活指定 Id 的 Agent 配置。
 func (h *AdminHandler) handleActivateAgentConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		h.logger.Error("database dependency not properly initialized")
@@ -2116,12 +2116,12 @@ func (h *AdminHandler) handleActivateAgentConfig(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.ActivateAgent(r.Context(), req.ID); err != nil {
+	if err := h.db.ActivateAgent(r.Context(), req.Id); err != nil {
 		if errors.Is(err, database.ErrAgentConfigNotFound) {
 			http.Error(w, "agent config not found", http.StatusNotFound)
 			return
@@ -2135,7 +2135,7 @@ func (h *AdminHandler) handleActivateAgentConfig(w http.ResponseWriter, r *http.
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		h.logger.Error("failed to activate agent config", "id", req.ID, "error", err)
+		h.logger.Error("failed to activate agent config", "id", req.Id, "error", err)
 		http.Error(w, "failed to activate agent config", http.StatusInternalServerError)
 		return
 	}
@@ -2166,16 +2166,16 @@ func (h *AdminHandler) handleListDeviceTypes(w http.ResponseWriter, r *http.Requ
 		pageSize = 100
 	}
 
-	var agentConfigID uint64
-	if agentIDStr := query.Get("agent_config_id"); agentIDStr != "" {
-		if id, err := strconv.ParseUint(agentIDStr, 10, 64); err == nil {
-			agentConfigID = id
+	var agentConfigId uint64
+	if agentIdStr := query.Get("agent_config_id"); agentIdStr != "" {
+		if id, err := strconv.ParseUint(agentIdStr, 10, 64); err == nil {
+			agentConfigId = id
 		}
 	}
 
 	filter := database.DeviceTypeFilter{
 		DeviceType:    query.Get("device_type"),
-		AgentConfigID: agentConfigID,
+		AgentConfigId: agentConfigId,
 		Page:          page,
 		PageSize:      pageSize,
 	}
@@ -2189,10 +2189,10 @@ func (h *AdminHandler) handleListDeviceTypes(w http.ResponseWriter, r *http.Requ
 
 	agentMap := make(map[uint64]string)
 	for _, dt := range types {
-		if dt.AgentConfigID > 0 {
-			if _, ok := agentMap[dt.AgentConfigID]; !ok {
-				if agent, err := h.db.FindAgentConfigByID(r.Context(), dt.AgentConfigID); err == nil && agent != nil {
-					agentMap[dt.AgentConfigID] = agent.Name
+		if dt.AgentConfigId > 0 {
+			if _, ok := agentMap[dt.AgentConfigId]; !ok {
+				if agent, err := h.db.FindAgentConfigById(r.Context(), dt.AgentConfigId); err == nil && agent != nil {
+					agentMap[dt.AgentConfigId] = agent.Name
 				}
 			}
 		}
@@ -2201,10 +2201,10 @@ func (h *AdminHandler) handleListDeviceTypes(w http.ResponseWriter, r *http.Requ
 	items := make([]DeviceTypeItem, 0, len(types))
 	for _, dt := range types {
 		items = append(items, DeviceTypeItem{
-			ID:            dt.ID,
+			Id:            dt.Id,
 			DeviceType:    dt.DeviceType,
-			AgentConfigID: dt.AgentConfigID,
-			AgentName:     agentMap[dt.AgentConfigID],
+			AgentConfigId: dt.AgentConfigId,
+			AgentName:     agentMap[dt.AgentConfigId],
 			CreatedAt:     dt.CreatedAt,
 			UpdatedAt:     dt.UpdatedAt,
 		})
@@ -2221,7 +2221,7 @@ func (h *AdminHandler) handleListDeviceTypes(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// handleSaveDeviceType 创建或更新设备类型配置（ID 为 0 时创建，ID > 0 时按 ID 覆盖）。
+// handleSaveDeviceType 创建或更新设备类型配置（Id 为 0 时创建，Id > 0 时按 Id 覆盖）。
 func (h *AdminHandler) handleSaveDeviceType(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		h.logger.Error("database dependency not properly initialized")
@@ -2240,16 +2240,16 @@ func (h *AdminHandler) handleSaveDeviceType(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "device_type cannot be empty", http.StatusBadRequest)
 		return
 	}
-	if req.AgentConfigID == 0 {
+	if req.AgentConfigId == 0 {
 		http.Error(w, "agent_config_id is required and must be positive", http.StatusBadRequest)
 		return
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		// 创建新配置
 		dt := &database.DeviceType{
 			DeviceType:    req.DeviceType,
-			AgentConfigID: req.AgentConfigID,
+			AgentConfigId: req.AgentConfigId,
 		}
 
 		if err := h.db.CreateDeviceType(r.Context(), dt); err != nil {
@@ -2257,7 +2257,7 @@ func (h *AdminHandler) handleSaveDeviceType(w http.ResponseWriter, r *http.Reque
 				errors.Is(err, database.ErrReferencedAgentNotFound) ||
 				errors.Is(err, database.ErrEmptyDeviceType) ||
 				errors.Is(err, database.ErrInvalidDeviceTypeLength) ||
-				errors.Is(err, database.ErrInvalidAgentConfigID) {
+				errors.Is(err, database.ErrInvalidAgentConfigId) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -2267,7 +2267,7 @@ func (h *AdminHandler) handleSaveDeviceType(w http.ResponseWriter, r *http.Reque
 		}
 
 		var agentName string
-		if agent, err := h.db.FindAgentConfigByID(r.Context(), dt.AgentConfigID); err == nil && agent != nil {
+		if agent, err := h.db.FindAgentConfigById(r.Context(), dt.AgentConfigId); err == nil && agent != nil {
 			agentName = agent.Name
 		}
 
@@ -2275,9 +2275,9 @@ func (h *AdminHandler) handleSaveDeviceType(w http.ResponseWriter, r *http.Reque
 			Success: true,
 			Message: "设备类型配置创建成功",
 			Data: DeviceTypeItem{
-				ID:            dt.ID,
+				Id:            dt.Id,
 				DeviceType:    dt.DeviceType,
-				AgentConfigID: dt.AgentConfigID,
+				AgentConfigId: dt.AgentConfigId,
 				AgentName:     agentName,
 				CreatedAt:     dt.CreatedAt,
 				UpdatedAt:     dt.UpdatedAt,
@@ -2287,7 +2287,7 @@ func (h *AdminHandler) handleSaveDeviceType(w http.ResponseWriter, r *http.Reque
 	}
 
 	// 覆盖更新已有配置
-	existing, err := h.db.FindDeviceTypeByID(r.Context(), req.ID)
+	existing, err := h.db.FindDeviceTypeById(r.Context(), req.Id)
 	if err != nil {
 		if errors.Is(err, database.ErrDeviceTypeNotFound) {
 			http.Error(w, "device type not found", http.StatusNotFound)
@@ -2298,17 +2298,17 @@ func (h *AdminHandler) handleSaveDeviceType(w http.ResponseWriter, r *http.Reque
 	}
 
 	updatedDt := &database.DeviceType{
-		ID:            existing.ID,
+		Id:            existing.Id,
 		DeviceType:    req.DeviceType,
-		AgentConfigID: req.AgentConfigID,
+		AgentConfigId: req.AgentConfigId,
 	}
 
-	if err := h.db.UpdateDeviceTypeByID(r.Context(), updatedDt); err != nil {
+	if err := h.db.UpdateDeviceTypeById(r.Context(), updatedDt); err != nil {
 		if errors.Is(err, database.ErrDeviceTypeAlreadyExists) ||
 			errors.Is(err, database.ErrReferencedAgentNotFound) ||
 			errors.Is(err, database.ErrEmptyDeviceType) ||
 			errors.Is(err, database.ErrInvalidDeviceTypeLength) ||
-			errors.Is(err, database.ErrInvalidAgentConfigID) {
+			errors.Is(err, database.ErrInvalidAgentConfigId) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -2316,13 +2316,13 @@ func (h *AdminHandler) handleSaveDeviceType(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "device type not found", http.StatusNotFound)
 			return
 		}
-		h.logger.Error("failed to update device type", "id", req.ID, "error", err)
+		h.logger.Error("failed to update device type", "id", req.Id, "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	var agentName string
-	if agent, err := h.db.FindAgentConfigByID(r.Context(), updatedDt.AgentConfigID); err == nil && agent != nil {
+	if agent, err := h.db.FindAgentConfigById(r.Context(), updatedDt.AgentConfigId); err == nil && agent != nil {
 		agentName = agent.Name
 	}
 
@@ -2330,9 +2330,9 @@ func (h *AdminHandler) handleSaveDeviceType(w http.ResponseWriter, r *http.Reque
 		Success: true,
 		Message: "设备类型配置更新成功",
 		Data: DeviceTypeItem{
-			ID:            updatedDt.ID,
+			Id:            updatedDt.Id,
 			DeviceType:    updatedDt.DeviceType,
-			AgentConfigID: updatedDt.AgentConfigID,
+			AgentConfigId: updatedDt.AgentConfigId,
 			AgentName:     agentName,
 			CreatedAt:     existing.CreatedAt,
 			UpdatedAt:     time.Now(),
@@ -2340,7 +2340,7 @@ func (h *AdminHandler) handleSaveDeviceType(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleDeleteDeviceType 删除指定 ID 的设备类型配置记录。
+// handleDeleteDeviceType 删除指定 Id 的设备类型配置记录。
 func (h *AdminHandler) handleDeleteDeviceType(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		h.logger.Error("database dependency not properly initialized")
@@ -2354,17 +2354,17 @@ func (h *AdminHandler) handleDeleteDeviceType(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if req.ID == 0 {
+	if req.Id == 0 {
 		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.DeleteDeviceType(r.Context(), req.ID); err != nil {
+	if err := h.db.DeleteDeviceType(r.Context(), req.Id); err != nil {
 		if errors.Is(err, database.ErrDeviceTypeNotFound) {
 			http.Error(w, "device type not found", http.StatusNotFound)
 			return
 		}
-		h.logger.Error("failed to delete device type", "id", req.ID, "error", err)
+		h.logger.Error("failed to delete device type", "id", req.Id, "error", err)
 		http.Error(w, "failed to delete device type", http.StatusInternalServerError)
 		return
 	}
@@ -2389,12 +2389,12 @@ func (h *AdminHandler) handleBatchDeleteDeviceTypes(w http.ResponseWriter, r *ht
 		return
 	}
 
-	if len(req.IDs) == 0 {
+	if len(req.Ids) == 0 {
 		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.BatchDeleteDeviceTypes(r.Context(), req.IDs); err != nil {
+	if err := h.db.BatchDeleteDeviceTypes(r.Context(), req.Ids); err != nil {
 		h.logger.Error("failed to batch delete device types", "error", err)
 		http.Error(w, "failed to batch delete device types", http.StatusInternalServerError)
 		return
@@ -2402,7 +2402,7 @@ func (h *AdminHandler) handleBatchDeleteDeviceTypes(w http.ResponseWriter, r *ht
 
 	writeJSON(w, http.StatusOK, AdminResponse{
 		Success: true,
-		Message: fmt.Sprintf("成功批量删除 %d 条设备类型配置", len(req.IDs)),
+		Message: fmt.Sprintf("成功批量删除 %d 条设备类型配置", len(req.Ids)),
 	})
 }
 

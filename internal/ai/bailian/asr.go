@@ -73,7 +73,7 @@ func NewASRClient(cfg *config.Config) (*ASRClient, error) {
 
 type asrRequestHeader struct {
 	Action    string `json:"action"`
-	TaskID    string `json:"task_id"`
+	TaskId    string `json:"task_id"`
 	Streaming string `json:"streaming"`
 }
 
@@ -106,7 +106,7 @@ type asrFinishTaskMessage struct {
 }
 
 type asrSentenceOutput struct {
-	SentenceID    int    `json:"sentence_id"`
+	SentenceId    int    `json:"sentence_id"`
 	SentenceBegin bool   `json:"sentence_begin"`
 	SentenceEnd   bool   `json:"sentence_end"`
 	Text          string `json:"text"`
@@ -127,7 +127,7 @@ type asrResponsePayload struct {
 type asrResponseMessage struct {
 	Header struct {
 		Action       string `json:"action"`
-		TaskID       string `json:"task_id"`
+		TaskId       string `json:"task_id"`
 		Event        string `json:"event"`
 		ErrorCode    string `json:"error_code"`
 		ErrorMessage string `json:"error_message"`
@@ -157,11 +157,11 @@ func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 	}
 	conn.SetReadLimit(maxASRReadMessageBytes)
 
-	taskID := newUUID()
+	taskId := newUUID()
 	runMsg := asrRunTaskMessage{
 		Header: asrRequestHeader{
 			Action:    "run-task",
-			TaskID:    taskID,
+			TaskId:    taskId,
 			Streaming: "duplex",
 		},
 		Payload: asrRunPayload{
@@ -230,7 +230,7 @@ func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 
 	stream := &ASRStream{
 		conn:           conn,
-		taskID:         taskID,
+		taskId:         taskId,
 		ctx:            streamCtx,
 		cancel:         streamCancel,
 		vadReady:       make(chan struct{}),
@@ -245,7 +245,7 @@ func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 // ASRStream 实现百炼流式语音识别会话。
 type ASRStream struct {
 	conn   *websocket.Conn
-	taskID string
+	taskId string
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -499,13 +499,13 @@ func (s *ASRStream) Finish(ctx context.Context) error {
 		s.mu.Unlock()
 		return err
 	}
-	taskID := s.taskID
+	taskId := s.taskId
 	s.mu.Unlock()
 
 	finishMsg := asrFinishTaskMessage{
 		Header: asrRequestHeader{
 			Action:    "finish-task",
-			TaskID:    taskID,
+			TaskId:    taskId,
 			Streaming: "duplex",
 		},
 	}

@@ -17,8 +17,8 @@ var (
 	ErrLLMConfigNotFound = errors.New("llm config not found")
 	// ErrInvalidLLMConfig 表示 LLM 配置结构体为 nil 或非法。
 	ErrInvalidLLMConfig = errors.New("invalid llm config")
-	// ErrInvalidLLMConfigID 表示 LLM 配置 ID 为 0 或非法。
-	ErrInvalidLLMConfigID = errors.New("llm config id cannot be empty or zero")
+	// ErrInvalidLLMConfigId 表示 LLM 配置 Id 为 0 或非法。
+	ErrInvalidLLMConfigId = errors.New("llm config id cannot be empty or zero")
 	// ErrEmptyLLMConfigName 表示 LLM 配置名称为空。
 	ErrEmptyLLMConfigName = errors.New("llm config name cannot be empty")
 	// ErrInvalidLLMConfigNameLength 表示 LLM 配置名称长度超过 128 字节。
@@ -71,7 +71,7 @@ var (
 // - created_at: 创建时间。
 // - updated_at: 更新时间。
 type LLMConfig struct {
-	ID                  uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Id                  uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	Name                string    `gorm:"column:name;size:128;not null" json:"name"`
 	Provider            string    `gorm:"column:provider;size:64;not null;default:''" json:"provider"`
 	Endpoint            string    `gorm:"column:endpoint;size:1024;not null" json:"endpoint"`
@@ -194,13 +194,13 @@ func (d *Database) CreateLLMConfig(ctx context.Context, cfg *LLMConfig) error {
 	return nil
 }
 
-// FindLLMConfigByID 根据 ID 查询 LLM 配置。
-func (d *Database) FindLLMConfigByID(ctx context.Context, id uint64) (*LLMConfig, error) {
+// FindLLMConfigById 根据 Id 查询 LLM 配置。
+func (d *Database) FindLLMConfigById(ctx context.Context, id uint64) (*LLMConfig, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
 	if id == 0 {
-		return nil, ErrInvalidLLMConfigID
+		return nil, ErrInvalidLLMConfigId
 	}
 
 	var cfg LLMConfig
@@ -218,14 +218,14 @@ func (d *Database) FindLLMConfigByID(ctx context.Context, id uint64) (*LLMConfig
 	return &cfg, nil
 }
 
-// UpdateLLMConfigByID 按主键 ID 覆盖更新 LLM 配置。
+// UpdateLLMConfigById 按主键 Id 覆盖更新 LLM 配置。
 // 更新结果影响行数为 0 时返回 ErrLLMConfigNotFound。
-func (d *Database) UpdateLLMConfigByID(ctx context.Context, cfg *LLMConfig) error {
+func (d *Database) UpdateLLMConfigById(ctx context.Context, cfg *LLMConfig) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
 	}
-	if cfg == nil || cfg.ID == 0 {
-		return ErrInvalidLLMConfigID
+	if cfg == nil || cfg.Id == 0 {
+		return ErrInvalidLLMConfigId
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -247,13 +247,13 @@ func (d *Database) UpdateLLMConfigByID(ctx context.Context, cfg *LLMConfig) erro
 
 	res := d.gormDB.WithContext(ctx).
 		Model(&LLMConfig{}).
-		Where("id = ?", cfg.ID).
+		Where("id = ?", cfg.Id).
 		Updates(updates)
 	if res.Error != nil {
 		return fmt.Errorf("update llm config by id: %w", res.Error)
 	}
 	if res.RowsAffected == 0 {
-		return fmt.Errorf("update llm config by id %d: %w", cfg.ID, ErrLLMConfigNotFound)
+		return fmt.Errorf("update llm config by id %d: %w", cfg.Id, ErrLLMConfigNotFound)
 	}
 
 	return nil
@@ -303,13 +303,13 @@ func (d *Database) ListLLMConfigs(ctx context.Context, filter LLMConfigFilter) (
 	return configs, total, nil
 }
 
-// DeleteLLMConfig 删除指定 ID 的 LLM 配置记录。
+// DeleteLLMConfig 删除指定 Id 的 LLM 配置记录。
 func (d *Database) DeleteLLMConfig(ctx context.Context, id uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
 	}
 	if id == 0 {
-		return ErrInvalidLLMConfigID
+		return ErrInvalidLLMConfigId
 	}
 
 	res := d.gormDB.WithContext(ctx).Where("id = ?", id).Delete(&LLMConfig{})
@@ -322,7 +322,7 @@ func (d *Database) DeleteLLMConfig(ctx context.Context, id uint64) error {
 	return nil
 }
 
-// BatchDeleteLLMConfigs 批量删除指定 ID 列表的 LLM 配置记录。
+// BatchDeleteLLMConfigs 批量删除指定 Id 列表的 LLM 配置记录。
 func (d *Database) BatchDeleteLLMConfigs(ctx context.Context, ids []uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
@@ -331,17 +331,17 @@ func (d *Database) BatchDeleteLLMConfigs(ctx context.Context, ids []uint64) erro
 		return nil
 	}
 
-	validIDs := make([]uint64, 0, len(ids))
+	validIds := make([]uint64, 0, len(ids))
 	for _, id := range ids {
 		if id > 0 {
-			validIDs = append(validIDs, id)
+			validIds = append(validIds, id)
 		}
 	}
-	if len(validIDs) == 0 {
+	if len(validIds) == 0 {
 		return nil
 	}
 
-	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIDs).Delete(&LLMConfig{}).Error; err != nil {
+	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIds).Delete(&LLMConfig{}).Error; err != nil {
 		return fmt.Errorf("batch delete llm configs: %w", err)
 	}
 	return nil

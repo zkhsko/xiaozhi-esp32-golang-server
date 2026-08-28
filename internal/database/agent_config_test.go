@@ -8,7 +8,7 @@ import (
 )
 
 // helper 创建一组测试用的基础 ASR、LLM、TTS 组件。
-func createTestComponents(t *testing.T, db *Database, ctx context.Context) (asrID, llmID, ttsID uint64) {
+func createTestComponents(t *testing.T, db *Database, ctx context.Context) (asrId, llmId, ttsId uint64) {
 	t.Helper()
 
 	asr := &ASRConfig{
@@ -55,21 +55,21 @@ func createTestComponents(t *testing.T, db *Database, ctx context.Context) (asrI
 		t.Fatalf("create test tts failed: %v", err)
 	}
 
-	return asr.ID, llm.ID, tts.ID
+	return asr.Id, llm.Id, tts.Id
 }
 
 func TestAgentConfig_CRUD(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	asrID, llmID, ttsID := createTestComponents(t, db, ctx)
+	asrId, llmId, ttsId := createTestComponents(t, db, ctx)
 
 	// 1. Create AgentConfig
 	cfg := &AgentConfig{
 		Name:         "默认助手",
-		ASRConfigID:  asrID,
-		LLMConfigID:  llmID,
-		TTSConfigID:  ttsID,
+		ASRConfigId:  asrId,
+		LLMConfigId:  llmId,
+		TTSConfigId:  ttsId,
 		SystemPrompt: "你是一个智能语音助手。",
 		Voice:        "longanlingxi",
 		Enabled:      false,
@@ -79,26 +79,26 @@ func TestAgentConfig_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateAgentConfig failed: %v", err)
 	}
-	if cfg.ID == 0 {
-		t.Fatalf("expected non-zero ID after create")
+	if cfg.Id == 0 {
+		t.Fatalf("expected non-zero Id after create")
 	}
 
-	// 2. Find by ID
-	found, err := db.FindAgentConfigByID(ctx, cfg.ID)
+	// 2. Find by Id
+	found, err := db.FindAgentConfigById(ctx, cfg.Id)
 	if err != nil {
-		t.Fatalf("FindAgentConfigByID failed: %v", err)
+		t.Fatalf("FindAgentConfigById failed: %v", err)
 	}
 	if found.Name != "默认助手" {
 		t.Errorf("expected name %q, got %q", "默认助手", found.Name)
 	}
-	if found.ASRConfigID != asrID {
-		t.Errorf("expected asr_config_id %d, got %d", asrID, found.ASRConfigID)
+	if found.ASRConfigId != asrId {
+		t.Errorf("expected asr_config_id %d, got %d", asrId, found.ASRConfigId)
 	}
-	if found.LLMConfigID != llmID {
-		t.Errorf("expected llm_config_id %d, got %d", llmID, found.LLMConfigID)
+	if found.LLMConfigId != llmId {
+		t.Errorf("expected llm_config_id %d, got %d", llmId, found.LLMConfigId)
 	}
-	if found.TTSConfigID != ttsID {
-		t.Errorf("expected tts_config_id %d, got %d", ttsID, found.TTSConfigID)
+	if found.TTSConfigId != ttsId {
+		t.Errorf("expected tts_config_id %d, got %d", ttsId, found.TTSConfigId)
 	}
 	if found.SystemPrompt != "你是一个智能语音助手。" {
 		t.Errorf("expected system_prompt %q, got %q", "你是一个智能语音助手。", found.SystemPrompt)
@@ -110,20 +110,20 @@ func TestAgentConfig_CRUD(t *testing.T) {
 		t.Errorf("expected enabled false, got true")
 	}
 
-	// 3. Update by ID
+	// 3. Update by Id
 	found.Name = "儿童学习助手"
 	found.SystemPrompt = "你是一个专为儿童设计的学习助手。"
 	found.Voice = "longxiaochun"
 
-	err = db.UpdateAgentConfigByID(ctx, found)
+	err = db.UpdateAgentConfigById(ctx, found)
 	if err != nil {
-		t.Fatalf("UpdateAgentConfigByID failed: %v", err)
+		t.Fatalf("UpdateAgentConfigById failed: %v", err)
 	}
 
 	// 4. Verify Update
-	updated, err := db.FindAgentConfigByID(ctx, cfg.ID)
+	updated, err := db.FindAgentConfigById(ctx, cfg.Id)
 	if err != nil {
-		t.Fatalf("FindAgentConfigByID after update failed: %v", err)
+		t.Fatalf("FindAgentConfigById after update failed: %v", err)
 	}
 	if updated.Name != "儿童学习助手" {
 		t.Errorf("expected updated name %q, got %q", "儿童学习助手", updated.Name)
@@ -135,23 +135,23 @@ func TestAgentConfig_CRUD(t *testing.T) {
 		t.Errorf("expected updated voice %q, got %q", "longxiaochun", updated.Voice)
 	}
 
-	// 5. Update non-existent ID
+	// 5. Update non-existent Id
 	nonExistent := &AgentConfig{
-		ID:           999999,
+		Id:           999999,
 		Name:         "不存在的Agent",
-		ASRConfigID:  asrID,
-		LLMConfigID:  llmID,
-		TTSConfigID:  ttsID,
+		ASRConfigId:  asrId,
+		LLMConfigId:  llmId,
+		TTSConfigId:  ttsId,
 		SystemPrompt: "提示词",
 		Voice:        "v1",
 	}
-	err = db.UpdateAgentConfigByID(ctx, nonExistent)
+	err = db.UpdateAgentConfigById(ctx, nonExistent)
 	if !errors.Is(err, ErrAgentConfigNotFound) {
 		t.Fatalf("expected ErrAgentConfigNotFound, got %v", err)
 	}
 
-	// 6. Find non-existent ID
-	_, err = db.FindAgentConfigByID(ctx, 999999)
+	// 6. Find non-existent Id
+	_, err = db.FindAgentConfigById(ctx, 999999)
 	if !errors.Is(err, ErrAgentConfigNotFound) {
 		t.Fatalf("expected ErrAgentConfigNotFound, got %v", err)
 	}
@@ -161,21 +161,21 @@ func TestAgentConfig_DuplicateNameAllowed(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	asrID, llmID, ttsID := createTestComponents(t, db, ctx)
+	asrId, llmId, ttsId := createTestComponents(t, db, ctx)
 
 	cfg1 := &AgentConfig{
 		Name:         "同名助手",
-		ASRConfigID:  asrID,
-		LLMConfigID:  llmID,
-		TTSConfigID:  ttsID,
+		ASRConfigId:  asrId,
+		LLMConfigId:  llmId,
+		TTSConfigId:  ttsId,
 		SystemPrompt: "提示词1",
 		Voice:        "v1",
 	}
 	cfg2 := &AgentConfig{
 		Name:         "同名助手",
-		ASRConfigID:  asrID,
-		LLMConfigID:  llmID,
-		TTSConfigID:  ttsID,
+		ASRConfigId:  asrId,
+		LLMConfigId:  llmId,
+		TTSConfigId:  ttsId,
 		SystemPrompt: "提示词2",
 		Voice:        "v2",
 	}
@@ -186,8 +186,8 @@ func TestAgentConfig_DuplicateNameAllowed(t *testing.T) {
 	if err := db.CreateAgentConfig(ctx, cfg2); err != nil {
 		t.Fatalf("failed to create second agent config with same name: %v", err)
 	}
-	if cfg1.ID == cfg2.ID {
-		t.Fatalf("expected distinct IDs for duplicate names, got %d and %d", cfg1.ID, cfg2.ID)
+	if cfg1.Id == cfg2.Id {
+		t.Fatalf("expected distinct Ids for duplicate names, got %d and %d", cfg1.Id, cfg2.Id)
 	}
 }
 
@@ -195,12 +195,12 @@ func TestAgentConfig_ListAndFilter(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	asrID, llmID, ttsID := createTestComponents(t, db, ctx)
+	asrId, llmId, ttsId := createTestComponents(t, db, ctx)
 
 	items := []*AgentConfig{
-		{Name: "Agent-Alpha", ASRConfigID: asrID, LLMConfigID: llmID, TTSConfigID: ttsID, SystemPrompt: "p1", Voice: "v1", Enabled: true},
-		{Name: "Agent-Beta", ASRConfigID: asrID, LLMConfigID: llmID, TTSConfigID: ttsID, SystemPrompt: "p2", Voice: "v2", Enabled: false},
-		{Name: "Agent-Gamma", ASRConfigID: asrID, LLMConfigID: llmID, TTSConfigID: ttsID, SystemPrompt: "p3", Voice: "v3", Enabled: false},
+		{Name: "Agent-Alpha", ASRConfigId: asrId, LLMConfigId: llmId, TTSConfigId: ttsId, SystemPrompt: "p1", Voice: "v1", Enabled: true},
+		{Name: "Agent-Beta", ASRConfigId: asrId, LLMConfigId: llmId, TTSConfigId: ttsId, SystemPrompt: "p2", Voice: "v2", Enabled: false},
+		{Name: "Agent-Gamma", ASRConfigId: asrId, LLMConfigId: llmId, TTSConfigId: ttsId, SystemPrompt: "p3", Voice: "v3", Enabled: false},
 	}
 
 	for _, item := range items {
@@ -261,7 +261,7 @@ func TestAgentConfig_Validation(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	asrID, llmID, ttsID := createTestComponents(t, db, ctx)
+	asrId, llmId, ttsId := createTestComponents(t, db, ctx)
 
 	tests := []struct {
 		name        string
@@ -277,9 +277,9 @@ func TestAgentConfig_Validation(t *testing.T) {
 			name: "empty name",
 			cfg: &AgentConfig{
 				Name:         "   ",
-				ASRConfigID:  asrID,
-				LLMConfigID:  llmID,
-				TTSConfigID:  ttsID,
+				ASRConfigId:  asrId,
+				LLMConfigId:  llmId,
+				TTSConfigId:  ttsId,
 				SystemPrompt: "提示词",
 				Voice:        "v1",
 			},
@@ -289,9 +289,9 @@ func TestAgentConfig_Validation(t *testing.T) {
 			name: "name exceeds 128 bytes",
 			cfg: &AgentConfig{
 				Name:         strings.Repeat("a", 129),
-				ASRConfigID:  asrID,
-				LLMConfigID:  llmID,
-				TTSConfigID:  ttsID,
+				ASRConfigId:  asrId,
+				LLMConfigId:  llmId,
+				TTSConfigId:  ttsId,
 				SystemPrompt: "提示词",
 				Voice:        "v1",
 			},
@@ -301,9 +301,9 @@ func TestAgentConfig_Validation(t *testing.T) {
 			name: "zero asr_config_id",
 			cfg: &AgentConfig{
 				Name:         "valid-name",
-				ASRConfigID:  0,
-				LLMConfigID:  llmID,
-				TTSConfigID:  ttsID,
+				ASRConfigId:  0,
+				LLMConfigId:  llmId,
+				TTSConfigId:  ttsId,
 				SystemPrompt: "提示词",
 				Voice:        "v1",
 			},
@@ -313,9 +313,9 @@ func TestAgentConfig_Validation(t *testing.T) {
 			name: "zero llm_config_id",
 			cfg: &AgentConfig{
 				Name:         "valid-name",
-				ASRConfigID:  asrID,
-				LLMConfigID:  0,
-				TTSConfigID:  ttsID,
+				ASRConfigId:  asrId,
+				LLMConfigId:  0,
+				TTSConfigId:  ttsId,
 				SystemPrompt: "提示词",
 				Voice:        "v1",
 			},
@@ -325,9 +325,9 @@ func TestAgentConfig_Validation(t *testing.T) {
 			name: "zero tts_config_id",
 			cfg: &AgentConfig{
 				Name:         "valid-name",
-				ASRConfigID:  asrID,
-				LLMConfigID:  llmID,
-				TTSConfigID:  0,
+				ASRConfigId:  asrId,
+				LLMConfigId:  llmId,
+				TTSConfigId:  0,
 				SystemPrompt: "提示词",
 				Voice:        "v1",
 			},
@@ -337,9 +337,9 @@ func TestAgentConfig_Validation(t *testing.T) {
 			name: "empty system_prompt",
 			cfg: &AgentConfig{
 				Name:         "valid-name",
-				ASRConfigID:  asrID,
-				LLMConfigID:  llmID,
-				TTSConfigID:  ttsID,
+				ASRConfigId:  asrId,
+				LLMConfigId:  llmId,
+				TTSConfigId:  ttsId,
 				SystemPrompt: "   ",
 				Voice:        "v1",
 			},
@@ -349,9 +349,9 @@ func TestAgentConfig_Validation(t *testing.T) {
 			name: "system_prompt exceeds 16384 bytes",
 			cfg: &AgentConfig{
 				Name:         "valid-name",
-				ASRConfigID:  asrID,
-				LLMConfigID:  llmID,
-				TTSConfigID:  ttsID,
+				ASRConfigId:  asrId,
+				LLMConfigId:  llmId,
+				TTSConfigId:  ttsId,
 				SystemPrompt: strings.Repeat("p", 16385),
 				Voice:        "v1",
 			},
@@ -361,9 +361,9 @@ func TestAgentConfig_Validation(t *testing.T) {
 			name: "empty voice",
 			cfg: &AgentConfig{
 				Name:         "valid-name",
-				ASRConfigID:  asrID,
-				LLMConfigID:  llmID,
-				TTSConfigID:  ttsID,
+				ASRConfigId:  asrId,
+				LLMConfigId:  llmId,
+				TTSConfigId:  ttsId,
 				SystemPrompt: "提示词",
 				Voice:        "   ",
 			},
@@ -373,9 +373,9 @@ func TestAgentConfig_Validation(t *testing.T) {
 			name: "voice exceeds 128 bytes",
 			cfg: &AgentConfig{
 				Name:         "valid-name",
-				ASRConfigID:  asrID,
-				LLMConfigID:  llmID,
-				TTSConfigID:  ttsID,
+				ASRConfigId:  asrId,
+				LLMConfigId:  llmId,
+				TTSConfigId:  ttsId,
 				SystemPrompt: "提示词",
 				Voice:        strings.Repeat("v", 129),
 			},
@@ -397,14 +397,14 @@ func TestAgentConfig_ComponentReferencesValidation(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	asrID, llmID, ttsID := createTestComponents(t, db, ctx)
+	asrId, llmId, ttsId := createTestComponents(t, db, ctx)
 
 	// 1. ASR 不存在
 	err := db.CreateAgentConfig(ctx, &AgentConfig{
 		Name:         "Agent",
-		ASRConfigID:  9999,
-		LLMConfigID:  llmID,
-		TTSConfigID:  ttsID,
+		ASRConfigId:  9999,
+		LLMConfigId:  llmId,
+		TTSConfigId:  ttsId,
 		SystemPrompt: "提示词",
 		Voice:        "v1",
 	})
@@ -415,9 +415,9 @@ func TestAgentConfig_ComponentReferencesValidation(t *testing.T) {
 	// 2. LLM 不存在
 	err = db.CreateAgentConfig(ctx, &AgentConfig{
 		Name:         "Agent",
-		ASRConfigID:  asrID,
-		LLMConfigID:  9999,
-		TTSConfigID:  ttsID,
+		ASRConfigId:  asrId,
+		LLMConfigId:  9999,
+		TTSConfigId:  ttsId,
 		SystemPrompt: "提示词",
 		Voice:        "v1",
 	})
@@ -428,9 +428,9 @@ func TestAgentConfig_ComponentReferencesValidation(t *testing.T) {
 	// 3. TTS 不存在
 	err = db.CreateAgentConfig(ctx, &AgentConfig{
 		Name:         "Agent",
-		ASRConfigID:  asrID,
-		LLMConfigID:  llmID,
-		TTSConfigID:  9999,
+		ASRConfigId:  asrId,
+		LLMConfigId:  llmId,
+		TTSConfigId:  9999,
 		SystemPrompt: "提示词",
 		Voice:        "v1",
 	})
@@ -451,9 +451,9 @@ func TestAgentConfig_ComponentReferencesValidation(t *testing.T) {
 
 	err = db.CreateAgentConfig(ctx, &AgentConfig{
 		Name:         "Agent",
-		ASRConfigID:  disabledASR.ID,
-		LLMConfigID:  llmID,
-		TTSConfigID:  ttsID,
+		ASRConfigId:  disabledASR.Id,
+		LLMConfigId:  llmId,
+		TTSConfigId:  ttsId,
 		SystemPrompt: "提示词",
 		Voice:        "v1",
 	})
@@ -466,21 +466,21 @@ func TestAgentConfig_ActivateAgent(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	asrID, llmID, ttsID := createTestComponents(t, db, ctx)
+	asrId, llmId, ttsId := createTestComponents(t, db, ctx)
 
-	agent1 := &AgentConfig{Name: "Agent-1", ASRConfigID: asrID, LLMConfigID: llmID, TTSConfigID: ttsID, SystemPrompt: "p1", Voice: "v1", Enabled: false}
-	agent2 := &AgentConfig{Name: "Agent-2", ASRConfigID: asrID, LLMConfigID: llmID, TTSConfigID: ttsID, SystemPrompt: "p2", Voice: "v2", Enabled: false}
+	agent1 := &AgentConfig{Name: "Agent-1", ASRConfigId: asrId, LLMConfigId: llmId, TTSConfigId: ttsId, SystemPrompt: "p1", Voice: "v1", Enabled: false}
+	agent2 := &AgentConfig{Name: "Agent-2", ASRConfigId: asrId, LLMConfigId: llmId, TTSConfigId: ttsId, SystemPrompt: "p2", Voice: "v2", Enabled: false}
 
 	_ = db.CreateAgentConfig(ctx, agent1)
 	_ = db.CreateAgentConfig(ctx, agent2)
 
 	// 1. 激活 Agent 1
-	if err := db.ActivateAgent(ctx, agent1.ID); err != nil {
+	if err := db.ActivateAgent(ctx, agent1.Id); err != nil {
 		t.Fatalf("ActivateAgent 1 failed: %v", err)
 	}
 
-	a1, _ := db.FindAgentConfigByID(ctx, agent1.ID)
-	a2, _ := db.FindAgentConfigByID(ctx, agent2.ID)
+	a1, _ := db.FindAgentConfigById(ctx, agent1.Id)
+	a2, _ := db.FindAgentConfigById(ctx, agent2.Id)
 	if !a1.Enabled {
 		t.Errorf("expected agent 1 enabled=true")
 	}
@@ -489,12 +489,12 @@ func TestAgentConfig_ActivateAgent(t *testing.T) {
 	}
 
 	// 2. 激活 Agent 2
-	if err := db.ActivateAgent(ctx, agent2.ID); err != nil {
+	if err := db.ActivateAgent(ctx, agent2.Id); err != nil {
 		t.Fatalf("ActivateAgent 2 failed: %v", err)
 	}
 
-	a1, _ = db.FindAgentConfigByID(ctx, agent1.ID)
-	a2, _ = db.FindAgentConfigByID(ctx, agent2.ID)
+	a1, _ = db.FindAgentConfigById(ctx, agent1.Id)
+	a2, _ = db.FindAgentConfigById(ctx, agent2.Id)
 	if a1.Enabled {
 		t.Errorf("expected agent 1 enabled=false after switching")
 	}
@@ -510,8 +510,8 @@ func TestAgentConfig_ActivateAgent(t *testing.T) {
 
 	// 4. 激活参数为 0
 	err = db.ActivateAgent(ctx, 0)
-	if !errors.Is(err, ErrInvalidAgentConfigID) {
-		t.Errorf("expected ErrInvalidAgentConfigID, got %v", err)
+	if !errors.Is(err, ErrInvalidAgentConfigId) {
+		t.Errorf("expected ErrInvalidAgentConfigId, got %v", err)
 	}
 }
 
@@ -519,7 +519,7 @@ func TestAgentConfig_FindActiveAgentRuntimeSnapshot(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	asrID, llmID, ttsID := createTestComponents(t, db, ctx)
+	asrId, llmId, ttsId := createTestComponents(t, db, ctx)
 
 	// 1. 无 enabled Agent 时查询报错
 	_, err := db.FindActiveAgentRuntimeSnapshot(ctx)
@@ -530,9 +530,9 @@ func TestAgentConfig_FindActiveAgentRuntimeSnapshot(t *testing.T) {
 	// 2. 创建并激活 Agent
 	agent := &AgentConfig{
 		Name:         "活跃助手",
-		ASRConfigID:  asrID,
-		LLMConfigID:  llmID,
-		TTSConfigID:  ttsID,
+		ASRConfigId:  asrId,
+		LLMConfigId:  llmId,
+		TTSConfigId:  ttsId,
 		SystemPrompt: "系统提示词内容",
 		Voice:        "longxiaochun",
 		Enabled:      false,
@@ -540,7 +540,7 @@ func TestAgentConfig_FindActiveAgentRuntimeSnapshot(t *testing.T) {
 	if err := db.CreateAgentConfig(ctx, agent); err != nil {
 		t.Fatalf("CreateAgentConfig failed: %v", err)
 	}
-	if err := db.ActivateAgent(ctx, agent.ID); err != nil {
+	if err := db.ActivateAgent(ctx, agent.Id); err != nil {
 		t.Fatalf("ActivateAgent failed: %v", err)
 	}
 
@@ -550,8 +550,8 @@ func TestAgentConfig_FindActiveAgentRuntimeSnapshot(t *testing.T) {
 		t.Fatalf("FindActiveAgentRuntimeSnapshot failed: %v", err)
 	}
 
-	if snapshot.Agent.ID != agent.ID {
-		t.Errorf("expected snapshot Agent ID %d, got %d", agent.ID, snapshot.Agent.ID)
+	if snapshot.Agent.Id != agent.Id {
+		t.Errorf("expected snapshot Agent Id %d, got %d", agent.Id, snapshot.Agent.Id)
 	}
 	if snapshot.Agent.Name != "活跃助手" {
 		t.Errorf("expected snapshot Agent Name %q, got %q", "活跃助手", snapshot.Agent.Name)
@@ -567,29 +567,29 @@ func TestAgentConfig_FindActiveAgentRuntimeSnapshot(t *testing.T) {
 	}
 
 	// 验证 ASR 快照
-	if snapshot.ASRConfig.ID != asrID || snapshot.ASRConfig.Model != "qwen-audio-3.0-asr-flash-streaming" || snapshot.ASRConfig.Provider != "bailian" {
+	if snapshot.ASRConfig.Id != asrId || snapshot.ASRConfig.Model != "qwen-audio-3.0-asr-flash-streaming" || snapshot.ASRConfig.Provider != "bailian" {
 		t.Errorf("unexpected ASR snapshot: %+v", snapshot.ASRConfig)
 	}
 	// 验证 LLM 快照
-	if snapshot.LLMConfig.ID != llmID || snapshot.LLMConfig.Model != "qwen-plus" || snapshot.LLMConfig.Provider != "bailian" {
+	if snapshot.LLMConfig.Id != llmId || snapshot.LLMConfig.Model != "qwen-plus" || snapshot.LLMConfig.Provider != "bailian" {
 		t.Errorf("unexpected LLM snapshot: %+v", snapshot.LLMConfig)
 	}
 	// 验证 TTS 快照
-	if snapshot.TTSConfig.ID != ttsID || snapshot.TTSConfig.Model != "cosyvoice-v1" || snapshot.TTSConfig.Provider != "bailian" {
+	if snapshot.TTSConfig.Id != ttsId || snapshot.TTSConfig.Model != "cosyvoice-v1" || snapshot.TTSConfig.Provider != "bailian" {
 		t.Errorf("unexpected TTS snapshot: %+v", snapshot.TTSConfig)
 	}
 
-	// 4. FindAgentRuntimeSnapshotByID
-	byIdSnapshot, err := db.FindAgentRuntimeSnapshotByID(ctx, agent.ID)
+	// 4. FindAgentRuntimeSnapshotById
+	byIdSnapshot, err := db.FindAgentRuntimeSnapshotById(ctx, agent.Id)
 	if err != nil {
-		t.Fatalf("FindAgentRuntimeSnapshotByID failed: %v", err)
+		t.Fatalf("FindAgentRuntimeSnapshotById failed: %v", err)
 	}
-	if byIdSnapshot.Agent.ID != agent.ID {
-		t.Errorf("expected Agent ID %d, got %d", agent.ID, byIdSnapshot.Agent.ID)
+	if byIdSnapshot.Agent.Id != agent.Id {
+		t.Errorf("expected Agent Id %d, got %d", agent.Id, byIdSnapshot.Agent.Id)
 	}
 
-	// 查询不存在的 ID
-	_, err = db.FindAgentRuntimeSnapshotByID(ctx, 99999)
+	// 查询不存在的 Id
+	_, err = db.FindAgentRuntimeSnapshotById(ctx, 99999)
 	if !errors.Is(err, ErrAgentConfigNotFound) {
 		t.Errorf("expected ErrAgentConfigNotFound, got %v", err)
 	}
@@ -599,32 +599,32 @@ func TestAgentConfig_DeleteAndBatchDelete(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	asrID, llmID, ttsID := createTestComponents(t, db, ctx)
+	asrId, llmId, ttsId := createTestComponents(t, db, ctx)
 
-	agent1 := &AgentConfig{Name: "Del-1", ASRConfigID: asrID, LLMConfigID: llmID, TTSConfigID: ttsID, SystemPrompt: "p1", Voice: "v1"}
-	agent2 := &AgentConfig{Name: "Del-2", ASRConfigID: asrID, LLMConfigID: llmID, TTSConfigID: ttsID, SystemPrompt: "p2", Voice: "v2"}
-	agent3 := &AgentConfig{Name: "Del-3", ASRConfigID: asrID, LLMConfigID: llmID, TTSConfigID: ttsID, SystemPrompt: "p3", Voice: "v3"}
+	agent1 := &AgentConfig{Name: "Del-1", ASRConfigId: asrId, LLMConfigId: llmId, TTSConfigId: ttsId, SystemPrompt: "p1", Voice: "v1"}
+	agent2 := &AgentConfig{Name: "Del-2", ASRConfigId: asrId, LLMConfigId: llmId, TTSConfigId: ttsId, SystemPrompt: "p2", Voice: "v2"}
+	agent3 := &AgentConfig{Name: "Del-3", ASRConfigId: asrId, LLMConfigId: llmId, TTSConfigId: ttsId, SystemPrompt: "p3", Voice: "v3"}
 
 	_ = db.CreateAgentConfig(ctx, agent1)
 	_ = db.CreateAgentConfig(ctx, agent2)
 	_ = db.CreateAgentConfig(ctx, agent3)
 
 	// 1. 单条删除
-	if err := db.DeleteAgentConfig(ctx, agent1.ID); err != nil {
+	if err := db.DeleteAgentConfig(ctx, agent1.Id); err != nil {
 		t.Fatalf("DeleteAgentConfig failed: %v", err)
 	}
-	_, err := db.FindAgentConfigByID(ctx, agent1.ID)
+	_, err := db.FindAgentConfigById(ctx, agent1.Id)
 	if !errors.Is(err, ErrAgentConfigNotFound) {
 		t.Errorf("expected ErrAgentConfigNotFound, got %v", err)
 	}
 
-	// 删除不存在的 ID
+	// 删除不存在的 Id
 	if err := db.DeleteAgentConfig(ctx, 99999); !errors.Is(err, ErrAgentConfigNotFound) {
-		t.Errorf("expected ErrAgentConfigNotFound for non-existent ID, got %v", err)
+		t.Errorf("expected ErrAgentConfigNotFound for non-existent Id, got %v", err)
 	}
 
 	// 2. 批量删除
-	if err := db.BatchDeleteAgentConfigs(ctx, []uint64{agent2.ID, agent3.ID}); err != nil {
+	if err := db.BatchDeleteAgentConfigs(ctx, []uint64{agent2.Id, agent3.Id}); err != nil {
 		t.Fatalf("BatchDeleteAgentConfigs failed: %v", err)
 	}
 
@@ -644,10 +644,10 @@ func TestAgentConfig_NilDB(t *testing.T) {
 	if err := nilDB.CreateAgentConfig(ctx, &AgentConfig{}); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
-	if _, err := nilDB.FindAgentConfigByID(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
+	if _, err := nilDB.FindAgentConfigById(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
-	if err := nilDB.UpdateAgentConfigByID(ctx, &AgentConfig{ID: 1}); !errors.Is(err, ErrDatabaseInstanceRequired) {
+	if err := nilDB.UpdateAgentConfigById(ctx, &AgentConfig{Id: 1}); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
 	if _, _, err := nilDB.ListAgentConfigs(ctx, AgentConfigFilter{}); !errors.Is(err, ErrDatabaseInstanceRequired) {
@@ -665,7 +665,7 @@ func TestAgentConfig_NilDB(t *testing.T) {
 	if _, err := nilDB.FindActiveAgentRuntimeSnapshot(ctx); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
-	if _, err := nilDB.FindAgentRuntimeSnapshotByID(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
+	if _, err := nilDB.FindAgentRuntimeSnapshotById(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
 }

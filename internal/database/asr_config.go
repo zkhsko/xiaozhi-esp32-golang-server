@@ -18,8 +18,8 @@ var (
 	ErrASRConfigNotFound = errors.New("asr config not found")
 	// ErrInvalidASRConfig 表示 ASR 配置结构体为 nil 或非法。
 	ErrInvalidASRConfig = errors.New("invalid asr config")
-	// ErrInvalidASRConfigID 表示 ASR 配置 ID 为 0 或非法。
-	ErrInvalidASRConfigID = errors.New("asr config id cannot be empty or zero")
+	// ErrInvalidASRConfigId 表示 ASR 配置 Id 为 0 或非法。
+	ErrInvalidASRConfigId = errors.New("asr config id cannot be empty or zero")
 	// ErrEmptyASRConfigName 表示 ASR 配置名称为空。
 	ErrEmptyASRConfigName = errors.New("asr config name cannot be empty")
 	// ErrInvalidASRConfigNameLength 表示 ASR 配置名称长度超过 128 字节。
@@ -72,7 +72,7 @@ var (
 // - created_at: 创建时间。
 // - updated_at: 更新时间。
 type ASRConfig struct {
-	ID               uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Id               uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	Name             string    `gorm:"column:name;size:128;not null" json:"name"`
 	Provider         string    `gorm:"column:provider;size:64;not null;default:''" json:"provider"`
 	Endpoint         string    `gorm:"column:endpoint;size:1024;not null" json:"endpoint"`
@@ -198,13 +198,13 @@ func (d *Database) CreateASRConfig(ctx context.Context, cfg *ASRConfig) error {
 	return nil
 }
 
-// FindASRConfigByID 根据 ID 查询 ASR 配置。
-func (d *Database) FindASRConfigByID(ctx context.Context, id uint64) (*ASRConfig, error) {
+// FindASRConfigById 根据 Id 查询 ASR 配置。
+func (d *Database) FindASRConfigById(ctx context.Context, id uint64) (*ASRConfig, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
 	if id == 0 {
-		return nil, ErrInvalidASRConfigID
+		return nil, ErrInvalidASRConfigId
 	}
 
 	var cfg ASRConfig
@@ -222,14 +222,14 @@ func (d *Database) FindASRConfigByID(ctx context.Context, id uint64) (*ASRConfig
 	return &cfg, nil
 }
 
-// UpdateASRConfigByID 按主键 ID 覆盖更新 ASR 配置。
+// UpdateASRConfigById 按主键 Id 覆盖更新 ASR 配置。
 // 更新结果影响行数为 0 时返回 ErrASRConfigNotFound。
-func (d *Database) UpdateASRConfigByID(ctx context.Context, cfg *ASRConfig) error {
+func (d *Database) UpdateASRConfigById(ctx context.Context, cfg *ASRConfig) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
 	}
-	if cfg == nil || cfg.ID == 0 {
-		return ErrInvalidASRConfigID
+	if cfg == nil || cfg.Id == 0 {
+		return ErrInvalidASRConfigId
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -251,13 +251,13 @@ func (d *Database) UpdateASRConfigByID(ctx context.Context, cfg *ASRConfig) erro
 
 	res := d.gormDB.WithContext(ctx).
 		Model(&ASRConfig{}).
-		Where("id = ?", cfg.ID).
+		Where("id = ?", cfg.Id).
 		Updates(updates)
 	if res.Error != nil {
 		return fmt.Errorf("update asr config by id: %w", res.Error)
 	}
 	if res.RowsAffected == 0 {
-		return fmt.Errorf("update asr config by id %d: %w", cfg.ID, ErrASRConfigNotFound)
+		return fmt.Errorf("update asr config by id %d: %w", cfg.Id, ErrASRConfigNotFound)
 	}
 
 	return nil
@@ -307,13 +307,13 @@ func (d *Database) ListASRConfigs(ctx context.Context, filter ASRConfigFilter) (
 	return configs, total, nil
 }
 
-// DeleteASRConfig 删除指定 ID 的 ASR 配置记录。
+// DeleteASRConfig 删除指定 Id 的 ASR 配置记录。
 func (d *Database) DeleteASRConfig(ctx context.Context, id uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
 	}
 	if id == 0 {
-		return ErrInvalidASRConfigID
+		return ErrInvalidASRConfigId
 	}
 
 	res := d.gormDB.WithContext(ctx).Where("id = ?", id).Delete(&ASRConfig{})
@@ -326,7 +326,7 @@ func (d *Database) DeleteASRConfig(ctx context.Context, id uint64) error {
 	return nil
 }
 
-// BatchDeleteASRConfigs 批量删除指定 ID 列表的 ASR 配置记录。
+// BatchDeleteASRConfigs 批量删除指定 Id 列表的 ASR 配置记录。
 func (d *Database) BatchDeleteASRConfigs(ctx context.Context, ids []uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
@@ -335,17 +335,17 @@ func (d *Database) BatchDeleteASRConfigs(ctx context.Context, ids []uint64) erro
 		return nil
 	}
 
-	validIDs := make([]uint64, 0, len(ids))
+	validIds := make([]uint64, 0, len(ids))
 	for _, id := range ids {
 		if id > 0 {
-			validIDs = append(validIDs, id)
+			validIds = append(validIds, id)
 		}
 	}
-	if len(validIDs) == 0 {
+	if len(validIds) == 0 {
 		return nil
 	}
 
-	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIDs).Delete(&ASRConfig{}).Error; err != nil {
+	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIds).Delete(&ASRConfig{}).Error; err != nil {
 		return fmt.Errorf("batch delete asr configs: %w", err)
 	}
 	return nil

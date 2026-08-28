@@ -71,7 +71,7 @@ func TestDownlinkPacer_SendPacketAndFinishInput(t *testing.T) {
 		writer:     writer,
 		logger:     slog.Default(),
 		events:     make(chan event, 10),
-		sessionID:  "sess-pacer-test",
+		sessionId:  "sess-pacer-test",
 		generation: 1,
 		state:      StateSpeaking,
 	}
@@ -164,7 +164,7 @@ func TestDownlinkPacer_FinishInputEmpty(t *testing.T) {
 		writer:     writer,
 		logger:     slog.Default(),
 		events:     make(chan event, 10),
-		sessionID:  "sess-empty-test",
+		sessionId:  "sess-empty-test",
 		generation: 1,
 		state:      StateSpeaking,
 	}
@@ -215,7 +215,7 @@ func TestDownlinkPacer_Stop(t *testing.T) {
 		writer:     writer,
 		logger:     slog.Default(),
 		events:     make(chan event, 10),
-		sessionID:  "sess-stop-test",
+		sessionId:  "sess-stop-test",
 		generation: 1,
 	}
 
@@ -250,7 +250,7 @@ func TestDownlinkPacer_ConcurrencyRace(t *testing.T) {
 		writer:     writer,
 		logger:     slog.Default(),
 		events:     make(chan event, 100),
-		sessionID:  "sess-race-test",
+		sessionId:  "sess-race-test",
 		generation: 1,
 		state:      StateSpeaking,
 	}

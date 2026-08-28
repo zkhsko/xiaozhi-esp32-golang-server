@@ -81,7 +81,7 @@
         style="width: 100%;"
       >
         <el-table-column type="selection" width="50" align="center" />
-        <el-table-column prop="id" label="ID" width="75" align="center" />
+        <el-table-column prop="id" label="Id" width="75" align="center" />
 
         <el-table-column prop="serial_number" label="设备序列号 (SN)" min-width="190">
           <template #default="{ row }">
@@ -258,7 +258,7 @@
         <el-form-item label="Device-Id">
           <el-input
             v-model="editDialog.form.device_id"
-            placeholder="如 MAC 地址或设备 ID"
+            placeholder="如 MAC 地址或设备 Id"
             clearable
           />
         </el-form-item>
@@ -448,7 +448,7 @@ async function submitBind() {
         hmac: bindDialog.form.hmac.trim() || undefined,
       })
       if (res.success) {
-        ElMessage.success(`设备激活成功！序列号: ${res.serial_number || '-'}, 设备 ID: ${res.device_id || '-'}`)
+        ElMessage.success(`设备激活成功！序列号: ${res.serial_number || '-'}, 设备 Id: ${res.device_id || '-'}`)
         bindDialog.visible = false
         loadData()
       }

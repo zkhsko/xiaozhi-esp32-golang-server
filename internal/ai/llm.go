@@ -14,7 +14,7 @@ const (
 
 // ToolCall 表示大语言模型输出的单次工具调用指令。
 type ToolCall struct {
-	ID        string `json:"id"`
+	Id        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
 }
@@ -31,7 +31,7 @@ type Message struct {
 	Role       MessageRole `json:"role"`
 	Content    string      `json:"content"`
 	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string      `json:"tool_call_id,omitempty"`
+	ToolCallId string      `json:"tool_call_id,omitempty"`
 }
 
 // LLMStream 表示单个大语言模型流式输出会话。

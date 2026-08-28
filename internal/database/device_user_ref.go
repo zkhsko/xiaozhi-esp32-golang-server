@@ -14,8 +14,8 @@ import (
 var (
 	// ErrBindingNotFound 表示设备用户绑定记录未找到。
 	ErrBindingNotFound = errors.New("device user binding not found")
-	// ErrEmptyUserID 表示用户 ID 为 0 或非法。
-	ErrEmptyUserID = errors.New("user id cannot be empty or zero")
+	// ErrEmptyUserId 表示用户 Id 为 0 或非法。
+	ErrEmptyUserId = errors.New("user id cannot be empty or zero")
 )
 
 // DeviceUserRef 映射 device_user_ref 设备与用户绑定关系表。
@@ -27,13 +27,13 @@ var (
 // 字段约束与索引规范：
 // - id: 自增主键。
 // - serial_number: 设备序列号，全局业务唯一，唯一索引 uk_serial_number。
-// - user_id: 绑定的用户 ID，非空，联合索引 idx_user_id_serial_number。
+// - user_id: 绑定的用户 Id，非空，联合索引 idx_user_id_serial_number。
 // - created_at: 创建时间（绑定时间）。
 // - updated_at: 记录最近更新时间。
 type DeviceUserRef struct {
-	ID           uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Id           uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	SerialNumber string    `gorm:"uniqueIndex:uk_serial_number;column:serial_number;size:64;not null" json:"serial_number"`
-	UserID       uint64    `gorm:"index:idx_user_id_serial_number,priority:1;column:user_id;not null" json:"user_id"`
+	UserId       uint64    `gorm:"index:idx_user_id_serial_number,priority:1;column:user_id;not null" json:"user_id"`
 	CreatedAt    time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
 	UpdatedAt    time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
 }
@@ -70,8 +70,8 @@ func (d *Database) FindDeviceUserRefBySerialNumber(ctx context.Context, serialNu
 }
 
 // UpsertDeviceUserRef 插入或更新设备与用户的绑定关系。
-// 若设备已有绑定记录，则更新其绑定的用户 ID；若无绑定记录，则创建新的绑定记录。
-func (d *Database) UpsertDeviceUserRef(ctx context.Context, serialNumber string, userID uint64) (*DeviceUserRef, error) {
+// 若设备已有绑定记录，则更新其绑定的用户 Id；若无绑定记录，则创建新的绑定记录。
+func (d *Database) UpsertDeviceUserRef(ctx context.Context, serialNumber string, userId uint64) (*DeviceUserRef, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
@@ -80,8 +80,8 @@ func (d *Database) UpsertDeviceUserRef(ctx context.Context, serialNumber string,
 	if trimmedSN == "" {
 		return nil, ErrEmptySerialNumber
 	}
-	if userID == 0 {
-		return nil, ErrEmptyUserID
+	if userId == 0 {
+		return nil, ErrEmptyUserId
 	}
 
 	var ref DeviceUserRef
@@ -95,7 +95,7 @@ func (d *Database) UpsertDeviceUserRef(ctx context.Context, serialNumber string,
 		if errors.Is(findErr, gorm.ErrRecordNotFound) {
 			ref = DeviceUserRef{
 				SerialNumber: trimmedSN,
-				UserID:       userID,
+				UserId:       userId,
 			}
 			if err := tx.Create(&ref).Error; err != nil {
 				return fmt.Errorf("create device user ref: %w", err)
@@ -103,13 +103,13 @@ func (d *Database) UpsertDeviceUserRef(ctx context.Context, serialNumber string,
 			return nil
 		}
 
-		if existing.UserID != userID {
-			if err := tx.Model(&existing).Update("user_id", userID).Error; err != nil {
+		if existing.UserId != userId {
+			if err := tx.Model(&existing).Update("user_id", userId).Error; err != nil {
 				return fmt.Errorf("update device user ref: %w", err)
 			}
 		}
 		ref = existing
-		ref.UserID = userID
+		ref.UserId = userId
 		return nil
 	})
 	if err != nil {

@@ -114,7 +114,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	}
 	if s.llmClient == nil || s.ttsClient == nil {
 		s.logger.Error("llm client or tts client not configured",
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"generation", gen,
 		)
 		s.postEvent(event{
@@ -138,7 +138,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		}
 		s.logger.Warn("failed to create tts stream",
 			"error", err,
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"generation", gen,
 		)
 		s.postEvent(event{
@@ -187,7 +187,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	tools := s.availableTools()
 	splitter := NewSentenceSplitter()
 	var assistantText strings.Builder
-	sessionID := s.SessionID()
+	sessionId := s.SessionId()
 
 	// sendSentence 先下发设备文本消息 tts.sentence_start，再调用 ttsStream.SendSentence 写入，保证文本严格先于对应音频
 	sendSentence := func(sentence string) error {
@@ -198,7 +198,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 			return errors.New("generation mismatch")
 		}
 
-		startMsgBytes, err := EncodeTTSSentenceStartMessage(sessionID, sentence)
+		startMsgBytes, err := EncodeTTSSentenceStartMessage(sessionId, sentence)
 		if err != nil {
 			return fmt.Errorf("encode sentence start message: %w", err)
 		}
@@ -231,7 +231,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 			}
 			s.logger.Warn("failed to create llm stream",
 				"error", err,
-				"session_id", sessionID,
+				"session_id", sessionId,
 				"generation", gen,
 				"iteration", iter,
 			)
@@ -283,7 +283,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 			}
 			s.logger.Warn("llm stream read failed",
 				"error", streamErr,
-				"session_id", sessionID,
+				"session_id", sessionId,
 				"generation", gen,
 				"iteration", iter,
 			)
@@ -303,7 +303,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		toolCalls := llmStream.ToolCalls()
 		if len(toolCalls) > 0 && iter < maxToolIterations {
 			s.logger.Info("llm returned tool calls",
-				"session_id", sessionID,
+				"session_id", sessionId,
 				"generation", gen,
 				"iteration", iter,
 				"tool_count", len(toolCalls),
@@ -325,7 +325,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 				messages = append(messages, ai.Message{
 					Role:       ai.RoleTool,
 					Content:    resultText,
-					ToolCallID: tc.ID,
+					ToolCallId: tc.Id,
 				})
 			}
 
@@ -337,7 +337,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 
 		if iter >= maxToolIterations && len(toolCalls) > 0 {
 			s.logger.Warn("max tool iterations reached, forcing text reply termination",
-				"session_id", sessionID,
+				"session_id", sessionId,
 				"generation", gen,
 				"iteration", iter,
 			)
@@ -361,7 +361,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 			}
 			s.logger.Warn("failed to deliver flushed sentence to tts",
 				"error", err,
-				"session_id", sessionID,
+				"session_id", sessionId,
 				"generation", gen,
 			)
 			s.postEvent(event{
@@ -385,7 +385,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		}
 		s.logger.Warn("failed to finish tts stream",
 			"error", err,
-			"session_id", sessionID,
+			"session_id", sessionId,
 			"generation", gen,
 		)
 		s.postEvent(event{
@@ -442,7 +442,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 		consumeErr = err
 		s.logger.Error("failed to create per-turn opus encoder",
 			"error", err,
-			"session_id", s.SessionID(),
+			"session_id", s.SessionId(),
 			"generation", gen,
 		)
 		s.postEvent(event{
@@ -456,7 +456,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 	defer enc.Close()
 
 	streamEncoder := audio.NewStreamEncoder(enc)
-	sessionID := s.SessionID()
+	sessionId := s.SessionId()
 
 	for {
 		if ctx.Err() != nil || s.Generation() > gen {
@@ -480,7 +480,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 						consumeErr = pErr
 						s.logger.Warn("failed to get listen prompt pcm for turn tail",
 							"error", pErr,
-							"session_id", sessionID,
+							"session_id", sessionId,
 							"generation", gen,
 						)
 					} else if len(promptPCM) > 0 {
@@ -489,7 +489,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 							consumeErr = pEncodeErr
 							s.logger.Warn("failed to encode prompt pcm to opus",
 								"error", pEncodeErr,
-								"session_id", sessionID,
+								"session_id", sessionId,
 								"generation", gen,
 							)
 						} else {
@@ -517,7 +517,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 					}
 					s.logger.Warn("failed to flush tts opus encoder",
 						"error", flushErr,
-						"session_id", sessionID,
+						"session_id", sessionId,
 						"generation", gen,
 					)
 					s.postEvent(event{
@@ -549,7 +549,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 			consumeErr = err
 			s.logger.Warn("tts stream pcm read failed",
 				"error", err,
-				"session_id", sessionID,
+				"session_id", sessionId,
 				"generation", gen,
 			)
 			s.postEvent(event{
@@ -577,7 +577,7 @@ func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSSt
 			}
 			s.logger.Warn("failed to encode tts pcm to opus",
 				"error", err,
-				"session_id", sessionID,
+				"session_id", sessionId,
 				"generation", gen,
 			)
 			s.postEvent(event{

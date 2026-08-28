@@ -116,7 +116,7 @@ func (c *LLMClient) CreateStream(ctx context.Context, messages []ai.Message, too
 				toolCallsParam := make([]openai.ChatCompletionMessageToolCallParam, 0, len(msg.ToolCalls))
 				for _, tc := range msg.ToolCalls {
 					toolCallsParam = append(toolCallsParam, openai.ChatCompletionMessageToolCallParam{
-						ID: tc.ID,
+						ID: tc.Id,
 						Function: openai.ChatCompletionMessageToolCallFunctionParam{
 							Name:      tc.Name,
 							Arguments: tc.Arguments,
@@ -138,7 +138,7 @@ func (c *LLMClient) CreateStream(ctx context.Context, messages []ai.Message, too
 				openAIMessages = append(openAIMessages, openai.AssistantMessage(msg.Content))
 			}
 		case ai.RoleTool:
-			openAIMessages = append(openAIMessages, openai.ToolMessage(msg.Content, msg.ToolCallID))
+			openAIMessages = append(openAIMessages, openai.ToolMessage(msg.Content, msg.ToolCallId))
 		default:
 			openAIMessages = append(openAIMessages, openai.UserMessage(msg.Content))
 		}
@@ -251,7 +251,7 @@ func (s *bailianLLMStream) Recv() (string, error) {
 					s.toolCallsIndices = append(s.toolCallsIndices, tc.Index)
 				}
 				if tc.ID != "" {
-					call.ID = tc.ID
+					call.Id = tc.ID
 				}
 				if tc.Function.Name != "" {
 					call.Name += tc.Function.Name

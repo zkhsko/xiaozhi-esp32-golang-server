@@ -38,7 +38,7 @@ var (
 // - created_at: 记录创建时间。
 // - updated_at: 记录最近更新时间。
 type DeviceAccessToken struct {
-	ID           uint64     `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Id           uint64     `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	SerialNumber string     `gorm:"uniqueIndex:uk_serial_number;column:serial_number;size:64;not null" json:"serial_number"`
 	AccessToken  string     `gorm:"uniqueIndex:uk_access_token;column:access_token;size:128;not null" json:"access_token"`
 	DeviceType   string     `gorm:"column:device_type;size:32;not null;default:'default'" json:"device_type"` // 设备类型（冗余自生产表，用于关联 agent）
@@ -180,7 +180,7 @@ func (d *Database) UpsertDeviceAccessToken(ctx context.Context, token *DeviceAcc
 		return fmt.Errorf("update device access token on upsert: %w", err)
 	}
 
-	token.ID = existing.ID
+	token.Id = existing.Id
 	token.SerialNumber = existing.SerialNumber
 	token.AccessToken = trimmedToken
 	token.CreatedAt = existing.CreatedAt

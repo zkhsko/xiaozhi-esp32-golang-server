@@ -141,12 +141,12 @@ func (s *Session) availableTools() []ai.Tool {
 
 // executeTool 统一调度并执行大模型调用的工具（优先服务端工具，次选已授权的设备 MCP 工具）。
 func (s *Session) executeTool(ctx context.Context, gen uint64, tc ai.ToolCall) string {
-	sessionID := s.SessionID()
+	sessionId := s.SessionId()
 
 	// 1. 服务端工具直接在服务端执行
 	if isServerTool(tc.Name) {
 		s.logger.Info("executing server tool call",
-			"session_id", sessionID,
+			"session_id", sessionId,
 			"generation", gen,
 			"tool_name", tc.Name,
 		)
@@ -160,7 +160,7 @@ func (s *Session) executeTool(ctx context.Context, gen uint64, tc ai.ToolCall) s
 		resultText, err := executeServerTool(ctx, tc.Name, tc.Arguments)
 		if err != nil {
 			s.logger.Warn("server tool call failed",
-				"session_id", sessionID,
+				"session_id", sessionId,
 				"generation", gen,
 				"tool_name", tc.Name,
 				"error", err,
@@ -169,7 +169,7 @@ func (s *Session) executeTool(ctx context.Context, gen uint64, tc ai.ToolCall) s
 		}
 
 		s.logger.Info("server tool call executed successfully",
-			"session_id", sessionID,
+			"session_id", sessionId,
 			"generation", gen,
 			"tool_name", tc.Name,
 		)
@@ -181,7 +181,7 @@ func (s *Session) executeTool(ctx context.Context, gen uint64, tc ai.ToolCall) s
 		resultText, err := s.callMCPTool(ctx, tc.Name, tc.Arguments)
 		if err != nil {
 			s.logger.Warn("mcp tool call failed during turn",
-				"session_id", sessionID,
+				"session_id", sessionId,
 				"generation", gen,
 				"tool_name", tc.Name,
 				"error", err,
@@ -193,7 +193,7 @@ func (s *Session) executeTool(ctx context.Context, gen uint64, tc ai.ToolCall) s
 
 	// 3. 未启用或未授权的工具
 	s.logger.Warn("tool call rejected: tool not authorized in session",
-		"session_id", sessionID,
+		"session_id", sessionId,
 		"generation", gen,
 		"tool_name", tc.Name,
 	)

@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	// MockCurrentUserID 模拟当前登录用户 ID（暂无登录系统）。
-	MockCurrentUserID uint64 = 1
+	// MockCurrentUserId 模拟当前登录用户 Id（暂无登录系统）。
+	MockCurrentUserId uint64 = 1
 )
 
 // BindDeviceRequest 映射 POST /user-api/device/bind 提交的请求体与参数。
@@ -39,9 +39,9 @@ type BindDeviceResponse struct {
 	Success      bool   `json:"success"`
 	Message      string `json:"message,omitempty"`
 	SerialNumber string `json:"serial_number,omitempty"`
-	DeviceID     string `json:"device_id,omitempty"`
-	ClientID     string `json:"client_id,omitempty"`
-	UserID       uint64 `json:"user_id,omitempty"`
+	DeviceId     string `json:"device_id,omitempty"`
+	ClientId     string `json:"client_id,omitempty"`
+	UserId       uint64 `json:"user_id,omitempty"`
 }
 
 // UserHandler 处理 /user-api/ 业务接口。
@@ -107,15 +107,15 @@ func (h *UserHandler) handleBindDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := MockCurrentUserID
+	userId := MockCurrentUserId
 
 	// 2. 将绑定逻辑按 code 是否包含 sn 拆分为两种方法分别处理
 	if pending.SerialNumber != "" {
-		h.bindDeviceWithSN(w, r, code, pending, userID)
+		h.bindDeviceWithSN(w, r, code, pending, userId)
 		return
 	}
 
-	h.bindDeviceWithoutSN(w, r, code, pending, req, userID)
+	h.bindDeviceWithoutSN(w, r, code, pending, req, userId)
 }
 
 // bindDeviceWithSN 处理 code 对应设备信息已包含 SerialNumber 的绑定逻辑。
@@ -127,7 +127,7 @@ func (h *UserHandler) handleBindDevice(w http.ResponseWriter, r *http.Request) {
 // 2. 将设备激活记录、用户绑定关系与 Access Token 写入收敛在单一数据库事务中完成；
 // 3. 仅在数据库事务完全成功后，删除 PendingActivation 缓存；
 // 4. 若事务失败，数据库完整回滚且保留缓存，保证不发生部分提交并支持重试。
-func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, code string, pending PendingActivation, userID uint64) {
+func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, code string, pending PendingActivation, userId uint64) {
 	sn := pending.SerialNumber
 
 	// 1. 事务前生成 Access Token
@@ -142,11 +142,11 @@ func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, c
 	}
 
 	// 2. 在单一数据库事务中原子执行激活、用户绑定及 Access Token 写入
-	act, err := h.db.BindDeviceWithSN(r.Context(), sn, pending.DeviceID, pending.ClientID, tokenStr, userID)
+	act, err := h.db.BindDeviceWithSN(r.Context(), sn, pending.DeviceId, pending.ClientId, tokenStr, userId)
 	if err != nil {
 		h.logger.Error("failed to bind device with sn in transaction",
 			"serial_number", logger.TruncateString(sn),
-			"user_id", userID,
+			"user_id", userId,
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -158,18 +158,18 @@ func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, c
 
 	h.logger.Info("device bound successfully with existing sn in code",
 		"serial_number", logger.TruncateString(act.SerialNumber),
-		"device_id", logger.TruncateString(act.DeviceID),
-		"client_id", logger.TruncateString(act.ClientID),
-		"user_id", userID,
+		"device_id", logger.TruncateString(act.DeviceId),
+		"client_id", logger.TruncateString(act.ClientId),
+		"user_id", userId,
 	)
 
 	writeJSON(w, http.StatusOK, BindDeviceResponse{
 		Success:      true,
 		Message:      "device bound successfully",
 		SerialNumber: act.SerialNumber,
-		DeviceID:     act.DeviceID,
-		ClientID:     act.ClientID,
-		UserID:       userID,
+		DeviceId:     act.DeviceId,
+		ClientId:     act.ClientId,
+		UserId:       userId,
 	})
 }
 
@@ -183,7 +183,7 @@ func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, c
 // 3. 仅在数据库事务完全成功后，删除 PendingActivation 缓存；
 // 4. 若事务失败，数据库完整回滚且保留缓存，保证不发生部分提交并支持重试；
 // 5. 彻底消除忽略凭证状态更新错误的写法，若凭证更新失败整个事务回滚并报错。
-func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request, code string, pending PendingActivation, req BindDeviceRequest, userID uint64) {
+func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request, code string, pending PendingActivation, req BindDeviceRequest, userId uint64) {
 	sn := strings.TrimSpace(req.SN)
 	if sn == "" {
 		sn = strings.TrimSpace(req.SerialNumber)
@@ -249,11 +249,11 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 	}
 
 	// 5. 在单一数据库事务中原子执行激活、用户绑定、凭证状态更新及 Access Token 写入
-	act, err := h.db.BindDeviceWithSN(r.Context(), sn, pending.DeviceID, pending.ClientID, tokenStr, userID)
+	act, err := h.db.BindDeviceWithSN(r.Context(), sn, pending.DeviceId, pending.ClientId, tokenStr, userId)
 	if err != nil {
 		h.logger.Error("failed to bind device without initial sn in transaction",
 			"serial_number", logger.TruncateString(sn),
-			"user_id", userID,
+			"user_id", userId,
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -265,18 +265,18 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 
 	h.logger.Info("device bound successfully without initial sn in code",
 		"serial_number", logger.TruncateString(act.SerialNumber),
-		"device_id", logger.TruncateString(act.DeviceID),
-		"client_id", logger.TruncateString(act.ClientID),
-		"user_id", userID,
+		"device_id", logger.TruncateString(act.DeviceId),
+		"client_id", logger.TruncateString(act.ClientId),
+		"user_id", userId,
 	)
 
 	writeJSON(w, http.StatusOK, BindDeviceResponse{
 		Success:      true,
 		Message:      "device bound successfully",
 		SerialNumber: act.SerialNumber,
-		DeviceID:     act.DeviceID,
-		ClientID:     act.ClientID,
-		UserID:       userID,
+		DeviceId:     act.DeviceId,
+		ClientId:     act.ClientId,
+		UserId:       userId,
 	})
 }
 

@@ -308,7 +308,7 @@ database:
 ### 10.2 未决事项（明确标记）
 
 1. **用户认证与授权体系（未决事项）**：
-   - 当前 `/user-api/device/bind` 使用硬编码 Mock 用户（`MockCurrentUserID = 1`），生产级多用户体系（如 JWT / OAuth / Session）及权限校验尚未确定与接入。
+   - 当前 `/user-api/device/bind` 使用硬编码 Mock 用户（`MockCurrentUserId = 1`），生产级多用户体系（如 JWT / OAuth / Session）及权限校验尚未确定与接入。
 2. **管理接口鉴权模型（未决事项）**：
    - 当前 `/admin-api/device-hmac-credential/generate` 未挂载身份认证中间件，当前阶段必须仅部署于受信任内网或由外部反向代理（如 Basic Auth / mTLS）进行访问保护。
 3. **生产数据库升级与兼容策略（未决事项）**：

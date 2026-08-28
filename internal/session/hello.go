@@ -100,7 +100,7 @@ type ServerAudioParams struct {
 type ServerHelloMessage struct {
 	Type        string            `json:"type"`
 	Transport   string            `json:"transport"`
-	SessionID   string            `json:"session_id"`
+	SessionId   string            `json:"session_id"`
 	AudioParams ServerAudioParams `json:"audio_params"`
 }
 
@@ -109,8 +109,8 @@ type genericMessageHeader struct {
 	Type string `json:"type"`
 }
 
-// GenerateSessionID 生成 16 字节（32 个十六进制字符）加密安全的随机会话 ID。
-func GenerateSessionID() (string, error) {
+// GenerateSessionId 生成 16 字节（32 个十六进制字符）加密安全的随机会话 Id。
+func GenerateSessionId() (string, error) {
 	var b [16]byte
 	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
 		return "", fmt.Errorf("generate session id: %w", err)
@@ -148,11 +148,11 @@ func ValidateClientHello(msg *ClientHelloMessage) error {
 }
 
 // NewServerHello 构建服务端 hello 握手响应消息对象。
-func NewServerHello(sessionID string) ServerHelloMessage {
+func NewServerHello(sessionId string) ServerHelloMessage {
 	return ServerHelloMessage{
 		Type:      MessageTypeHello,
 		Transport: TransportWebSocket,
-		SessionID: sessionID,
+		SessionId: sessionId,
 		AudioParams: ServerAudioParams{
 			Format:        ServerAudioFormat,
 			SampleRate:    ServerSampleRate,

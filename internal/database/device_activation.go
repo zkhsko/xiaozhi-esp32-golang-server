@@ -24,10 +24,10 @@ const (
 var (
 	// ErrActivationNotFound 表示设备激活记录未找到。
 	ErrActivationNotFound = errors.New("device activation not found")
-	// ErrEmptyDeviceID 表示设备 Device-Id 为空。
-	ErrEmptyDeviceID = errors.New("device id cannot be empty")
-	// ErrEmptyClientID 表示设备 Client-Id 为空。
-	ErrEmptyClientID = errors.New("client id cannot be empty")
+	// ErrEmptyDeviceId 表示设备 Device-Id 为空。
+	ErrEmptyDeviceId = errors.New("device id cannot be empty")
+	// ErrEmptyClientId 表示设备 Client-Id 为空。
+	ErrEmptyClientId = errors.New("client id cannot be empty")
 	// ErrInvalidActivation 表示设备激活记录对象为 nil 或非法。
 	ErrInvalidActivation = errors.New("invalid device activation")
 )
@@ -47,10 +47,10 @@ var (
 // - created_at: 记录创建时间。
 // - updated_at: 记录最近更新时间。
 type DeviceActivation struct {
-	ID               uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Id               uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	SerialNumber     string    `gorm:"uniqueIndex:uk_serial_number;column:serial_number;size:64;not null" json:"serial_number"`
-	DeviceID         string    `gorm:"index:idx_device_id;column:device_id;size:64;not null" json:"device_id"`
-	ClientID         string    `gorm:"column:client_id;size:64" json:"client_id,omitempty"`
+	DeviceId         string    `gorm:"index:idx_device_id;column:device_id;size:64;not null" json:"device_id"`
+	ClientId         string    `gorm:"column:client_id;size:64" json:"client_id,omitempty"`
 	ActivationStatus string    `gorm:"column:activation_status;size:16;not null;default:'active'" json:"activation_status"`
 	ActivatedAt      time.Time `gorm:"column:activated_at;not null" json:"activated_at"`
 	CreatedAt        time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
@@ -60,8 +60,8 @@ type DeviceActivation struct {
 // DeviceActivationFilter 定义设备激活关系查询过滤条件。
 type DeviceActivationFilter struct {
 	SerialNumber     string
-	DeviceID         string
-	ClientID         string
+	DeviceId         string
+	ClientId         string
 	ActivationStatus string
 	Page             int
 	PageSize         int
@@ -79,7 +79,7 @@ func (DeviceActivation) TableName() string {
 //  3. 若已激活过（记录已存在）：更新 device_id、client_id、activation_status=active；
 //     并删除 device_user_ref 表中该 serialNumber 绑定的旧用户记录与 device_access_token 中的旧 Token（保证重新激活后需重新绑定用户，且旧 Token 立即失效）；
 //  4. 将 device_hmac_credential 中该 serialNumber 的凭证状态更新为 activated（若当前为 enabled）。
-func (d *Database) ActivateDeviceBySerialNumber(ctx context.Context, serialNumber, deviceID, clientID string) (*DeviceActivation, error) {
+func (d *Database) ActivateDeviceBySerialNumber(ctx context.Context, serialNumber, deviceId, clientId string) (*DeviceActivation, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
@@ -88,8 +88,8 @@ func (d *Database) ActivateDeviceBySerialNumber(ctx context.Context, serialNumbe
 	if trimmedSN == "" {
 		return nil, ErrEmptySerialNumber
 	}
-	trimmedDeviceID := strings.TrimSpace(deviceID)
-	trimmedClientID := strings.TrimSpace(clientID)
+	trimmedDeviceId := strings.TrimSpace(deviceId)
+	trimmedClientId := strings.TrimSpace(clientId)
 
 	var act DeviceActivation
 	err := d.gormDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -103,8 +103,8 @@ func (d *Database) ActivateDeviceBySerialNumber(ctx context.Context, serialNumbe
 		if errors.Is(findErr, gorm.ErrRecordNotFound) {
 			act = DeviceActivation{
 				SerialNumber:     trimmedSN,
-				DeviceID:         trimmedDeviceID,
-				ClientID:         trimmedClientID,
+				DeviceId:         trimmedDeviceId,
+				ClientId:         trimmedClientId,
 				ActivationStatus: ActivationStatusActive,
 				ActivatedAt:      now,
 			}
@@ -115,11 +115,11 @@ func (d *Database) ActivateDeviceBySerialNumber(ctx context.Context, serialNumbe
 			updates := map[string]any{
 				"activation_status": ActivationStatusActive,
 			}
-			if trimmedDeviceID != "" {
-				updates["device_id"] = trimmedDeviceID
+			if trimmedDeviceId != "" {
+				updates["device_id"] = trimmedDeviceId
 			}
-			if trimmedClientID != "" {
-				updates["client_id"] = trimmedClientID
+			if trimmedClientId != "" {
+				updates["client_id"] = trimmedClientId
 			}
 
 			if err := tx.Model(&existing).Updates(updates).Error; err != nil {
@@ -135,11 +135,11 @@ func (d *Database) ActivateDeviceBySerialNumber(ctx context.Context, serialNumbe
 			}
 
 			act = existing
-			if trimmedDeviceID != "" {
-				act.DeviceID = trimmedDeviceID
+			if trimmedDeviceId != "" {
+				act.DeviceId = trimmedDeviceId
 			}
-			if trimmedClientID != "" {
-				act.ClientID = trimmedClientID
+			if trimmedClientId != "" {
+				act.ClientId = trimmedClientId
 			}
 			act.ActivationStatus = ActivationStatusActive
 		}
@@ -196,11 +196,11 @@ func (d *Database) FindDeviceActivationBySerialNumber(ctx context.Context, seria
 // BindDeviceWithSN 在单一数据库事务中原子地完成带序列号设备的激活、用户绑定及 Access Token 写入。
 // 业务流程（在单一事务中执行）：
 //  1. 激活或更新 device_activation 记录（status=active, device_id, client_id）；
-//  2. 插入或更新 device_user_ref 绑定关系（user_id=userID）；
+//  2. 插入或更新 device_user_ref 绑定关系（user_id=userId）；
 //  3. 从 device_hmac_credential 生产表获取 device_type（若凭证状态为 enabled 则更新为 activated）；
 //  4. 插入或更新 device_access_token（access_token=accessToken, device_type=生产表device_type, has_exposed=false, issued_at=now, expires_at=nil, revoked_at=nil）。
 // 若事务中任一步骤失败，整笔事务全部回滚，保证不出现部分提交。
-func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceID, clientID, accessToken string, userID uint64) (*DeviceActivation, error) {
+func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceId, clientId, accessToken string, userId uint64) (*DeviceActivation, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
@@ -213,11 +213,11 @@ func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceID,
 	if trimmedToken == "" {
 		return nil, ErrEmptyAccessToken
 	}
-	if userID == 0 {
-		return nil, ErrEmptyUserID
+	if userId == 0 {
+		return nil, ErrEmptyUserId
 	}
-	trimmedDeviceID := strings.TrimSpace(deviceID)
-	trimmedClientID := strings.TrimSpace(clientID)
+	trimmedDeviceId := strings.TrimSpace(deviceId)
+	trimmedClientId := strings.TrimSpace(clientId)
 
 	var act DeviceActivation
 	err := d.gormDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -232,8 +232,8 @@ func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceID,
 		if errors.Is(findActErr, gorm.ErrRecordNotFound) {
 			act = DeviceActivation{
 				SerialNumber:     trimmedSN,
-				DeviceID:         trimmedDeviceID,
-				ClientID:         trimmedClientID,
+				DeviceId:         trimmedDeviceId,
+				ClientId:         trimmedClientId,
 				ActivationStatus: ActivationStatusActive,
 				ActivatedAt:      now,
 			}
@@ -244,21 +244,21 @@ func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceID,
 			updates := map[string]any{
 				"activation_status": ActivationStatusActive,
 			}
-			if trimmedDeviceID != "" {
-				updates["device_id"] = trimmedDeviceID
+			if trimmedDeviceId != "" {
+				updates["device_id"] = trimmedDeviceId
 			}
-			if trimmedClientID != "" {
-				updates["client_id"] = trimmedClientID
+			if trimmedClientId != "" {
+				updates["client_id"] = trimmedClientId
 			}
 			if err := tx.Model(&existingAct).Updates(updates).Error; err != nil {
 				return fmt.Errorf("update device activation: %w", err)
 			}
 			act = existingAct
-			if trimmedDeviceID != "" {
-				act.DeviceID = trimmedDeviceID
+			if trimmedDeviceId != "" {
+				act.DeviceId = trimmedDeviceId
 			}
-			if trimmedClientID != "" {
-				act.ClientID = trimmedClientID
+			if trimmedClientId != "" {
+				act.ClientId = trimmedClientId
 			}
 			act.ActivationStatus = ActivationStatusActive
 		}
@@ -273,13 +273,13 @@ func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceID,
 		if errors.Is(findRefErr, gorm.ErrRecordNotFound) {
 			newRef := DeviceUserRef{
 				SerialNumber: trimmedSN,
-				UserID:       userID,
+				UserId:       userId,
 			}
 			if err := tx.Create(&newRef).Error; err != nil {
 				return fmt.Errorf("create device user ref: %w", err)
 			}
-		} else if existingRef.UserID != userID {
-			if err := tx.Model(&existingRef).Update("user_id", userID).Error; err != nil {
+		} else if existingRef.UserId != userId {
+			if err := tx.Model(&existingRef).Update("user_id", userId).Error; err != nil {
 				return fmt.Errorf("update device user ref: %w", err)
 			}
 		}
@@ -342,30 +342,30 @@ func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceID,
 	return &act, nil
 }
 
-// FindDeviceActivationByDeviceIDAndClientID 根据后端 Device-Id 和 Client-Id 查询最新的激活记录。
-func (d *Database) FindDeviceActivationByDeviceIDAndClientID(ctx context.Context, deviceID, clientID string) (*DeviceActivation, error) {
+// FindDeviceActivationByDeviceIdAndClientId 根据后端 Device-Id 和 Client-Id 查询最新的激活记录。
+func (d *Database) FindDeviceActivationByDeviceIdAndClientId(ctx context.Context, deviceId, clientId string) (*DeviceActivation, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
 
-	trimmedDeviceID := strings.TrimSpace(deviceID)
-	if trimmedDeviceID == "" {
-		return nil, ErrEmptyDeviceID
+	trimmedDeviceId := strings.TrimSpace(deviceId)
+	if trimmedDeviceId == "" {
+		return nil, ErrEmptyDeviceId
 	}
-	trimmedClientID := strings.TrimSpace(clientID)
-	if trimmedClientID == "" {
-		return nil, ErrEmptyClientID
+	trimmedClientId := strings.TrimSpace(clientId)
+	if trimmedClientId == "" {
+		return nil, ErrEmptyClientId
 	}
 
 	var act DeviceActivation
 	err := d.gormDB.WithContext(ctx).
 		Model(&DeviceActivation{}).
-		Where("device_id = ? AND client_id = ?", trimmedDeviceID, trimmedClientID).
+		Where("device_id = ? AND client_id = ?", trimmedDeviceId, trimmedClientId).
 		Order("id DESC").
 		Take(&act).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("find device activation by device_id %q and client_id %q: %w", trimmedDeviceID, trimmedClientID, ErrActivationNotFound)
+			return nil, fmt.Errorf("find device activation by device_id %q and client_id %q: %w", trimmedDeviceId, trimmedClientId, ErrActivationNotFound)
 		}
 		return nil, fmt.Errorf("query device activation by device_id and client_id: %w", err)
 	}
@@ -384,10 +384,10 @@ func (d *Database) ListDeviceActivations(ctx context.Context, filter DeviceActiv
 	if sn := strings.TrimSpace(filter.SerialNumber); sn != "" {
 		query = query.Where("serial_number LIKE ?", "%"+sn+"%")
 	}
-	if did := strings.TrimSpace(filter.DeviceID); did != "" {
+	if did := strings.TrimSpace(filter.DeviceId); did != "" {
 		query = query.Where("device_id LIKE ?", "%"+did+"%")
 	}
-	if cid := strings.TrimSpace(filter.ClientID); cid != "" {
+	if cid := strings.TrimSpace(filter.ClientId); cid != "" {
 		query = query.Where("client_id LIKE ?", "%"+cid+"%")
 	}
 	if status := strings.TrimSpace(filter.ActivationStatus); status != "" {
@@ -420,7 +420,7 @@ func (d *Database) ListDeviceActivations(ctx context.Context, filter DeviceActiv
 	return acts, total, nil
 }
 
-// UpdateDeviceActivation 更新指定 ID 的设备激活记录字段。
+// UpdateDeviceActivation 更新指定 Id 的设备激活记录字段。
 func (d *Database) UpdateDeviceActivation(ctx context.Context, id uint64, updates map[string]any) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
@@ -460,7 +460,7 @@ func (d *Database) UpdateDeviceActivation(ctx context.Context, id uint64, update
 	return nil
 }
 
-// DeleteDeviceActivation 删除指定 ID 的设备激活记录。
+// DeleteDeviceActivation 删除指定 Id 的设备激活记录。
 func (d *Database) DeleteDeviceActivation(ctx context.Context, id uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
@@ -479,7 +479,7 @@ func (d *Database) DeleteDeviceActivation(ctx context.Context, id uint64) error 
 	return nil
 }
 
-// BatchDeleteDeviceActivations 批量删除指定 ID 的设备激活记录。
+// BatchDeleteDeviceActivations 批量删除指定 Id 的设备激活记录。
 func (d *Database) BatchDeleteDeviceActivations(ctx context.Context, ids []uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
@@ -488,17 +488,17 @@ func (d *Database) BatchDeleteDeviceActivations(ctx context.Context, ids []uint6
 		return nil
 	}
 
-	validIDs := make([]uint64, 0, len(ids))
+	validIds := make([]uint64, 0, len(ids))
 	for _, id := range ids {
 		if id > 0 {
-			validIDs = append(validIDs, id)
+			validIds = append(validIds, id)
 		}
 	}
-	if len(validIDs) == 0 {
+	if len(validIds) == 0 {
 		return nil
 	}
 
-	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIDs).Delete(&DeviceActivation{}).Error; err != nil {
+	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIds).Delete(&DeviceActivation{}).Error; err != nil {
 		return fmt.Errorf("batch delete device activations: %w", err)
 	}
 	return nil

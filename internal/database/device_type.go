@@ -16,14 +16,14 @@ var (
 	ErrDeviceTypeNotFound = errors.New("device type not found")
 	// ErrInvalidDeviceType 表示设备类型结构体为 nil 或非法。
 	ErrInvalidDeviceType = errors.New("invalid device type")
-	// ErrInvalidDeviceTypeID 表示设备类型 ID 为 0 或非法。
-	ErrInvalidDeviceTypeID = errors.New("device type id cannot be empty or zero")
+	// ErrInvalidDeviceTypeId 表示设备类型 Id 为 0 或非法。
+	ErrInvalidDeviceTypeId = errors.New("device type id cannot be empty or zero")
 	// ErrEmptyDeviceType 表示设备类型为空。
 	ErrEmptyDeviceType = errors.New("device type cannot be empty")
 	// ErrInvalidDeviceTypeLength 表示设备类型长度超过 32 字节。
 	ErrInvalidDeviceTypeLength = errors.New("device type length exceeds 32 bytes")
-	// ErrInvalidAgentConfigID 表示 Agent 配置 ID 为 0 或非法。
-	ErrInvalidAgentConfigID = errors.New("agent config id cannot be empty or zero")
+	// ErrInvalidAgentConfigId 表示 Agent 配置 Id 为 0 或非法。
+	ErrInvalidAgentConfigId = errors.New("agent config id cannot be empty or zero")
 	// ErrDeviceTypeAlreadyExists 表示设备类型已存在。
 	ErrDeviceTypeAlreadyExists = errors.New("device type already exists")
 	// ErrReferencedAgentNotFound 表示引用的 Agent 配置不存在。
@@ -40,13 +40,13 @@ var (
 // 字段约束与索引规范：
 // - id: 自增主键。
 // - device_type: 设备类型，全局业务唯一，唯一索引 uk_device_type。
-// - agent_config_id: 关联的 Agent 配置 ID，非空，普通索引 idx_agent_config_id。
+// - agent_config_id: 关联的 Agent 配置 Id，非空，普通索引 idx_agent_config_id。
 // - created_at: 创建时间。
 // - updated_at: 记录最近更新时间。
 type DeviceType struct {
-	ID            uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Id            uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	DeviceType    string    `gorm:"uniqueIndex:uk_device_type;column:device_type;size:32;not null" json:"device_type"`
-	AgentConfigID uint64    `gorm:"index:idx_agent_config_id;column:agent_config_id;not null" json:"agent_config_id"`
+	AgentConfigId uint64    `gorm:"index:idx_agent_config_id;column:agent_config_id;not null" json:"agent_config_id"`
 	CreatedAt     time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
 	UpdatedAt     time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
 }
@@ -70,8 +70,8 @@ func (c *DeviceType) Validate() error {
 		return ErrInvalidDeviceTypeLength
 	}
 
-	if c.AgentConfigID == 0 {
-		return ErrInvalidAgentConfigID
+	if c.AgentConfigId == 0 {
+		return ErrInvalidAgentConfigId
 	}
 
 	return nil
@@ -80,7 +80,7 @@ func (c *DeviceType) Validate() error {
 // DeviceTypeFilter 定义设备类型查询过滤条件。
 type DeviceTypeFilter struct {
 	DeviceType    string
-	AgentConfigID uint64
+	AgentConfigId uint64
 	Page          int
 	PageSize      int
 }
@@ -102,7 +102,7 @@ func (d *Database) CreateDeviceType(ctx context.Context, dt *DeviceType) error {
 
 	// 校验关联的 Agent 是否存在
 	var agent AgentConfig
-	if err := d.gormDB.WithContext(ctx).Where("id = ?", dt.AgentConfigID).Take(&agent).Error; err != nil {
+	if err := d.gormDB.WithContext(ctx).Where("id = ?", dt.AgentConfigId).Take(&agent).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrReferencedAgentNotFound
 		}
@@ -122,13 +122,13 @@ func (d *Database) CreateDeviceType(ctx context.Context, dt *DeviceType) error {
 	return nil
 }
 
-// FindDeviceTypeByID 根据 ID 查询设备类型记录。
-func (d *Database) FindDeviceTypeByID(ctx context.Context, id uint64) (*DeviceType, error) {
+// FindDeviceTypeById 根据 Id 查询设备类型记录。
+func (d *Database) FindDeviceTypeById(ctx context.Context, id uint64) (*DeviceType, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
 	if id == 0 {
-		return nil, ErrInvalidDeviceTypeID
+		return nil, ErrInvalidDeviceTypeId
 	}
 
 	var dt DeviceType
@@ -146,13 +146,13 @@ func (d *Database) FindDeviceTypeByID(ctx context.Context, id uint64) (*DeviceTy
 	return &dt, nil
 }
 
-// UpdateDeviceTypeByID 按主键 ID 覆盖更新设备类型配置。
-func (d *Database) UpdateDeviceTypeByID(ctx context.Context, dt *DeviceType) error {
+// UpdateDeviceTypeById 按主键 Id 覆盖更新设备类型配置。
+func (d *Database) UpdateDeviceTypeById(ctx context.Context, dt *DeviceType) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
 	}
-	if dt == nil || dt.ID == 0 {
-		return ErrInvalidDeviceTypeID
+	if dt == nil || dt.Id == 0 {
+		return ErrInvalidDeviceTypeId
 	}
 
 	if err := dt.Validate(); err != nil {
@@ -163,7 +163,7 @@ func (d *Database) UpdateDeviceTypeByID(ctx context.Context, dt *DeviceType) err
 
 	// 校验关联的 Agent 是否存在
 	var agent AgentConfig
-	if err := d.gormDB.WithContext(ctx).Where("id = ?", dt.AgentConfigID).Take(&agent).Error; err != nil {
+	if err := d.gormDB.WithContext(ctx).Where("id = ?", dt.AgentConfigId).Take(&agent).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrReferencedAgentNotFound
 		}
@@ -172,25 +172,25 @@ func (d *Database) UpdateDeviceTypeByID(ctx context.Context, dt *DeviceType) err
 
 	// 检查 device_type 是否与其他记录冲突
 	var existing DeviceType
-	if err := d.gormDB.WithContext(ctx).Where("device_type = ? AND id != ?", dt.DeviceType, dt.ID).Take(&existing).Error; err == nil {
+	if err := d.gormDB.WithContext(ctx).Where("device_type = ? AND id != ?", dt.DeviceType, dt.Id).Take(&existing).Error; err == nil {
 		return ErrDeviceTypeAlreadyExists
 	}
 
 	updates := map[string]any{
 		"device_type":     dt.DeviceType,
-		"agent_config_id": dt.AgentConfigID,
+		"agent_config_id": dt.AgentConfigId,
 		"updated_at":      time.Now(),
 	}
 
 	res := d.gormDB.WithContext(ctx).
 		Model(&DeviceType{}).
-		Where("id = ?", dt.ID).
+		Where("id = ?", dt.Id).
 		Updates(updates)
 	if res.Error != nil {
 		return fmt.Errorf("update device type by id: %w", res.Error)
 	}
 	if res.RowsAffected == 0 {
-		return fmt.Errorf("update device type by id %d: %w", dt.ID, ErrDeviceTypeNotFound)
+		return fmt.Errorf("update device type by id %d: %w", dt.Id, ErrDeviceTypeNotFound)
 	}
 
 	return nil
@@ -224,7 +224,7 @@ func (d *Database) FindDeviceTypeByDeviceType(ctx context.Context, deviceType st
 
 // UpsertDeviceType 插入或更新设备类型与 Agent 配置的关联关系。
 // 若该设备类型已有配置关联，则更新其 agent_config_id；若无关联记录，则创建新的关联记录。
-func (d *Database) UpsertDeviceType(ctx context.Context, deviceType string, agentConfigID uint64) (*DeviceType, error) {
+func (d *Database) UpsertDeviceType(ctx context.Context, deviceType string, agentConfigId uint64) (*DeviceType, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
@@ -233,8 +233,8 @@ func (d *Database) UpsertDeviceType(ctx context.Context, deviceType string, agen
 	if trimmedType == "" {
 		return nil, ErrEmptyDeviceType
 	}
-	if agentConfigID == 0 {
-		return nil, ErrInvalidAgentConfigID
+	if agentConfigId == 0 {
+		return nil, ErrInvalidAgentConfigId
 	}
 
 	var dt DeviceType
@@ -248,7 +248,7 @@ func (d *Database) UpsertDeviceType(ctx context.Context, deviceType string, agen
 		if errors.Is(findErr, gorm.ErrRecordNotFound) {
 			dt = DeviceType{
 				DeviceType:    trimmedType,
-				AgentConfigID: agentConfigID,
+				AgentConfigId: agentConfigId,
 			}
 			if err := tx.Create(&dt).Error; err != nil {
 				return fmt.Errorf("create device type: %w", err)
@@ -256,13 +256,13 @@ func (d *Database) UpsertDeviceType(ctx context.Context, deviceType string, agen
 			return nil
 		}
 
-		if existing.AgentConfigID != agentConfigID {
-			if err := tx.Model(&existing).Update("agent_config_id", agentConfigID).Error; err != nil {
+		if existing.AgentConfigId != agentConfigId {
+			if err := tx.Model(&existing).Update("agent_config_id", agentConfigId).Error; err != nil {
 				return fmt.Errorf("update device type: %w", err)
 			}
 		}
 		dt = existing
-		dt.AgentConfigID = agentConfigID
+		dt.AgentConfigId = agentConfigId
 		return nil
 	})
 	if err != nil {
@@ -272,19 +272,19 @@ func (d *Database) UpsertDeviceType(ctx context.Context, deviceType string, agen
 	return &dt, nil
 }
 
-// FindDeviceTypesByAgentConfigID 根据 Agent 配置 ID 查询关联的所有设备类型列表。
-func (d *Database) FindDeviceTypesByAgentConfigID(ctx context.Context, agentConfigID uint64) ([]*DeviceType, error) {
+// FindDeviceTypesByAgentConfigId 根据 Agent 配置 Id 查询关联的所有设备类型列表。
+func (d *Database) FindDeviceTypesByAgentConfigId(ctx context.Context, agentConfigId uint64) ([]*DeviceType, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired
 	}
-	if agentConfigID == 0 {
-		return nil, ErrInvalidAgentConfigID
+	if agentConfigId == 0 {
+		return nil, ErrInvalidAgentConfigId
 	}
 
 	var dts []*DeviceType
 	err := d.gormDB.WithContext(ctx).
 		Model(&DeviceType{}).
-		Where("agent_config_id = ?", agentConfigID).
+		Where("agent_config_id = ?", agentConfigId).
 		Order("id ASC").
 		Find(&dts).Error
 	if err != nil {
@@ -305,8 +305,8 @@ func (d *Database) ListDeviceTypes(ctx context.Context, filter DeviceTypeFilter)
 	if dt := strings.TrimSpace(filter.DeviceType); dt != "" {
 		query = query.Where("device_type LIKE ?", "%"+dt+"%")
 	}
-	if filter.AgentConfigID > 0 {
-		query = query.Where("agent_config_id = ?", filter.AgentConfigID)
+	if filter.AgentConfigId > 0 {
+		query = query.Where("agent_config_id = ?", filter.AgentConfigId)
 	}
 
 	var total int64
@@ -335,13 +335,13 @@ func (d *Database) ListDeviceTypes(ctx context.Context, filter DeviceTypeFilter)
 	return dts, total, nil
 }
 
-// DeleteDeviceType 删除指定 ID 的设备类型记录。
+// DeleteDeviceType 删除指定 Id 的设备类型记录。
 func (d *Database) DeleteDeviceType(ctx context.Context, id uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
 	}
 	if id == 0 {
-		return ErrInvalidDeviceTypeID
+		return ErrInvalidDeviceTypeId
 	}
 
 	res := d.gormDB.WithContext(ctx).Where("id = ?", id).Delete(&DeviceType{})
@@ -354,7 +354,7 @@ func (d *Database) DeleteDeviceType(ctx context.Context, id uint64) error {
 	return nil
 }
 
-// BatchDeleteDeviceTypes 批量删除指定 ID 列表的设备类型记录。
+// BatchDeleteDeviceTypes 批量删除指定 Id 列表的设备类型记录。
 func (d *Database) BatchDeleteDeviceTypes(ctx context.Context, ids []uint64) error {
 	if d == nil || d.gormDB == nil {
 		return ErrDatabaseInstanceRequired
@@ -363,17 +363,17 @@ func (d *Database) BatchDeleteDeviceTypes(ctx context.Context, ids []uint64) err
 		return nil
 	}
 
-	validIDs := make([]uint64, 0, len(ids))
+	validIds := make([]uint64, 0, len(ids))
 	for _, id := range ids {
 		if id > 0 {
-			validIDs = append(validIDs, id)
+			validIds = append(validIds, id)
 		}
 	}
-	if len(validIDs) == 0 {
+	if len(validIds) == 0 {
 		return nil
 	}
 
-	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIDs).Delete(&DeviceType{}).Error; err != nil {
+	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIds).Delete(&DeviceType{}).Error; err != nil {
 		return fmt.Errorf("batch delete device types: %w", err)
 	}
 	return nil

@@ -34,8 +34,8 @@ type PendingActivation struct {
 	Code         string    `json:"code"`
 	Challenge    string    `json:"challenge"`
 	SerialNumber string    `json:"serial_number"`
-	DeviceID     string    `json:"device_id"`
-	ClientID     string    `json:"client_id"`
+	DeviceId     string    `json:"device_id"`
+	ClientId     string    `json:"client_id"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
@@ -76,7 +76,7 @@ func NewOTAHandler(cfg *config.Config, db *database.Database, l *slog.Logger) *O
 }
 
 // createPendingActivation 生成新的 6 位随机激活码与 256-bit Challenge 并存入缓存。
-func (h *OTAHandler) createPendingActivation(sn, deviceID, clientID string) (PendingActivation, error) {
+func (h *OTAHandler) createPendingActivation(sn, deviceId, clientId string) (PendingActivation, error) {
 	for attempt := 0; attempt < 5; attempt++ {
 		code, err := generateActivationCode()
 		if err != nil {
@@ -96,8 +96,8 @@ func (h *OTAHandler) createPendingActivation(sn, deviceID, clientID string) (Pen
 			Code:         code,
 			Challenge:    challenge,
 			SerialNumber: sn,
-			DeviceID:     deviceID,
-			ClientID:     clientID,
+			DeviceId:     deviceId,
+			ClientId:     clientId,
 			CreatedAt:    time.Now(),
 		}
 
@@ -173,8 +173,8 @@ func (h *OTAHandler) handleOTA(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("ota check request received",
 		"method", r.Method,
 		"path", r.URL.Path,
-		"device_id", logger.TruncateString(headers.DeviceID),
-		"client_id", logger.TruncateString(headers.ClientID),
+		"device_id", logger.TruncateString(headers.DeviceId),
+		"client_id", logger.TruncateString(headers.ClientId),
 		"serial_number", logger.TruncateString(headers.SerialNumber),
 		"activation_version", logger.TruncateString(headers.ActivationVersion),
 		"user_agent", logger.TruncateString(headers.UserAgent),
