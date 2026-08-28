@@ -54,7 +54,7 @@ func (r *Registry) GetBySerial(serialNumber string) *Session {
 	return r.byDevice[serialNumber]
 }
 
-// GetByDevice 查询指定设备唯一标识（序列号或设备 MAC）当前关联的活跃会话，若不存在则返回 nil。
+// GetByDevice 查询指定设备唯一标识（序列号 SN）当前关联的活跃会话，若不存在则返回 nil。
 func (r *Registry) GetByDevice(deviceKey string) *Session {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -82,8 +82,8 @@ func (r *Registry) Acquire() (func(), bool) {
 	return r.limiter.TryAcquire()
 }
 
-// Register 将活跃会话登记到注册表中并维护按设备唯一身份（优先 Serial-Number，次选 Device-Id）的单设备连接互斥。
-// 若相同设备已有活跃旧会话，将自动断开旧会话以确保同一设备全局唯一连接。
+// Register 将活跃会话登记到注册表中并维护按设备唯一身份（SerialNumber）的单设备连接互斥。
+// 若相同 SN 的设备已有活跃旧会话，将自动断开旧会话以确保同一设备全局唯一连接。
 // 可选传入准入释放函数，将在会话注销且名额释放后触发等待组完成。
 // 若注册表已关闭，返回 (nil, false)；
 // 成功时返回注销函数与 true。注销函数保证幂等执行。

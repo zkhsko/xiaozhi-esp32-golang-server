@@ -115,26 +115,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. 升级前认证与请求头校验（从数据库查询 Token 鉴权）
+	// 2. 升级前认证与请求头校验（从数据库查询 Token 鉴权并获取设备 SN）
 	maxHeaderBytes := MaxSingleHeaderBytes
 	if h.cfg != nil && h.cfg.Server.MaxHTTPHeaderBytes > 0 {
 		maxHeaderBytes = h.cfg.Server.MaxHTTPHeaderBytes
 	}
 
-	clientInfo, err := AuthenticateUpgrade(r, h.db, maxHeaderBytes)
+	sn, err := AuthenticateUpgrade(r, h.db, maxHeaderBytes)
 	if err != nil {
 		RejectUpgrade(w, r, h.logger, err)
 		return
 	}
-	LogAuthSuccess(h.logger, r, clientInfo)
+	LogAuthSuccess(h.logger, r, sn)
 
 	// 3. 活跃会话并发准入控制（满载或停服时拒绝升级并返回 503）
 	release, ok := h.registry.Acquire()
 	if !ok {
 		h.logger.Warn("websocket upgrade rejected: max concurrent sessions reached or shutting down",
-			"device_id", logger.TruncateString(clientInfo.DeviceID),
-			"client_id", logger.TruncateString(clientInfo.ClientID),
-			"serial_number", logger.TruncateString(clientInfo.SerialNumber),
+			"serial_number", logger.TruncateString(sn),
 			"active_sessions", h.registry.Limiter().ActiveCount(),
 			"max_sessions", h.registry.Limiter().MaxSessions(),
 		)
@@ -152,30 +150,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		release()
 		h.logger.Error("websocket upgrade failed",
 			"error", err,
-			"device_id", logger.TruncateString(clientInfo.DeviceID),
-			"client_id", logger.TruncateString(clientInfo.ClientID),
-			"serial_number", logger.TruncateString(clientInfo.SerialNumber),
+			"serial_number", logger.TruncateString(sn),
 		)
 		return
 	}
 	defer conn.Close(websocket.StatusInternalError, "session closed")
 
 	h.logger.Info("websocket session connected",
-		"device_id", logger.TruncateString(clientInfo.DeviceID),
-		"client_id", logger.TruncateString(clientInfo.ClientID),
-		"serial_number", logger.TruncateString(clientInfo.SerialNumber),
+		"serial_number", logger.TruncateString(sn),
 		"active_sessions", h.registry.Limiter().ActiveCount(),
 	)
 
 	// 5. 构造会话并注册到会话注册表，统一注销与名额释放顺序
 	sess := NewSession(r.Context(), Options{
-		Conn:       conn,
-		ClientInfo: clientInfo,
-		Config:     h.cfg,
-		ASRClient:  h.asrClient,
-		LLMClient:  h.llmClient,
-		TTSClient:  h.ttsClient,
-		Logger:     h.logger,
+		Conn:         conn,
+		SerialNumber: sn,
+		Config:       h.cfg,
+		ASRClient:    h.asrClient,
+		LLMClient:    h.llmClient,
+		TTSClient:    h.ttsClient,
+		Logger:       h.logger,
 	})
 	unregister, registered := h.registry.Register(sess, release)
 	if !registered {
@@ -189,8 +183,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = sess.Run()
 
 	h.logger.Info("websocket session closed",
-		"device_id", logger.TruncateString(clientInfo.DeviceID),
-		"client_id", logger.TruncateString(clientInfo.ClientID),
-		"serial_number", logger.TruncateString(clientInfo.SerialNumber),
+		"serial_number", logger.TruncateString(sn),
 	)
 }

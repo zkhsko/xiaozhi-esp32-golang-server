@@ -165,12 +165,12 @@ func TestBindDeviceWithSN_Success_AndWebSocketAuth(t *testing.T) {
 	wsReq.Header.Set("Protocol-Version", "1")
 	wsReq.Header.Set("Serial-Number", testSN)
 	wsReq.Header.Set("Device-Id", testDeviceID)
-	info, err := session.AuthenticateUpgrade(wsReq, db, 0)
+	sn, err := session.AuthenticateUpgrade(wsReq, db, 0)
 	if err != nil {
 		t.Fatalf("WebSocket AuthenticateUpgrade failed with newly bound token: %v", err)
 	}
-	if info.SerialNumber != testSN || info.DeviceID != testDeviceID {
-		t.Errorf("unexpected client header info: %+v", info)
+	if sn != testSN {
+		t.Errorf("unexpected sn: %q, expected: %q", sn, testSN)
 	}
 }
 
@@ -327,9 +327,9 @@ func TestBindDeviceWithSN_Rebind_InvalidatesOldToken(t *testing.T) {
 	wsReqOld.Header.Set("Authorization", "Bearer "+oldToken)
 	wsReqOld.Header.Set("Protocol-Version", "1")
 	wsReqOld.Header.Set("Serial-Number", testSN)
-	info, err := session.AuthenticateUpgrade(wsReqOld, db, 0)
-	if err != nil || info == nil {
-		t.Fatalf("expected old token auth to succeed, got info: %+v, err: %v", info, err)
+	sn, err := session.AuthenticateUpgrade(wsReqOld, db, 0)
+	if err != nil || sn != testSN {
+		t.Fatalf("expected old token auth to succeed, got sn: %q, err: %v", sn, err)
 	}
 
 	// 2. Re-bind via User Handler
@@ -370,9 +370,9 @@ func TestBindDeviceWithSN_Rebind_InvalidatesOldToken(t *testing.T) {
 	wsReqNew.Header.Set("Authorization", "Bearer "+newTok.AccessToken)
 	wsReqNew.Header.Set("Protocol-Version", "1")
 	wsReqNew.Header.Set("Serial-Number", testSN)
-	newInfo, err := session.AuthenticateUpgrade(wsReqNew, db, 0)
-	if err != nil || newInfo == nil {
-		t.Fatalf("expected new token auth to succeed, got info: %+v, err: %v", newInfo, err)
+	newSN, err := session.AuthenticateUpgrade(wsReqNew, db, 0)
+	if err != nil || newSN != testSN {
+		t.Fatalf("expected new token auth to succeed, got sn: %q, err: %v", newSN, err)
 	}
 
 	// 5. Verify user binding updated to MockCurrentUserID
@@ -499,12 +499,12 @@ func TestBindDeviceWithoutSN_Success_AndWebSocketAuth(t *testing.T) {
 	wsReq.Header.Set("Protocol-Version", "1")
 	wsReq.Header.Set("Serial-Number", testSN)
 	wsReq.Header.Set("Device-Id", testDeviceID)
-	info, err := session.AuthenticateUpgrade(wsReq, db, 0)
+	sn, err := session.AuthenticateUpgrade(wsReq, db, 0)
 	if err != nil {
 		t.Fatalf("WebSocket AuthenticateUpgrade failed with newly bound token: %v", err)
 	}
-	if info.SerialNumber != testSN || info.DeviceID != testDeviceID {
-		t.Errorf("unexpected client header info: %+v", info)
+	if sn != testSN {
+		t.Errorf("unexpected sn: %q, expected: %q", sn, testSN)
 	}
 }
 
@@ -993,9 +993,9 @@ func TestBindDeviceWithoutSN_Rebind_InvalidatesOldToken(t *testing.T) {
 	wsReqOld.Header.Set("Authorization", "Bearer "+oldToken)
 	wsReqOld.Header.Set("Protocol-Version", "1")
 	wsReqOld.Header.Set("Serial-Number", testSN)
-	info, err := session.AuthenticateUpgrade(wsReqOld, db, 0)
-	if err != nil || info == nil {
-		t.Fatalf("expected old token auth to succeed, got info: %+v, err: %v", info, err)
+	sn, err := session.AuthenticateUpgrade(wsReqOld, db, 0)
+	if err != nil || sn != testSN {
+		t.Fatalf("expected old token auth to succeed, got sn: %q, err: %v", sn, err)
 	}
 
 	// 2. Re-bind via User Handler (device without SN in OTA stage)
@@ -1038,9 +1038,9 @@ func TestBindDeviceWithoutSN_Rebind_InvalidatesOldToken(t *testing.T) {
 	wsReqNew.Header.Set("Authorization", "Bearer "+newTok.AccessToken)
 	wsReqNew.Header.Set("Protocol-Version", "1")
 	wsReqNew.Header.Set("Serial-Number", testSN)
-	newInfo, err := session.AuthenticateUpgrade(wsReqNew, db, 0)
-	if err != nil || newInfo == nil {
-		t.Fatalf("expected new token auth to succeed, got info: %+v, err: %v", newInfo, err)
+	newSN, err := session.AuthenticateUpgrade(wsReqNew, db, 0)
+	if err != nil || newSN != testSN {
+		t.Fatalf("expected new token auth to succeed, got sn: %q, err: %v", newSN, err)
 	}
 
 	// 5. Verify user binding updated to MockCurrentUserID

@@ -152,9 +152,9 @@ func TestOTAActivateWithHMAC_Reactivation_InvalidatesOldTokenAndBinding(t *testi
 	wsReq.Header.Set("Authorization", "Bearer "+oldToken)
 	wsReq.Header.Set("Protocol-Version", "1")
 	wsReq.Header.Set("Serial-Number", testSN)
-	info, err := session.AuthenticateUpgrade(wsReq, db, 0)
-	if err != nil || info == nil || info.SerialNumber != testSN {
-		t.Fatalf("expected initial auth to succeed, got info: %+v, err: %v", info, err)
+	sn, err := session.AuthenticateUpgrade(wsReq, db, 0)
+	if err != nil || sn != testSN {
+		t.Fatalf("expected initial auth to succeed, got sn: %q, err: %v", sn, err)
 	}
 
 	// 2. Perform HMAC reactivation

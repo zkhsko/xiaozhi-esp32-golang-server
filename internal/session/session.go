@@ -72,9 +72,9 @@ type event struct {
 // Session 负责管理单个 WebSocket 连接的状态机、事件所有权、监听模式与回答代次。
 // 所有状态变更由单一主监督循环串行处理，保证线程安全与代次隔离。
 type Session struct {
-	conn        *websocket.Conn
-	clientInfo  *ClientHeaderInfo
-	cfg         *config.Config
+	conn         *websocket.Conn
+	serialNumber string
+	cfg          *config.Config
 	asrClient   ai.ASRClient
 	llmClient   ai.LLMClient
 	ttsClient   ai.TTSClient
@@ -124,7 +124,7 @@ type Session struct {
 type Options struct {
 	Conn          *websocket.Conn
 	Writer        *Writer
-	ClientInfo    *ClientHeaderInfo
+	SerialNumber  string
 	Config        *config.Config
 	ASRClient     ai.ASRClient
 	LLMClient     ai.LLMClient
@@ -169,7 +169,7 @@ func NewSession(ctx context.Context, opts Options) *Session {
 
 	return &Session{
 		conn:          opts.Conn,
-		clientInfo:    opts.ClientInfo,
+		serialNumber:  opts.SerialNumber,
 		cfg:           opts.Config,
 		asrClient:     opts.ASRClient,
 		llmClient:     opts.LLMClient,
@@ -279,50 +279,20 @@ func (s *Session) SessionID() string {
 	return s.sessionID
 }
 
-// DeviceKey 返回用于全局唯一标识单设备连接的键（优先 SerialNumber，次选 DeviceID，再次选 ClientID）。
+// DeviceKey 返回用于全局唯一标识单设备连接的键（SN 作为设备唯一身份）。
 func (s *Session) DeviceKey() string {
-	if s == nil || s.clientInfo == nil {
-		return ""
-	}
-	if s.clientInfo.SerialNumber != "" {
-		return s.clientInfo.SerialNumber
-	}
-	if s.clientInfo.DeviceID != "" {
-		return s.clientInfo.DeviceID
-	}
-	return s.clientInfo.ClientID
-}
-
-// ProtocolVersion 返回握手协商的协议版本。
-func (s *Session) ProtocolVersion() string {
-	if s == nil || s.clientInfo == nil {
-		return ""
-	}
-	return s.clientInfo.ProtocolVersion
-}
-
-// SerialNumber 返回会话绑定的设备序列号。
-func (s *Session) SerialNumber() string {
-	if s == nil || s.clientInfo == nil {
-		return ""
-	}
-	return s.clientInfo.SerialNumber
-}
-
-// DeviceID 返回会话关联的设备辅助标识。
-func (s *Session) DeviceID() string {
-	if s == nil || s.clientInfo == nil {
-		return ""
-	}
-	return s.clientInfo.DeviceID
-}
-
-// ClientInfo 返回会话关联的客户端头信息快照。
-func (s *Session) ClientInfo() *ClientHeaderInfo {
 	if s == nil {
-		return nil
+		return ""
 	}
-	return s.clientInfo
+	return s.serialNumber
+}
+
+// SerialNumber 返回会话绑定的设备序列号（设备唯一身份）。
+func (s *Session) SerialNumber() string {
+	if s == nil {
+		return ""
+	}
+	return s.serialNumber
 }
 
 // Writer 返回当前关联的串行写流程对象。
@@ -540,7 +510,7 @@ func (s *Session) handleHelloEvent(ev event) {
 	if s.State() != StateConnected {
 		s.logger.Warn("duplicate hello received after handshake",
 			"session_id", s.SessionID(),
-			"device_id", s.truncatedDeviceID(),
+			"serial_number", s.truncatedSerialNumber(),
 		)
 		s.closeWithReason(websocket.StatusPolicyViolation, ErrDuplicateHello.Error())
 		return
@@ -548,7 +518,7 @@ func (s *Session) handleHelloEvent(ev event) {
 
 	if ev.isBinary {
 		s.logger.Warn("first message is not text hello",
-			"device_id", s.truncatedDeviceID(),
+			"serial_number", s.truncatedSerialNumber(),
 		)
 		s.closeWithReason(websocket.StatusUnsupportedData, "first message must be text hello")
 		return
@@ -558,7 +528,7 @@ func (s *Session) handleHelloEvent(ev event) {
 	if err := json.Unmarshal(ev.rawBytes, &clientHello); err != nil {
 		s.logger.Warn("invalid json in hello message",
 			"error", err,
-			"device_id", s.truncatedDeviceID(),
+			"serial_number", s.truncatedSerialNumber(),
 		)
 		s.closeWithReason(websocket.StatusPolicyViolation, "invalid json in hello message")
 		return
@@ -567,7 +537,7 @@ func (s *Session) handleHelloEvent(ev event) {
 	if err := ValidateClientHello(&clientHello); err != nil {
 		s.logger.Warn("invalid hello message fields",
 			"error", err,
-			"device_id", s.truncatedDeviceID(),
+			"serial_number", s.truncatedSerialNumber(),
 		)
 		s.closeWithReason(websocket.StatusPolicyViolation, err.Error())
 		return
@@ -579,7 +549,7 @@ func (s *Session) handleHelloEvent(ev event) {
 	if err != nil {
 		s.logger.Error("failed to generate session id",
 			"error", err,
-			"device_id", s.truncatedDeviceID(),
+			"serial_number", s.truncatedSerialNumber(),
 		)
 		s.closeWithReason(websocket.StatusInternalError, "internal server error")
 		return
@@ -599,7 +569,7 @@ func (s *Session) handleHelloEvent(ev event) {
 		s.logger.Warn("failed to write server hello",
 			"error", err,
 			"session_id", sessionID,
-			"device_id", s.truncatedDeviceID(),
+			"serial_number", s.truncatedSerialNumber(),
 		)
 		s.closeWithReason(websocket.StatusInternalError, "failed to write server hello")
 		return
@@ -616,8 +586,6 @@ func (s *Session) handleHelloEvent(ev event) {
 
 	s.logger.Info("websocket hello handshake succeeded",
 		"session_id", sessionID,
-		"device_id", s.truncatedDeviceID(),
-		"client_id", s.truncatedClientID(),
 		"serial_number", s.truncatedSerialNumber(),
 	)
 }
@@ -634,7 +602,7 @@ func (s *Session) handleClientTextEvent(ev event) {
 	case KindHello:
 		s.logger.Warn("duplicate hello received after handshake",
 			"session_id", s.SessionID(),
-			"device_id", s.truncatedDeviceID(),
+			"serial_number", s.truncatedSerialNumber(),
 		)
 		s.closeWithReason(websocket.StatusPolicyViolation, ErrDuplicateHello.Error())
 
@@ -758,7 +726,7 @@ func (s *Session) handleClientAudioEvent(ev event) {
 
 	if currentState == StateConnected {
 		s.logger.Warn("binary audio message received before hello",
-			"device_id", s.truncatedDeviceID(),
+			"serial_number", s.truncatedSerialNumber(),
 		)
 		s.closeWithReason(websocket.StatusUnsupportedData, "binary message not allowed before hello")
 		return
@@ -1079,8 +1047,6 @@ func (s *Session) handleTimeoutEvent(ev event) {
 	if ev.text == "hello handshake timeout" {
 		if s.State() == StateConnected {
 			s.logger.Warn("hello handshake timeout",
-				"device_id", s.truncatedDeviceID(),
-				"client_id", s.truncatedClientID(),
 				"serial_number", s.truncatedSerialNumber(),
 			)
 			s.closeWithReason(websocket.StatusPolicyViolation, "hello handshake timeout")
@@ -1458,28 +1424,9 @@ func (s *Session) sendTextMessage(payload []byte) error {
 	return s.writer.SendText(s.ctx, payload)
 }
 
-// truncatedDeviceID 获取截断后的设备标识用于日志记录。
-func (s *Session) truncatedDeviceID() string {
-	if s.clientInfo == nil {
-		return ""
-	}
-	return logger.TruncateString(s.clientInfo.DeviceID)
-}
-
-// truncatedClientID 获取截断后的客户端标识用于日志记录。
-func (s *Session) truncatedClientID() string {
-	if s.clientInfo == nil {
-		return ""
-	}
-	return logger.TruncateString(s.clientInfo.ClientID)
-}
-
 // truncatedSerialNumber 获取截断后的序列号用于日志记录。
 func (s *Session) truncatedSerialNumber() string {
-	if s.clientInfo == nil {
-		return ""
-	}
-	return logger.TruncateString(s.clientInfo.SerialNumber)
+	return logger.TruncateString(s.serialNumber)
 }
 
 // startASRStream 为指定代次启动 ASR 流式识别与音频消费队列。
@@ -1637,6 +1584,6 @@ func (s *Session) logDiag(msg string, args ...any) {
 	if s.diagLimiter != nil && !s.diagLimiter.Allow() {
 		return
 	}
-	allArgs := append([]any{"session_id", s.SessionID(), "device_id", s.truncatedDeviceID()}, args...)
+	allArgs := append([]any{"session_id", s.SessionID(), "serial_number", s.truncatedSerialNumber()}, args...)
 	s.logger.Warn(msg, allArgs...)
 }

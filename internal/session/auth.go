@@ -46,15 +46,6 @@ type TokenFinder interface {
 	FindDeviceAccessTokenByAccessToken(ctx context.Context, accessToken string) (*database.DeviceAccessToken, error)
 }
 
-// ClientHeaderInfo 包含握手请求中提取并脱敏的客户端设备诊断信息。
-type ClientHeaderInfo struct {
-	DeviceID        string
-	ClientID        string
-	SerialNumber    string
-	ProtocolVersion string
-	UserAgent       string
-}
-
 // AuthError 包装认证与请求校验错误及其建议返回的 HTTP 状态码。
 type AuthError struct {
 	StatusCode int
@@ -121,10 +112,10 @@ func ValidateHeaders(headers http.Header, maxSingle, maxTotal int) error {
 }
 
 // AuthenticateUpgrade 执行 WebSocket 升级前的请求头校验、协议版本检查与数据库 Token 认证。
-// 校验失败时返回附带 HTTP 状态码的 AuthError；成功时返回提取的客户端诊断信息。
-func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int) (*ClientHeaderInfo, error) {
+// 校验失败时返回附带 HTTP 状态码的 AuthError；成功时返回表里确定的设备唯一身份 SerialNumber (SN)。
+func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int) (string, error) {
 	if r == nil {
-		return nil, &AuthError{
+		return "", &AuthError{
 			StatusCode: http.StatusBadRequest,
 			Err:        errors.New("nil request"),
 		}
@@ -136,7 +127,7 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 		maxSingle = maxHeaderBytes
 	}
 	if err := ValidateHeaders(r.Header, maxSingle, MaxTotalHeaderBytes); err != nil {
-		return nil, &AuthError{
+		return "", &AuthError{
 			StatusCode: http.StatusBadRequest,
 			Err:        err,
 		}
@@ -145,7 +136,7 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 	// 2. 协议版本校验
 	protocolVer := strings.TrimSpace(r.Header.Get("Protocol-Version"))
 	if protocolVer != ProtocolVersion {
-		return nil, &AuthError{
+		return "", &AuthError{
 			StatusCode: http.StatusBadRequest,
 			Err:        ErrInvalidProtocolVersion,
 		}
@@ -154,14 +145,14 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 	// 3. Authorization Bearer Token 提取
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		return nil, &AuthError{
+		return "", &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrMissingToken,
 		}
 	}
 
 	if !strings.HasPrefix(authHeader, BearerPrefix) {
-		return nil, &AuthError{
+		return "", &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidTokenFormat,
 		}
@@ -170,14 +161,14 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 	token := strings.TrimPrefix(authHeader, BearerPrefix)
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return nil, &AuthError{
+		return "", &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidTokenFormat,
 		}
 	}
 
 	if finder == nil {
-		return nil, &AuthError{
+		return "", &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidToken,
 		}
@@ -186,14 +177,14 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 	// 4. 从数据库查询 Access Token 并校验其有效性
 	tok, err := finder.FindDeviceAccessTokenByAccessToken(r.Context(), token)
 	if err != nil {
-		return nil, &AuthError{
+		return "", &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidToken,
 		}
 	}
 
 	if !tok.IsValid(time.Now()) {
-		return nil, &AuthError{
+		return "", &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidToken,
 		}
@@ -202,36 +193,14 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 	tokenHash := sha256.Sum256([]byte(token))
 	expectedHash := sha256.Sum256([]byte(tok.AccessToken))
 	if subtle.ConstantTimeCompare(tokenHash[:], expectedHash[:]) != 1 {
-		return nil, &AuthError{
+		return "", &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidToken,
 		}
 	}
 
-	// 5. 提取客户端设备标识并比对 Serial-Number
-	serialNum := strings.TrimSpace(r.Header.Get("Serial-Number"))
-	if serialNum != "" && serialNum != tok.SerialNumber {
-		return nil, &AuthError{
-			StatusCode: http.StatusUnauthorized,
-			Err:        ErrInvalidToken,
-		}
-	}
-	if serialNum == "" {
-		serialNum = tok.SerialNumber
-	}
-
-	deviceID := strings.TrimSpace(r.Header.Get("Device-Id"))
-	clientID := strings.TrimSpace(r.Header.Get("Client-Id"))
-
-	info := &ClientHeaderInfo{
-		DeviceID:        deviceID,
-		ClientID:        clientID,
-		SerialNumber:    serialNum,
-		ProtocolVersion: protocolVer,
-		UserAgent:       r.UserAgent(),
-	}
-
-	return info, nil
+	// 5. 设备唯一身份 SN 全部以表里的 serial_number 为准
+	return tok.SerialNumber, nil
 }
 
 // LogAuthRejection 记录升级认证被拒绝的诊断日志，严禁打印任何 Token 或 Authorization 明文。
@@ -239,11 +208,8 @@ func LogAuthRejection(l *slog.Logger, r *http.Request, err error) {
 	if l == nil {
 		l = slog.Default()
 	}
-	var deviceID, clientID, serialNumber, userAgent, path, remoteAddr string
+	var userAgent, path, remoteAddr string
 	if r != nil {
-		deviceID = logger.TruncateString(r.Header.Get("Device-Id"))
-		clientID = logger.TruncateString(r.Header.Get("Client-Id"))
-		serialNumber = logger.TruncateString(r.Header.Get("Serial-Number"))
 		userAgent = logger.TruncateString(r.UserAgent())
 		path = r.URL.Path
 		remoteAddr = r.RemoteAddr
@@ -252,26 +218,17 @@ func LogAuthRejection(l *slog.Logger, r *http.Request, err error) {
 	l.Warn("websocket upgrade authentication rejected",
 		"path", path,
 		"remote_addr", remoteAddr,
-		"device_id", deviceID,
-		"client_id", clientID,
-		"serial_number", serialNumber,
 		"user_agent", userAgent,
 		"error", err,
 	)
 }
 
 // LogAuthSuccess 记录升级认证成功的诊断日志。
-func LogAuthSuccess(l *slog.Logger, r *http.Request, info *ClientHeaderInfo) {
+func LogAuthSuccess(l *slog.Logger, r *http.Request, serialNumber string) {
 	if l == nil {
 		l = slog.Default()
 	}
-	var deviceID, clientID, serialNumber, userAgent, path, remoteAddr string
-	if info != nil {
-		deviceID = logger.TruncateString(info.DeviceID)
-		clientID = logger.TruncateString(info.ClientID)
-		serialNumber = logger.TruncateString(info.SerialNumber)
-		userAgent = logger.TruncateString(info.UserAgent)
-	}
+	var path, remoteAddr string
 	if r != nil {
 		path = r.URL.Path
 		remoteAddr = r.RemoteAddr
@@ -280,10 +237,7 @@ func LogAuthSuccess(l *slog.Logger, r *http.Request, info *ClientHeaderInfo) {
 	l.Info("websocket upgrade authentication successful",
 		"path", path,
 		"remote_addr", remoteAddr,
-		"device_id", deviceID,
-		"client_id", clientID,
-		"serial_number", serialNumber,
-		"user_agent", userAgent,
+		"serial_number", logger.TruncateString(serialNumber),
 	)
 }
 
