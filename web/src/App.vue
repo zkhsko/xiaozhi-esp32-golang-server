@@ -18,6 +18,10 @@
           <el-icon><Connection /></el-icon>
           <span>设备激活管理</span>
         </el-menu-item>
+        <el-menu-item index="/device-types">
+          <el-icon><Cpu /></el-icon>
+          <span>设备类型管理</span>
+        </el-menu-item>
         <el-menu-item index="/asr-configs">
           <el-icon><Microphone /></el-icon>
           <span>语音识别配置管理</span>

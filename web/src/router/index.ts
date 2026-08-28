@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import DeviceCredentials from '../views/DeviceCredentials.vue'
 import DeviceActivations from '../views/DeviceActivations.vue'
+import DeviceTypes from '../views/DeviceTypes.vue'
 import ASRConfigs from '../views/ASRConfigs.vue'
 import LLMConfigs from '../views/LLMConfigs.vue'
 import TTSConfigs from '../views/TTSConfigs.vue'
@@ -25,6 +26,14 @@ const routes = [
     component: DeviceActivations,
     meta: {
       title: '设备激活管理',
+    },
+  },
+  {
+    path: '/device-types',
+    name: 'DeviceTypes',
+    component: DeviceTypes,
+    meta: {
+      title: '设备类型管理',
     },
   },
   {
