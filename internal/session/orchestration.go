@@ -103,6 +103,10 @@ func (s *Session) stopTTS() {
 	}
 }
 
+// maxToolIterations 定义单轮会话中允许大语言模型连续进行工具调用的最大迭代次数。
+// 达到上限后将禁用工具列表调用大语言模型，强制模型输出最终回复，防止死循环。
+const maxToolIterations = 8
+
 // orchestrateLLMAndTTS 在后台协程中协同编排流式大语言模型生成、增量分句与回答级流式语音合成。
 func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText string) {
 	if s.llmClient == nil && s.ttsClient == nil {
@@ -215,7 +219,12 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 			return
 		}
 
-		llmStream, err := s.llmClient.CreateStream(ctx, messages, tools)
+		var iterTools []ai.Tool
+		if iter < maxToolIterations {
+			iterTools = tools
+		}
+
+		llmStream, err := s.llmClient.CreateStream(ctx, messages, iterTools)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return
@@ -292,7 +301,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		}
 
 		toolCalls := llmStream.ToolCalls()
-		if len(toolCalls) > 0 {
+		if len(toolCalls) > 0 && iter < maxToolIterations {
 			s.logger.Info("llm returned tool calls",
 				"session_id", sessionID,
 				"generation", gen,
@@ -326,7 +335,15 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 			continue
 		}
 
-		// 没有 toolCalls，说明当前轮次为最终回复
+		if iter >= maxToolIterations && len(toolCalls) > 0 {
+			s.logger.Warn("max tool iterations reached, forcing text reply termination",
+				"session_id", sessionID,
+				"generation", gen,
+				"iteration", iter,
+			)
+		}
+
+		// 没有 toolCalls 或已达到工具调用上限，说明当前轮次为最终回复
 		assistantText.WriteString(iterText.String())
 		break
 	}
