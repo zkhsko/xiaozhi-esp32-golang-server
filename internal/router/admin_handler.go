@@ -316,6 +316,41 @@ type ActivateAgentConfigRequest struct {
 	ID uint64 `json:"id"`
 }
 
+// DeviceTypeItem 表示单条设备类型与 Agent 关联配置 DTO。
+type DeviceTypeItem struct {
+	ID            uint64    `json:"id"`
+	DeviceType    string    `json:"device_type"`
+	AgentConfigID uint64    `json:"agent_config_id"`
+	AgentName     string    `json:"agent_name,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// DeviceTypeListData 设备类型配置列表响应数据。
+type DeviceTypeListData struct {
+	Items    []DeviceTypeItem `json:"items"`
+	Total    int64            `json:"total"`
+	Page     int              `json:"page"`
+	PageSize int              `json:"page_size"`
+}
+
+// SaveDeviceTypeRequest 保存或更新设备类型配置请求体。
+type SaveDeviceTypeRequest struct {
+	ID            uint64 `json:"id"`
+	DeviceType    string `json:"device_type"`
+	AgentConfigID uint64 `json:"agent_config_id"`
+}
+
+// DeleteDeviceTypeRequest 删除单条设备类型配置请求体。
+type DeleteDeviceTypeRequest struct {
+	ID uint64 `json:"id"`
+}
+
+// BatchDeleteDeviceTypeRequest 批量删除设备类型配置请求体。
+type BatchDeleteDeviceTypeRequest struct {
+	IDs []uint64 `json:"ids"`
+}
+
 
 
 // AdminHandler 处理 /admin-api/ 管理接口。
@@ -388,6 +423,14 @@ func (h *AdminHandler) Routes() http.Handler {
 	r.Post("/agent-config/delete", h.handleDeleteAgentConfig)
 	r.Post("/agent-config/batch-delete", h.handleBatchDeleteAgentConfigs)
 	r.Post("/agent-config/activate", h.handleActivateAgentConfig)
+
+	// Device Type 接口
+	r.Get("/device-type", h.handleListDeviceTypes)
+	r.Get("/device-type/list", h.handleListDeviceTypes)
+	r.Post("/device-type/save", h.handleSaveDeviceType)
+	r.Post("/device-type/update", h.handleSaveDeviceType)
+	r.Post("/device-type/delete", h.handleDeleteDeviceType)
+	r.Post("/device-type/batch-delete", h.handleBatchDeleteDeviceTypes)
 
 	return r
 }
@@ -2079,6 +2122,266 @@ func (h *AdminHandler) handleActivateAgentConfig(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, AdminResponse{
 		Success: true,
 		Message: "Agent 配置激活成功",
+	})
+}
+
+// handleListDeviceTypes 分页获取设备类型与 Agent 关联配置列表。
+func (h *AdminHandler) handleListDeviceTypes(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	query := r.URL.Query()
+	page, _ := strconv.Atoi(query.Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(query.Get("page_size"))
+	if pageSize <= 0 {
+		pageSize = 10
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
+
+	var agentConfigID uint64
+	if agentIDStr := query.Get("agent_config_id"); agentIDStr != "" {
+		if id, err := strconv.ParseUint(agentIDStr, 10, 64); err == nil {
+			agentConfigID = id
+		}
+	}
+
+	filter := database.DeviceTypeFilter{
+		DeviceType:    query.Get("device_type"),
+		AgentConfigID: agentConfigID,
+		Page:          page,
+		PageSize:      pageSize,
+	}
+
+	types, total, err := h.db.ListDeviceTypes(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("failed to list device types", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	agentMap := make(map[uint64]string)
+	for _, dt := range types {
+		if dt.AgentConfigID > 0 {
+			if _, ok := agentMap[dt.AgentConfigID]; !ok {
+				if agent, err := h.db.FindAgentConfigByID(r.Context(), dt.AgentConfigID); err == nil && agent != nil {
+					agentMap[dt.AgentConfigID] = agent.Name
+				}
+			}
+		}
+	}
+
+	items := make([]DeviceTypeItem, 0, len(types))
+	for _, dt := range types {
+		items = append(items, DeviceTypeItem{
+			ID:            dt.ID,
+			DeviceType:    dt.DeviceType,
+			AgentConfigID: dt.AgentConfigID,
+			AgentName:     agentMap[dt.AgentConfigID],
+			CreatedAt:     dt.CreatedAt,
+			UpdatedAt:     dt.UpdatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Data: DeviceTypeListData{
+			Items:    items,
+			Total:    total,
+			Page:     page,
+			PageSize: pageSize,
+		},
+	})
+}
+
+// handleSaveDeviceType 创建或更新设备类型配置（ID 为 0 时创建，ID > 0 时按 ID 覆盖）。
+func (h *AdminHandler) handleSaveDeviceType(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req SaveDeviceTypeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	req.DeviceType = strings.TrimSpace(req.DeviceType)
+	if req.DeviceType == "" {
+		http.Error(w, "device_type cannot be empty", http.StatusBadRequest)
+		return
+	}
+	if req.AgentConfigID == 0 {
+		http.Error(w, "agent_config_id is required and must be positive", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == 0 {
+		// 创建新配置
+		dt := &database.DeviceType{
+			DeviceType:    req.DeviceType,
+			AgentConfigID: req.AgentConfigID,
+		}
+
+		if err := h.db.CreateDeviceType(r.Context(), dt); err != nil {
+			if errors.Is(err, database.ErrDeviceTypeAlreadyExists) ||
+				errors.Is(err, database.ErrReferencedAgentNotFound) ||
+				errors.Is(err, database.ErrEmptyDeviceType) ||
+				errors.Is(err, database.ErrInvalidDeviceTypeLength) ||
+				errors.Is(err, database.ErrInvalidAgentConfigID) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			h.logger.Error("failed to create device type", "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		var agentName string
+		if agent, err := h.db.FindAgentConfigByID(r.Context(), dt.AgentConfigID); err == nil && agent != nil {
+			agentName = agent.Name
+		}
+
+		writeJSON(w, http.StatusOK, AdminResponse{
+			Success: true,
+			Message: "设备类型配置创建成功",
+			Data: DeviceTypeItem{
+				ID:            dt.ID,
+				DeviceType:    dt.DeviceType,
+				AgentConfigID: dt.AgentConfigID,
+				AgentName:     agentName,
+				CreatedAt:     dt.CreatedAt,
+				UpdatedAt:     dt.UpdatedAt,
+			},
+		})
+		return
+	}
+
+	// 覆盖更新已有配置
+	existing, err := h.db.FindDeviceTypeByID(r.Context(), req.ID)
+	if err != nil {
+		if errors.Is(err, database.ErrDeviceTypeNotFound) {
+			http.Error(w, "device type not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	updatedDt := &database.DeviceType{
+		ID:            existing.ID,
+		DeviceType:    req.DeviceType,
+		AgentConfigID: req.AgentConfigID,
+	}
+
+	if err := h.db.UpdateDeviceTypeByID(r.Context(), updatedDt); err != nil {
+		if errors.Is(err, database.ErrDeviceTypeAlreadyExists) ||
+			errors.Is(err, database.ErrReferencedAgentNotFound) ||
+			errors.Is(err, database.ErrEmptyDeviceType) ||
+			errors.Is(err, database.ErrInvalidDeviceTypeLength) ||
+			errors.Is(err, database.ErrInvalidAgentConfigID) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, database.ErrDeviceTypeNotFound) {
+			http.Error(w, "device type not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to update device type", "id", req.ID, "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var agentName string
+	if agent, err := h.db.FindAgentConfigByID(r.Context(), updatedDt.AgentConfigID); err == nil && agent != nil {
+		agentName = agent.Name
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "设备类型配置更新成功",
+		Data: DeviceTypeItem{
+			ID:            updatedDt.ID,
+			DeviceType:    updatedDt.DeviceType,
+			AgentConfigID: updatedDt.AgentConfigID,
+			AgentName:     agentName,
+			CreatedAt:     existing.CreatedAt,
+			UpdatedAt:     time.Now(),
+		},
+	})
+}
+
+// handleDeleteDeviceType 删除指定 ID 的设备类型配置记录。
+func (h *AdminHandler) handleDeleteDeviceType(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req DeleteDeviceTypeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == 0 {
+		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeleteDeviceType(r.Context(), req.ID); err != nil {
+		if errors.Is(err, database.ErrDeviceTypeNotFound) {
+			http.Error(w, "device type not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to delete device type", "id", req.ID, "error", err)
+		http.Error(w, "failed to delete device type", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "设备类型配置删除成功",
+	})
+}
+
+// handleBatchDeleteDeviceTypes 批量删除设备类型配置记录。
+func (h *AdminHandler) handleBatchDeleteDeviceTypes(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req BatchDeleteDeviceTypeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.BatchDeleteDeviceTypes(r.Context(), req.IDs); err != nil {
+		h.logger.Error("failed to batch delete device types", "error", err)
+		http.Error(w, "failed to batch delete device types", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: fmt.Sprintf("成功批量删除 %d 条设备类型配置", len(req.IDs)),
 	})
 }
 

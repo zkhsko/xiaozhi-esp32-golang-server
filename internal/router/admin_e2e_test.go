@@ -458,6 +458,85 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	if wSPA6.Code != http.StatusOK {
 		t.Fatalf("SPA route for agent-configs failed, code=%d", wSPA6.Code)
 	}
+
+	// 30. 创建测试 Agent 用于 DeviceType
+	dtAgent := &database.AgentConfig{Name: "DT-Agent", ASRConfigID: asrCfg.ID, LLMConfigID: llmCfg.ID, TTSConfigID: ttsCfg.ID, SystemPrompt: "prompt", Voice: "v", Enabled: true}
+	_ = db.CreateAgentConfig(context.Background(), dtAgent)
+
+	// 31. DeviceType 创建
+	createDTBody, _ := json.Marshal(SaveDeviceTypeRequest{
+		DeviceType:    "e2e-robot-type",
+		AgentConfigID: dtAgent.ID,
+	})
+	reqDTCreate := httptest.NewRequest(http.MethodPost, "/admin-api/device-type/save", bytes.NewReader(createDTBody))
+	reqDTCreate.Header.Set("Content-Type", "application/json")
+	wDTCreate := httptest.NewRecorder()
+	r.ServeHTTP(wDTCreate, reqDTCreate)
+
+	if wDTCreate.Code != http.StatusOK {
+		t.Fatalf("create device type failed: %s", wDTCreate.Body.String())
+	}
+	var dtCreateResp struct {
+		Success bool           `json:"success"`
+		Data    DeviceTypeItem `json:"data"`
+	}
+	_ = json.Unmarshal(wDTCreate.Body.Bytes(), &dtCreateResp)
+	if !dtCreateResp.Success || dtCreateResp.Data.ID == 0 || dtCreateResp.Data.DeviceType != "e2e-robot-type" || dtCreateResp.Data.AgentName != "DT-Agent" {
+		t.Fatalf("unexpected device type create resp: %+v", dtCreateResp)
+	}
+	createdDTID := dtCreateResp.Data.ID
+
+	// 32. DeviceType 列表查询
+	reqDTList := httptest.NewRequest(http.MethodGet, "/admin-api/device-type?device_type=e2e-robot", nil)
+	wDTList := httptest.NewRecorder()
+	r.ServeHTTP(wDTList, reqDTList)
+
+	if wDTList.Code != http.StatusOK {
+		t.Fatalf("list device type failed: %s", wDTList.Body.String())
+	}
+	var dtListResp struct {
+		Success bool               `json:"success"`
+		Data    DeviceTypeListData `json:"data"`
+	}
+	_ = json.Unmarshal(wDTList.Body.Bytes(), &dtListResp)
+	if dtListResp.Data.Total != 1 || len(dtListResp.Data.Items) != 1 || dtListResp.Data.Items[0].DeviceType != "e2e-robot-type" {
+		t.Fatalf("expected 1 DeviceType item, got %v", dtListResp.Data.Items)
+	}
+
+	// 33. DeviceType 更新
+	updateDTBody, _ := json.Marshal(SaveDeviceTypeRequest{
+		ID:            createdDTID,
+		DeviceType:    "e2e-robot-pro",
+		AgentConfigID: dtAgent.ID,
+	})
+	reqDTUpdate := httptest.NewRequest(http.MethodPost, "/admin-api/device-type/update", bytes.NewReader(updateDTBody))
+	reqDTUpdate.Header.Set("Content-Type", "application/json")
+	wDTUpdate := httptest.NewRecorder()
+	r.ServeHTTP(wDTUpdate, reqDTUpdate)
+
+	if wDTUpdate.Code != http.StatusOK {
+		t.Fatalf("update device type failed: %s", wDTUpdate.Body.String())
+	}
+
+	// 34. DeviceType 单条删除
+	delDTBody, _ := json.Marshal(DeleteDeviceTypeRequest{ID: createdDTID})
+	reqDelDT := httptest.NewRequest(http.MethodPost, "/admin-api/device-type/delete", bytes.NewReader(delDTBody))
+	reqDelDT.Header.Set("Content-Type", "application/json")
+	wDelDT := httptest.NewRecorder()
+	r.ServeHTTP(wDelDT, reqDelDT)
+
+	if wDelDT.Code != http.StatusOK {
+		t.Fatalf("delete device type failed: %s", wDelDT.Body.String())
+	}
+
+	// 35. 访问 /admin/device-types 确保静态 SPA 路由可 fallback 到 index.html
+	reqSPA7 := httptest.NewRequest(http.MethodGet, "/admin/device-types", nil)
+	wSPA7 := httptest.NewRecorder()
+	r.ServeHTTP(wSPA7, reqSPA7)
+
+	if wSPA7.Code != http.StatusOK {
+		t.Fatalf("SPA route for device-types failed, code=%d", wSPA7.Code)
+	}
 }
 
 

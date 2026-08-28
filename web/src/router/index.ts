@@ -16,7 +16,7 @@ const routes = [
     name: 'DeviceCredentials',
     component: DeviceCredentials,
     meta: {
-      title: '设备生产凭证管理',
+      title: '设备生产管理',
     },
   },
   {
@@ -24,7 +24,7 @@ const routes = [
     name: 'DeviceActivations',
     component: DeviceActivations,
     meta: {
-      title: '设备激活关系管理',
+      title: '设备激活管理',
     },
   },
   {
@@ -32,7 +32,7 @@ const routes = [
     name: 'ASRConfigs',
     component: ASRConfigs,
     meta: {
-      title: 'ASR 语音识别配置',
+      title: '语音识别配置管理',
     },
   },
   {
@@ -40,7 +40,7 @@ const routes = [
     name: 'LLMConfigs',
     component: LLMConfigs,
     meta: {
-      title: 'LLM 语言模型配置',
+      title: '大模型配置管理',
     },
   },
   {
@@ -48,7 +48,7 @@ const routes = [
     name: 'TTSConfigs',
     component: TTSConfigs,
     meta: {
-      title: 'TTS 语音合成配置',
+      title: '语音合成配置管理',
     },
   },
   {
@@ -56,7 +56,7 @@ const routes = [
     name: 'AgentConfigs',
     component: AgentConfigs,
     meta: {
-      title: 'Agent 智能体配置',
+      title: '智能体配置管理',
     },
   },
 ]

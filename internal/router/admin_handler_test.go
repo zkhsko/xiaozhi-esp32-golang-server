@@ -917,5 +917,139 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 	}
 }
 
+func TestAdminDeviceTypeEndpoints(t *testing.T) {
+	db := setupTestRouterDB(t)
+	cfg := &config.Config{}
+	adminHandler := NewAdminHandler(cfg, db, nil)
+	routes := adminHandler.Routes()
+	ctx := context.Background()
+
+	// 准备基础 ASR, LLM, TTS 和 Agent
+	asr := &database.ASRConfig{Name: "ASR-1", Provider: "bailian", Endpoint: "wss://asr.example.com", Model: "asr-v1", ConnectTimeoutMS: 5000, Enabled: true}
+	_ = db.CreateASRConfig(ctx, asr)
+	llm := &database.LLMConfig{Name: "LLM-1", Provider: "bailian", Endpoint: "https://llm.example.com", Model: "qwen-turbo", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
+	_ = db.CreateLLMConfig(ctx, llm)
+	tts := &database.TTSConfig{Name: "TTS-1", Provider: "bailian", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["v1"]`, ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	_ = db.CreateTTSConfig(ctx, tts)
+
+	agent1 := &database.AgentConfig{Name: "Agent-A", ASRConfigID: asr.ID, LLMConfigID: llm.ID, TTSConfigID: tts.ID, SystemPrompt: "prompt A", Voice: "v1", Enabled: true}
+	_ = db.CreateAgentConfig(ctx, agent1)
+	agent2 := &database.AgentConfig{Name: "Agent-B", ASRConfigID: asr.ID, LLMConfigID: llm.ID, TTSConfigID: tts.ID, SystemPrompt: "prompt B", Voice: "v1", Enabled: true}
+	_ = db.CreateAgentConfig(ctx, agent2)
+
+	// 1. Create DeviceType via /device-type/save
+	createBody := []byte(fmt.Sprintf(`{
+		"device_type": "robot-dog",
+		"agent_config_id": %d
+	}`, agent1.ID))
+	reqCreate := httptest.NewRequest(http.MethodPost, "/device-type/save", bytes.NewReader(createBody))
+	reqCreate.Header.Set("Content-Type", "application/json")
+	wCreate := httptest.NewRecorder()
+	routes.ServeHTTP(wCreate, reqCreate)
+
+	if wCreate.Code != http.StatusOK {
+		t.Fatalf("create device type failed, code=%d, body=%s", wCreate.Code, wCreate.Body.String())
+	}
+
+	var createResp struct {
+		Success bool           `json:"success"`
+		Data    DeviceTypeItem `json:"data"`
+	}
+	if err := json.Unmarshal(wCreate.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("unmarshal createResp failed: %v", err)
+	}
+	if !createResp.Success || createResp.Data.ID == 0 {
+		t.Fatalf("unexpected create response: %+v", createResp)
+	}
+	if createResp.Data.DeviceType != "robot-dog" || createResp.Data.AgentConfigID != agent1.ID || createResp.Data.AgentName != "Agent-A" {
+		t.Fatalf("unexpected create data: %+v", createResp.Data)
+	}
+
+	dtID := createResp.Data.ID
+
+	// 2. List DeviceTypes via GET /device-type
+	reqList := httptest.NewRequest(http.MethodGet, "/device-type?page=1&page_size=10", nil)
+	wList := httptest.NewRecorder()
+	routes.ServeHTTP(wList, reqList)
+
+	if wList.Code != http.StatusOK {
+		t.Fatalf("list device type failed, code=%d, body=%s", wList.Code, wList.Body.String())
+	}
+
+	var listResp struct {
+		Success bool               `json:"success"`
+		Data    DeviceTypeListData `json:"data"`
+	}
+	if err := json.Unmarshal(wList.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal listResp failed: %v", err)
+	}
+	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
+		t.Fatalf("unexpected list count: total=%d, items=%d", listResp.Data.Total, len(listResp.Data.Items))
+	}
+	if listResp.Data.Items[0].DeviceType != "robot-dog" || listResp.Data.Items[0].AgentName != "Agent-A" {
+		t.Fatalf("unexpected item content: %+v", listResp.Data.Items[0])
+	}
+
+	// 3. Update DeviceType via POST /device-type/update
+	updateBody := []byte(fmt.Sprintf(`{
+		"id": %d,
+		"device_type": "robot-dog-pro",
+		"agent_config_id": %d
+	}`, dtID, agent2.ID))
+	reqUpdate := httptest.NewRequest(http.MethodPost, "/device-type/update", bytes.NewReader(updateBody))
+	reqUpdate.Header.Set("Content-Type", "application/json")
+	wUpdate := httptest.NewRecorder()
+	routes.ServeHTTP(wUpdate, reqUpdate)
+
+	if wUpdate.Code != http.StatusOK {
+		t.Fatalf("update device type failed, code=%d, body=%s", wUpdate.Code, wUpdate.Body.String())
+	}
+
+	found, err := db.FindDeviceTypeByID(ctx, dtID)
+	if err != nil {
+		t.Fatalf("find device type in db failed: %v", err)
+	}
+	if found.DeviceType != "robot-dog-pro" || found.AgentConfigID != agent2.ID {
+		t.Errorf("unexpected updated fields in DB: %+v", found)
+	}
+
+	// 4. Delete DeviceType via POST /device-type/delete
+	delBody := []byte(fmt.Sprintf(`{"id": %d}`, dtID))
+	reqDel := httptest.NewRequest(http.MethodPost, "/device-type/delete", bytes.NewReader(delBody))
+	reqDel.Header.Set("Content-Type", "application/json")
+	wDel := httptest.NewRecorder()
+	routes.ServeHTTP(wDel, reqDel)
+
+	if wDel.Code != http.StatusOK {
+		t.Fatalf("delete device type failed, code=%d, body=%s", wDel.Code, wDel.Body.String())
+	}
+
+	_, err = db.FindDeviceTypeByID(ctx, dtID)
+	if !errors.Is(err, database.ErrDeviceTypeNotFound) {
+		t.Fatalf("expected ErrDeviceTypeNotFound after delete, got %v", err)
+	}
+
+	// 5. Batch Delete
+	dtA := &database.DeviceType{DeviceType: "type-a", AgentConfigID: agent1.ID}
+	dtB := &database.DeviceType{DeviceType: "type-b", AgentConfigID: agent2.ID}
+	_ = db.CreateDeviceType(ctx, dtA)
+	_ = db.CreateDeviceType(ctx, dtB)
+
+	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, dtA.ID, dtB.ID))
+	reqBatchDel := httptest.NewRequest(http.MethodPost, "/device-type/batch-delete", bytes.NewReader(batchDelBody))
+	reqBatchDel.Header.Set("Content-Type", "application/json")
+	wBatchDel := httptest.NewRecorder()
+	routes.ServeHTTP(wBatchDel, reqBatchDel)
+
+	if wBatchDel.Code != http.StatusOK {
+		t.Fatalf("batch delete device type failed, code=%d, body=%s", wBatchDel.Code, wBatchDel.Body.String())
+	}
+
+	_, finalCount, _ := db.ListDeviceTypes(ctx, database.DeviceTypeFilter{})
+	if finalCount != 0 {
+		t.Fatalf("expected 0 device types after batch delete, got %d", finalCount)
+	}
+}
+
 
 

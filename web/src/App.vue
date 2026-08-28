@@ -12,27 +12,27 @@
       >
         <el-menu-item index="/device-credentials">
           <el-icon><Key /></el-icon>
-          <span>设备生产表</span>
+          <span>设备生产管理</span>
         </el-menu-item>
         <el-menu-item index="/device-activations">
           <el-icon><Connection /></el-icon>
-          <span>设备激活表</span>
+          <span>设备激活管理</span>
         </el-menu-item>
         <el-menu-item index="/asr-configs">
           <el-icon><Microphone /></el-icon>
-          <span>ASR 配置表</span>
+          <span>语音识别配置管理</span>
         </el-menu-item>
         <el-menu-item index="/llm-configs">
           <el-icon><ChatDotRound /></el-icon>
-          <span>LLM 配置表</span>
+          <span>大模型配置管理</span>
         </el-menu-item>
         <el-menu-item index="/tts-configs">
           <el-icon><Headset /></el-icon>
-          <span>TTS 配置表</span>
+          <span>语音合成配置管理</span>
         </el-menu-item>
         <el-menu-item index="/agent-configs">
           <el-icon><UserFilled /></el-icon>
-          <span>Agent 配置表</span>
+          <span>智能体配置管理</span>
         </el-menu-item>
       </el-menu>
     </el-aside>
@@ -66,7 +66,7 @@ const activeMenu = computed(() => {
 })
 
 const currentTitle = computed(() => {
-  return (route.meta?.title as string) || '设备生产表管理'
+  return (route.meta?.title as string) || '设备生产管理'
 })
 </script>
 
