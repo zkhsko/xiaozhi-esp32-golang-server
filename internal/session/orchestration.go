@@ -189,6 +189,16 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	var assistantText strings.Builder
 	sessionId := s.SessionId()
 
+	s.mu.RLock()
+	currentSysPrompt := s.buildSystemPromptLocked()
+	s.mu.RUnlock()
+
+	s.logger.Info("llm system prompt for turn",
+		"session_id", sessionId,
+		"generation", gen,
+		"system_prompt", currentSysPrompt,
+	)
+
 	// sendSentence 先下发设备文本消息 tts.sentence_start，再调用 ttsStream.SendSentence 写入，保证文本严格先于对应音频
 	sendSentence := func(sentence string) error {
 		if err := ctx.Err(); err != nil {

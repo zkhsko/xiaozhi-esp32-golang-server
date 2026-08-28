@@ -371,18 +371,12 @@ func FormatDeviceToolsPrompt(tools []ai.Tool) string {
 }
 
 // buildSystemPromptLocked 在持有锁的前提下计算当前会话实际生效的系统提示词。
-// 将工具列表（设备 MCP 工具在前，服务端工具拼接在后）序列化为 JSON 追加到基础系统提示词最后。
+// 使用标准库 os.Expand 对基础提示词中的占位符（如 ${tools}）进行展开替换。
 func (s *Session) buildSystemPromptLocked() string {
-	basePrompt := s.systemPrompt
-
 	serverTools := DefaultServerTools()
 	deviceTools := s.mcpTools
 
 	totalLen := len(deviceTools) + len(serverTools)
-	if totalLen == 0 {
-		return basePrompt
-	}
-
 	allTools := make([]ai.Tool, 0, totalLen)
 	seen := make(map[string]struct{}, totalLen)
 
@@ -403,10 +397,10 @@ func (s *Session) buildSystemPromptLocked() string {
 	}
 
 	toolsPrompt := FormatDeviceToolsPrompt(allTools)
-	if basePrompt == "" {
-		return toolsPrompt
+	values := map[string]string{
+		"tools": toolsPrompt,
 	}
-	return basePrompt + "\n\n" + toolsPrompt
+	return RenderPrompt(s.systemPrompt, values)
 }
 
 // SystemPrompt 返回当前会话实际生效的完整系统提示词（含根据设备上报工具追加的控制指令）。

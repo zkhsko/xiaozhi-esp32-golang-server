@@ -598,26 +598,26 @@ func TestOrchestrateLLMAndTTS_ContextCanceled(t *testing.T) {
 }
 
 func TestSession_SystemPrompt_ToolsOrderingAndFormatting(t *testing.T) {
-	t.Run("only server tools when no device tools", func(t *testing.T) {
+	t.Run("no tools placeholder in prompt means no tools appended", func(t *testing.T) {
 		sess := &Session{
 			systemPrompt: "你是小智助手。",
+			mcpTools: []ai.Tool{
+				{
+					Name:        "self.lamp.turn_on",
+					Description: "打开灯光",
+				},
+			},
 		}
 
 		prompt := sess.SystemPrompt()
-		if !strings.Contains(prompt, "你是小智助手。") {
-			t.Fatalf("expected base prompt in %s", prompt)
-		}
-		if !strings.Contains(prompt, ServerToolGetCurrentTime) {
-			t.Fatalf("expected server get_current_time in %s", prompt)
-		}
-		if !strings.Contains(prompt, ServerToolCloseSession) {
-			t.Fatalf("expected server close_session in %s", prompt)
+		if prompt != "你是小智助手。" {
+			t.Fatalf("expected unchanged prompt without appended tools, got %q", prompt)
 		}
 	})
 
-	t.Run("device tools first followed by server tools in single json", func(t *testing.T) {
+	t.Run("tools placeholder replaced with device tools first followed by server tools", func(t *testing.T) {
 		sess := &Session{
-			systemPrompt: "你是小智助手。",
+			systemPrompt: "你是小智助手。\n\n${tools}",
 			mcpTools: []ai.Tool{
 				{
 					Name:        "self.lamp.turn_on",
@@ -636,7 +636,7 @@ func TestSession_SystemPrompt_ToolsOrderingAndFormatting(t *testing.T) {
 			t.Fatalf("expected base prompt prefix in %s", prompt)
 		}
 
-		// 验证追加内容为纯 JSON 且无前后提示词
+		// 验证占位符替换内容为纯 JSON 且无前后多余提示词
 		jsonPart := strings.TrimPrefix(prompt, basePrefix)
 		var parsedTools []MCPTool
 		if err := json.Unmarshal([]byte(jsonPart), &parsedTools); err != nil {
@@ -658,6 +658,40 @@ func TestSession_SystemPrompt_ToolsOrderingAndFormatting(t *testing.T) {
 
 		if !(idxDeviceTool1 < idxServerTool1 && idxDeviceTool2 < idxServerTool1) {
 			t.Fatalf("device tools should appear before server tools:\n%s", prompt)
+		}
+	})
+
+	t.Run("tools placeholder replacement inside template middle", func(t *testing.T) {
+		sess := &Session{
+			systemPrompt: "你是一个智能语音管家。\n【可用工具】\n${tools}\n请严格按照上述工具列表响应。",
+			mcpTools: []ai.Tool{
+				{
+					Name:        "self.lamp.turn_on",
+					Description: "打开灯光",
+				},
+			},
+		}
+
+		prompt := sess.SystemPrompt()
+
+		// 验证开头和结尾
+		if !strings.HasPrefix(prompt, "你是一个智能语音管家。\n【可用工具】\n") {
+			t.Fatalf("expected template prefix in prompt, got:\n%s", prompt)
+		}
+		if !strings.HasSuffix(prompt, "\n请严格按照上述工具列表响应。") {
+			t.Fatalf("expected template suffix in prompt, got:\n%s", prompt)
+		}
+
+		// 验证中间内容包含工具 JSON，且末尾没有重复追加
+		idxSuffix := strings.Index(prompt, "请严格按照上述工具列表响应。")
+		idxTools := strings.Index(prompt, "self.lamp.turn_on")
+		if idxTools == -1 || idxTools >= idxSuffix {
+			t.Fatalf("tools should be placed before suffix instruction:\n%s", prompt)
+		}
+
+		// 验证只出现一次 self.lamp.turn_on
+		if strings.Count(prompt, "self.lamp.turn_on") != 1 {
+			t.Fatalf("expected self.lamp.turn_on to appear exactly once, got count %d in:\n%s", strings.Count(prompt, "self.lamp.turn_on"), prompt)
 		}
 	})
 }

@@ -99,6 +99,15 @@ func SafeReplaceAttr(groups []string, a slog.Attr) slog.Attr {
 		if isSensitiveKey(a.Key) {
 			return slog.String(a.Key, RedactedValue)
 		}
+		if str, ok := val.(string); ok {
+			if isNoTruncateKey(a.Key) {
+				return slog.String(a.Key, str)
+			}
+			if isAutoTruncateKey(a.Key) {
+				return slog.String(a.Key, TruncateString(str))
+			}
+			return slog.String(a.Key, Truncate(str, DefaultMaxStringLimit))
+		}
 		if err, ok := val.(error); ok {
 			if err == nil {
 				return slog.Attr{}
@@ -122,6 +131,9 @@ func SafeReplaceAttr(groups []string, a slog.Attr) slog.Attr {
 				return slog.String(a.Key, "Bearer "+RedactedValue)
 			}
 			return slog.String(a.Key, RedactedValue)
+		}
+		if isNoTruncateKey(a.Key) {
+			return slog.String(a.Key, s)
 		}
 		if isAutoTruncateKey(a.Key) {
 			return slog.String(a.Key, TruncateString(s))
@@ -162,7 +174,6 @@ func isSensitiveKey(key string) bool {
 		"secret", "client_secret", "app_secret",
 		"password", "passwd", "pass", "private_key",
 		"credential", "credentials",
-		"prompt", "system_prompt", "full_prompt", "user_prompt",
 		"conversation", "dialogue", "dialog", "messages", "history", "chat_history",
 		"user_text", "assistant_text", "user_message", "assistant_message", "full_text", "conversation_text",
 		"pcm", "raw_pcm", "opus", "raw_opus", "audio_pcm", "audio_opus", "pcm_data", "opus_data", "audio_data", "audio_bytes", "pcm_bytes", "opus_bytes":
@@ -176,7 +187,6 @@ func isSensitiveKey(key string) bool {
 		strings.HasSuffix(k, "_api_key") ||
 		strings.HasSuffix(k, "_apikey") ||
 		strings.HasSuffix(k, "_key") ||
-		strings.HasSuffix(k, "_prompt") ||
 		strings.HasSuffix(k, "_history") ||
 		strings.HasSuffix(k, "_conversation") ||
 		strings.HasSuffix(k, "_dialog") ||
@@ -185,6 +195,20 @@ func isSensitiveKey(key string) bool {
 		strings.HasSuffix(k, "_credential") ||
 		strings.HasSuffix(k, "_pcm") ||
 		strings.HasSuffix(k, "_opus") {
+		return true
+	}
+	return false
+}
+
+// isNoTruncateKey 判断是否为禁止截断、必须完整保留打印的属性键（例如提示词相关字段，方便调试）。
+func isNoTruncateKey(key string) bool {
+	k := strings.ToLower(strings.TrimSpace(key))
+	k = strings.ReplaceAll(k, "-", "_")
+	switch k {
+	case "prompt", "system_prompt", "full_prompt", "user_prompt", "raw_prompt", "tools_json", "tools":
+		return true
+	}
+	if strings.HasSuffix(k, "_prompt") {
 		return true
 	}
 	return false
