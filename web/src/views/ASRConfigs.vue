@@ -227,7 +227,7 @@
             show-word-limit
             clearable
           />
-          <span class="form-item-tip">用于在 Agent 配置中展示与标识此 ASR 配置（支持同名）</span>
+          <span class="form-item-tip">用于在 Agent 配置中展示与标识此 ASR 配置</span>
         </el-form-item>
 
         <el-form-item label="服务端点" prop="endpoint">
@@ -235,7 +235,7 @@
             v-model="configDialog.form.endpoint"
             clearable
           />
-          <span class="form-item-tip">ASR WebSocket 协议地址，必须以 ws:// 或 wss:// 开头（如 wss://dashscope.aliyuncs.com/api-v1/ws）</span>
+          <span class="form-item-tip">ASR WebSocket 协议地址，必须以 ws:// 或 wss:// 开头</span>
         </el-form-item>
 
         <el-form-item label="模型标识" prop="model">
@@ -244,7 +244,7 @@
             maxlength="255"
             clearable
           />
-          <span class="form-item-tip">ASR 语音识别模型标识（如 qwen-audio-3.0-asr-flash-streaming 等）</span>
+          <span class="form-item-tip">语音识别服务模型标识（Model Identifier）</span>
         </el-form-item>
 
         <el-form-item label="API Key" prop="api_key">
@@ -255,7 +255,7 @@
             clearable
           />
           <span class="form-item-tip">
-            {{ configDialog.isEdit ? '编辑时留空将保留已有 Key，如需修改请输入新 Key' : '百炼平台 DashScope API Key（格式为 sk- 开头）' }}
+            {{ configDialog.isEdit ? '编辑时留空将保留已有 Key，如需修改请输入新 Key' : '用于访问 ASR 服务的 API Key 或鉴权凭据' }}
           </span>
         </el-form-item>
 
@@ -271,26 +271,13 @@
           <div class="form-item-tip">WebSocket 建立连接的最大超时时间（3000 ~ 30000 毫秒）</div>
         </el-form-item>
 
-        <el-form-item label="热词配置 (JSON)" prop="hotwords">
-          <div class="hotwords-input-wrapper">
-            <el-input
-              v-model="configDialog.form.hotwords"
-              type="textarea"
-              :rows="5"
-            />
-            <div class="hotwords-toolbar">
-              <el-button
-                link
-                type="primary"
-                size="small"
-                :icon="DocumentChecked"
-                @click="formatJSONInDialog"
-              >
-                格式化 JSON
-              </el-button>
-            </div>
-          </div>
-          <span class="form-item-tip">热词必须为合法 JSON 格式（如字符串数组 ["小智", "智能音箱"] 或自定义权重对象数组）</span>
+        <el-form-item label="热词配置" prop="hotwords">
+          <el-input
+            v-model="configDialog.form.hotwords"
+            type="textarea"
+            :rows="5"
+          />
+          <span class="form-item-tip">热词必须为合法 JSON 格式（如字符串数组 ["热词1", "热词2"] 或自定义权重对象数组）</span>
         </el-form-item>
 
         <el-form-item label="启用状态" prop="enabled">
@@ -299,7 +286,6 @@
             active-text="启用"
             inactive-text="禁用"
           />
-          <div class="form-item-tip">禁用后，新创建或更新的 Agent 将无法引用此配置</div>
         </el-form-item>
       </el-form>
 
@@ -351,7 +337,6 @@ import {
   CopyDocument,
   Edit,
   Microphone,
-  DocumentChecked,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -410,6 +395,7 @@ const validateEndpoint = (_rule: any, value: string, callback: any) => {
   callback()
 }
 
+// 校验热词 JSON 格式
 const validateHotwordsJSON = (_rule: any, value: string, callback: any) => {
   if (!value || !value.trim()) {
     return callback()
@@ -418,7 +404,7 @@ const validateHotwordsJSON = (_rule: any, value: string, callback: any) => {
     JSON.parse(value.trim())
     callback()
   } catch {
-    callback(new Error('热词配置必须为合法的 JSON 格式（如 ["小智", "智能音箱"]）'))
+    callback(new Error('热词配置必须为合法的 JSON 格式（如 ["热词1", "热词2"]）'))
   }
 }
 
@@ -543,22 +529,6 @@ function openEditDialog(row: ASRConfigItem) {
     enabled: row.enabled,
   }
   configDialog.visible = true
-}
-
-// 格式化表单内 JSON
-function formatJSONInDialog() {
-  const raw = configDialog.form.hotwords.trim()
-  if (!raw) {
-    ElMessage.info('热词配置内容为空')
-    return
-  }
-  try {
-    const parsed = JSON.parse(raw)
-    configDialog.form.hotwords = JSON.stringify(parsed, null, 2)
-    ElMessage.success('JSON 格式化成功')
-  } catch (err: any) {
-    ElMessage.error(`JSON 格式非法: ${err.message || err}`)
-  }
 }
 
 // 打开热词详情弹窗
@@ -852,16 +822,6 @@ onMounted(() => {
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
-}
-
-.hotwords-input-wrapper {
-  width: 100%;
-}
-
-.hotwords-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 4px;
 }
 
 .form-item-tip {
