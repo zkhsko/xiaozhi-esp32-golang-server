@@ -43,12 +43,45 @@ type CredentialItem struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+// AdminResponse 通用管理员 API 返回结构。
+type AdminResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+	Data    any    `json:"data,omitempty"`
+}
+
 // GenerateCredentialResponse 映射生成凭证成功后的统一响应结构。
 type GenerateCredentialResponse struct {
 	Success bool             `json:"success"`
 	Message string           `json:"message,omitempty"`
 	Data    *CredentialItem  `json:"data,omitempty"`
 	Items   []CredentialItem `json:"items,omitempty"`
+}
+
+// DeviceCredentialListData 设备凭证列表响应数据。
+type DeviceCredentialListData struct {
+	Items    []CredentialItem `json:"items"`
+	Total    int64            `json:"total"`
+	Page     int              `json:"page"`
+	PageSize int              `json:"page_size"`
+}
+
+// UpdateCredentialRequest 更新凭据请求体。
+type UpdateCredentialRequest struct {
+	ID               uint64 `json:"id"`
+	DeviceType       string `json:"device_type"`
+	CredentialStatus string `json:"credential_status"`
+	AuthMethod       string `json:"auth_method"`
+}
+
+// DeleteCredentialRequest 删除单条凭据请求体。
+type DeleteCredentialRequest struct {
+	ID uint64 `json:"id"`
+}
+
+// BatchDeleteCredentialRequest 批量删除请求体。
+type BatchDeleteCredentialRequest struct {
+	IDs []uint64 `json:"ids"`
 }
 
 // AdminHandler 处理 /admin-api/ 管理接口。
@@ -70,13 +103,198 @@ func NewAdminHandler(cfg *config.Config, db *database.Database, l *slog.Logger) 
 	}
 }
 
-// Routes 注册 /admin-api 路由。
+// Routes 注册 /admin-api 路由，仅使用 GET 和 POST 方法。
 func (h *AdminHandler) Routes() http.Handler {
 	r := chi.NewRouter()
 
+	r.Get("/device-hmac-credential", h.handleListCredentials)
+	r.Get("/device-hmac-credential/list", h.handleListCredentials)
 	r.Post("/device-hmac-credential/generate", h.handleGenerateCredential)
+	r.Post("/device-hmac-credential/update", h.handleUpdateCredential)
+	r.Post("/device-hmac-credential/delete", h.handleDeleteCredential)
+	r.Post("/device-hmac-credential/batch-delete", h.handleBatchDeleteCredentials)
 
 	return r
+}
+
+// handleListCredentials 分页获取设备出厂凭据列表。
+func (h *AdminHandler) handleListCredentials(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	query := r.URL.Query()
+	page, _ := strconv.Atoi(query.Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(query.Get("page_size"))
+	if pageSize <= 0 {
+		pageSize = 10
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
+
+	filter := database.DeviceHmacCredentialFilter{
+		SerialNumber:     query.Get("serial_number"),
+		DeviceType:       query.Get("device_type"),
+		CredentialStatus: query.Get("credential_status"),
+		Page:             page,
+		PageSize:         pageSize,
+	}
+
+	creds, total, err := h.db.ListDeviceHmacCredentials(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("failed to list device credentials", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	items := make([]CredentialItem, 0, len(creds))
+	for _, c := range creds {
+		items = append(items, CredentialItem{
+			ID:               c.ID,
+			SerialNumber:     c.SerialNumber,
+			HMACKey:          c.HMACKeyCiphertext,
+			AuthMethod:       c.AuthMethod,
+			DeviceType:       c.DeviceType,
+			CredentialStatus: c.CredentialStatus,
+			CreatedAt:        c.CreatedAt,
+			UpdatedAt:        c.UpdatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Data: DeviceCredentialListData{
+			Items:    items,
+			Total:    total,
+			Page:     page,
+			PageSize: pageSize,
+		},
+	})
+}
+
+// handleUpdateCredential 更新指定凭证信息。
+func (h *AdminHandler) handleUpdateCredential(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req UpdateCredentialRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == 0 {
+		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
+		return
+	}
+
+	updates := make(map[string]any)
+	if req.DeviceType != "" {
+		updates["device_type"] = strings.TrimSpace(req.DeviceType)
+	}
+	if req.CredentialStatus != "" {
+		updates["credential_status"] = strings.TrimSpace(req.CredentialStatus)
+	}
+	if req.AuthMethod != "" {
+		updates["auth_method"] = strings.TrimSpace(req.AuthMethod)
+	}
+
+	if len(updates) == 0 {
+		writeJSON(w, http.StatusOK, AdminResponse{
+			Success: true,
+			Message: "nothing to update",
+		})
+		return
+	}
+
+	if err := h.db.UpdateDeviceHmacCredential(r.Context(), req.ID, updates); err != nil {
+		if errors.Is(err, database.ErrCredentialNotFound) {
+			http.Error(w, "credential not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to update credential", "id", req.ID, "error", err)
+		http.Error(w, "failed to update credential", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "credential updated successfully",
+	})
+}
+
+// handleDeleteCredential 删除指定凭据。
+func (h *AdminHandler) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req DeleteCredentialRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == 0 {
+		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeleteDeviceHmacCredential(r.Context(), req.ID); err != nil {
+		if errors.Is(err, database.ErrCredentialNotFound) {
+			http.Error(w, "credential not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to delete credential", "id", req.ID, "error", err)
+		http.Error(w, "failed to delete credential", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "credential deleted successfully",
+	})
+}
+
+// handleBatchDeleteCredentials 批量删除凭据。
+func (h *AdminHandler) handleBatchDeleteCredentials(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req BatchDeleteCredentialRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.BatchDeleteDeviceHmacCredentials(r.Context(), req.IDs); err != nil {
+		h.logger.Error("failed to batch delete credentials", "error", err)
+		http.Error(w, "failed to batch delete credentials", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "credentials deleted successfully",
+	})
 }
 
 // handleGenerateCredential 处理生成设备出厂 HMAC 凭据的请求。

@@ -69,7 +69,28 @@ CREATE TABLE IF NOT EXISTS device_access_token (
 );
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+-- device_agent_ref: 设备类型与 Agent 配置关联表
+CREATE TABLE IF NOT EXISTS device_agent_ref (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- 关联记录自增主键
+    device_type VARCHAR(32) NOT NULL,                               -- 设备类型（全局业务唯一）
+    agent_config_id INTEGER NOT NULL,                               -- 关联的 Agent 配置 ID
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 创建时间
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 最近更新时间
+    CONSTRAINT uk_device_type UNIQUE (device_type)
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- idx_device_agent_ref_agent_config_id: Agent 配置 ID 普通索引
+CREATE INDEX IF NOT EXISTS idx_device_agent_ref_agent_config_id ON device_agent_ref(agent_config_id);
+-- +goose StatementEnd
+
 -- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS device_agent_ref;
+-- +goose StatementEnd
+
 -- +goose StatementBegin
 DROP TABLE IF EXISTS device_access_token;
 -- +goose StatementEnd

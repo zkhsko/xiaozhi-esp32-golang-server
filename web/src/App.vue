@@ -2,23 +2,28 @@
   <el-container class="layout-container">
     <el-aside width="220px" class="aside">
       <div class="logo">
-        <span class="logo-text">小智 ESP32 后台</span>
+        <el-icon class="logo-icon"><Cpu /></el-icon>
+        <span class="logo-text">小智 ESP32 管理</span>
       </div>
       <el-menu
-        default-active="/"
+        :default-active="activeMenu"
         class="el-menu-vertical"
         router
       >
+        <el-menu-item index="/device-credentials">
+          <el-icon><Key /></el-icon>
+          <span>设备生产表</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
     <el-container>
       <el-header class="header">
         <div class="header-left">
-          <span class="header-title">管理控制台</span>
+          <span class="header-title">{{ currentTitle }}</span>
         </div>
         <div class="header-right">
-          <el-tag effect="plain" type="info">v1.0.0</el-tag>
+          <el-tag effect="plain" type="primary">ESP32 Admin v1.0.0</el-tag>
         </div>
       </el-header>
 
@@ -30,6 +35,19 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+import { Cpu, Key } from '@element-plus/icons-vue'
+
+const route = useRoute()
+
+const activeMenu = computed(() => {
+  return route.path === '/' ? '/device-credentials' : route.path
+})
+
+const currentTitle = computed(() => {
+  return (route.meta?.title as string) || '设备生产表管理'
+})
 </script>
 
 <style>
@@ -45,8 +63,8 @@ html, body, #app {
 }
 
 .aside {
-  background-color: #f8f9fa;
-  border-right: 1px solid #e9ecef;
+  background-color: #ffffff;
+  border-right: 1px solid #e4e7ed;
   display: flex;
   flex-direction: column;
 }
@@ -55,9 +73,15 @@ html, body, #app {
   height: 60px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  border-bottom: 1px solid #e9ecef;
+  gap: 8px;
+  padding: 0 18px;
+  border-bottom: 1px solid #e4e7ed;
   background-color: #ffffff;
+}
+
+.logo-icon {
+  font-size: 22px;
+  color: #409eff;
 }
 
 .logo-text {
@@ -69,26 +93,28 @@ html, body, #app {
 .el-menu-vertical {
   border-right: none;
   background-color: transparent;
+  padding-top: 8px;
 }
 
 .header {
   height: 60px;
   background-color: #ffffff;
-  border-bottom: 1px solid #e9ecef;
+  border-bottom: 1px solid #e4e7ed;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 20px;
+  padding: 0 24px;
 }
 
 .header-title {
   font-size: 16px;
-  font-weight: 500;
-  color: #606266;
+  font-weight: 600;
+  color: #303133;
 }
 
 .main-content {
-  background-color: #f0f2f5;
+  background-color: #f5f7fa;
   padding: 20px;
+  overflow-y: auto;
 }
 </style>

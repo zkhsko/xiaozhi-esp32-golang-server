@@ -22,6 +22,10 @@ const (
 	CredentialStatusEnabled = "enabled"
 	// CredentialStatusActivated 表示凭证已完成设备激活并与运行态设备建立权威关联。
 	CredentialStatusActivated = "activated"
+	// CredentialStatusBlocked 表示凭证已被临时禁用。
+	CredentialStatusBlocked = "blocked"
+	// CredentialStatusRevoked 表示凭证已被作废。
+	CredentialStatusRevoked = "revoked"
 )
 
 // 哨兵错误定义。
@@ -65,6 +69,15 @@ type DeviceHmacCredential struct {
 // TableName 指定 DeviceHmacCredential 对应的表名。
 func (DeviceHmacCredential) TableName() string {
 	return "device_hmac_credential"
+}
+
+// DeviceHmacCredentialFilter 定义设备 HMAC 凭证查询过滤条件。
+type DeviceHmacCredentialFilter struct {
+	SerialNumber     string
+	DeviceType       string
+	CredentialStatus string
+	Page             int
+	PageSize         int
 }
 
 // IsAvailable 判断凭证当前是否处于可发起激活或验证的可用状态。
@@ -139,5 +152,128 @@ func (d *Database) BatchCreateDeviceHmacCredentials(ctx context.Context, creds [
 		return fmt.Errorf("batch create device hmac credentials: %w", err)
 	}
 
+	return nil
+}
+
+// ListDeviceHmacCredentials 分页查询设备 HMAC 凭证列表。
+func (d *Database) ListDeviceHmacCredentials(ctx context.Context, filter DeviceHmacCredentialFilter) ([]*DeviceHmacCredential, int64, error) {
+	if d == nil || d.gormDB == nil {
+		return nil, 0, ErrDatabaseInstanceRequired
+	}
+
+	query := d.gormDB.WithContext(ctx).Model(&DeviceHmacCredential{})
+
+	if sn := strings.TrimSpace(filter.SerialNumber); sn != "" {
+		query = query.Where("serial_number LIKE ?", "%"+sn+"%")
+	}
+	if dt := strings.TrimSpace(filter.DeviceType); dt != "" {
+		query = query.Where("device_type = ?", dt)
+	}
+	if cs := strings.TrimSpace(filter.CredentialStatus); cs != "" {
+		query = query.Where("credential_status = ?", cs)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count device hmac credentials: %w", err)
+	}
+
+	page := filter.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := filter.PageSize
+	if pageSize <= 0 {
+		pageSize = 10
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
+
+	offset := (page - 1) * pageSize
+	var creds []*DeviceHmacCredential
+	err := query.Order("id DESC").Offset(offset).Limit(pageSize).Find(&creds).Error
+	if err != nil {
+		return nil, 0, fmt.Errorf("query device hmac credentials list: %w", err)
+	}
+
+	return creds, total, nil
+}
+
+// UpdateDeviceHmacCredential 更新指定 ID 的凭证字段。
+func (d *Database) UpdateDeviceHmacCredential(ctx context.Context, id uint64, updates map[string]any) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if id == 0 {
+		return ErrInvalidCredential
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+
+	allowedUpdates := make(map[string]any)
+	if val, ok := updates["device_type"]; ok {
+		allowedUpdates["device_type"] = strings.TrimSpace(fmt.Sprintf("%v", val))
+	}
+	if val, ok := updates["credential_status"]; ok {
+		allowedUpdates["credential_status"] = strings.TrimSpace(fmt.Sprintf("%v", val))
+	}
+	if val, ok := updates["auth_method"]; ok {
+		allowedUpdates["auth_method"] = strings.TrimSpace(fmt.Sprintf("%v", val))
+	}
+	if len(allowedUpdates) == 0 {
+		return nil
+	}
+	allowedUpdates["updated_at"] = time.Now()
+
+	res := d.gormDB.WithContext(ctx).
+		Model(&DeviceHmacCredential{}).
+		Where("id = ?", id).
+		Updates(allowedUpdates)
+	if res.Error != nil {
+		return fmt.Errorf("update device hmac credential: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return ErrCredentialNotFound
+	}
+	return nil
+}
+
+// DeleteDeviceHmacCredential 根据 ID 删除凭证记录。
+func (d *Database) DeleteDeviceHmacCredential(ctx context.Context, id uint64) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if id == 0 {
+		return ErrInvalidCredential
+	}
+
+	res := d.gormDB.WithContext(ctx).
+		Where("id = ?", id).
+		Delete(&DeviceHmacCredential{})
+	if res.Error != nil {
+		return fmt.Errorf("delete device hmac credential: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return ErrCredentialNotFound
+	}
+	return nil
+}
+
+// BatchDeleteDeviceHmacCredentials 批量删除凭证记录。
+func (d *Database) BatchDeleteDeviceHmacCredentials(ctx context.Context, ids []uint64) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	res := d.gormDB.WithContext(ctx).
+		Where("id IN ?", ids).
+		Delete(&DeviceHmacCredential{})
+	if res.Error != nil {
+		return fmt.Errorf("batch delete device hmac credentials: %w", res.Error)
+	}
 	return nil
 }

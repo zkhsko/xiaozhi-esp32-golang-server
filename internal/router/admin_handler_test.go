@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -127,5 +128,134 @@ func TestAdminGenerateCredential_DefaultDeviceType(t *testing.T) {
 	}
 	if cred.DeviceType != "default" {
 		t.Errorf("expected db default DeviceType %q, got %q", "default", cred.DeviceType)
+	}
+}
+
+func TestAdminCredentialCRUD(t *testing.T) {
+	db := setupTestRouterDB(t)
+	cfg := &config.Config{}
+	adminHandler := NewAdminHandler(cfg, db, nil)
+	routes := adminHandler.Routes()
+
+	// 1. 生成初始凭证
+	err := db.BatchCreateDeviceHmacCredentials(context.Background(), []*database.DeviceHmacCredential{
+		{
+			SerialNumber:      "test-sn-001",
+			HMACKeyCiphertext: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+			DeviceType:        "desk-robot",
+			CredentialStatus:  database.CredentialStatusEnabled,
+		},
+	})
+	if err != nil {
+		t.Fatalf("batch create failed: %v", err)
+	}
+
+	foundCred, err := db.FindDeviceHmacCredentialBySerialNumber(context.Background(), "test-sn-001")
+	if err != nil {
+		t.Fatalf("find credential failed: %v", err)
+	}
+	targetID := foundCred.ID
+
+	// 2. List credentials
+	reqList := httptest.NewRequest(http.MethodGet, "/device-hmac-credential?serial_number=test-sn", nil)
+	wList := httptest.NewRecorder()
+	routes.ServeHTTP(wList, reqList)
+
+	if wList.Code != http.StatusOK {
+		t.Fatalf("list failed, status=%d, body=%s", wList.Code, wList.Body.String())
+	}
+
+	var listResp struct {
+		Success bool                     `json:"success"`
+		Data    DeviceCredentialListData `json:"data"`
+	}
+	if err := json.Unmarshal(wList.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list resp failed: %v", err)
+	}
+	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
+		t.Fatalf("expected 1 item in list, got total=%d len=%d", listResp.Data.Total, len(listResp.Data.Items))
+	}
+
+	// 3. Update credential (via POST /device-hmac-credential/update)
+	updateBody, _ := json.Marshal(UpdateCredentialRequest{
+		ID:               targetID,
+		DeviceType:       "desk-robot-v2",
+		CredentialStatus: "blocked",
+	})
+	reqUpdate := httptest.NewRequest(http.MethodPost, "/device-hmac-credential/update", bytes.NewReader(updateBody))
+	reqUpdate.Header.Set("Content-Type", "application/json")
+	wUpdate := httptest.NewRecorder()
+	routes.ServeHTTP(wUpdate, reqUpdate)
+
+	if wUpdate.Code != http.StatusOK {
+		t.Fatalf("update failed, status=%d, body=%s", wUpdate.Code, wUpdate.Body.String())
+	}
+
+	cred, err := db.FindDeviceHmacCredentialBySerialNumber(context.Background(), "test-sn-001")
+	if err != nil {
+		t.Fatalf("find credential failed: %v", err)
+	}
+	if cred.DeviceType != "desk-robot-v2" || cred.CredentialStatus != database.CredentialStatusBlocked {
+		t.Fatalf("update mismatch: type=%s, status=%s", cred.DeviceType, cred.CredentialStatus)
+	}
+
+	// 4. Delete credential (via POST /device-hmac-credential/delete)
+	deleteBody, _ := json.Marshal(DeleteCredentialRequest{
+		ID: targetID,
+	})
+	reqDelete := httptest.NewRequest(http.MethodPost, "/device-hmac-credential/delete", bytes.NewReader(deleteBody))
+	reqDelete.Header.Set("Content-Type", "application/json")
+	wDelete := httptest.NewRecorder()
+	routes.ServeHTTP(wDelete, reqDelete)
+
+	if wDelete.Code != http.StatusOK {
+		t.Fatalf("delete failed, status=%d, body=%s", wDelete.Code, wDelete.Body.String())
+	}
+
+	// Verify deleted
+	_, err = db.FindDeviceHmacCredentialBySerialNumber(context.Background(), "test-sn-001")
+	if !errors.Is(err, database.ErrCredentialNotFound) {
+		t.Fatalf("expected ErrCredentialNotFound after delete, got %v", err)
+	}
+}
+
+func TestAdminCredentialBatchDelete(t *testing.T) {
+	db := setupTestRouterDB(t)
+	cfg := &config.Config{}
+	adminHandler := NewAdminHandler(cfg, db, nil)
+	routes := adminHandler.Routes()
+
+	// Insert 2 records via BatchCreateDeviceHmacCredentials
+	_ = db.BatchCreateDeviceHmacCredentials(context.Background(), []*database.DeviceHmacCredential{
+		{
+			SerialNumber:      "sn-del-1",
+			HMACKeyCiphertext: "1111111111111111111111111111111111111111111111111111111111111111",
+		},
+		{
+			SerialNumber:      "sn-del-2",
+			HMACKeyCiphertext: "2222222222222222222222222222222222222222222222222222222222222222",
+		},
+	})
+
+	list, _, _ := db.ListDeviceHmacCredentials(context.Background(), database.DeviceHmacCredentialFilter{})
+	if len(list) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(list))
+	}
+
+	batchDelBody, _ := json.Marshal(BatchDeleteCredentialRequest{
+		IDs: []uint64{list[0].ID, list[1].ID},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/device-hmac-credential/batch-delete", bytes.NewReader(batchDelBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	routes.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("batch delete failed, status=%d, body=%s", w.Code, w.Body.String())
+	}
+
+	listAfter, totalAfter, _ := db.ListDeviceHmacCredentials(context.Background(), database.DeviceHmacCredentialFilter{})
+	if totalAfter != 0 || len(listAfter) != 0 {
+		t.Fatalf("expected 0 items after batch delete, got %d", totalAfter)
 	}
 }

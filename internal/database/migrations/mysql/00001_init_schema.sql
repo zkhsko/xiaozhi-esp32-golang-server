@@ -65,7 +65,25 @@ CREATE TABLE IF NOT EXISTS `device_access_token` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='设备鉴权 Access Token 表';
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+-- device_agent_ref: 设备类型与 Agent 配置关联表
+CREATE TABLE IF NOT EXISTS `device_agent_ref` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '关联记录自增主键',
+    `device_type` VARCHAR(32) NOT NULL COMMENT '设备类型，全局业务唯一',
+    `agent_config_id` BIGINT UNSIGNED NOT NULL COMMENT '关联的 Agent 配置 ID',
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_device_type` (`device_type`),
+    KEY `idx_agent_config_id` (`agent_config_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='设备类型与 Agent 配置关联表';
+-- +goose StatementEnd
+
 -- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS `device_agent_ref`;
+-- +goose StatementEnd
+
 -- +goose StatementBegin
 DROP TABLE IF EXISTS `device_access_token`;
 -- +goose StatementEnd

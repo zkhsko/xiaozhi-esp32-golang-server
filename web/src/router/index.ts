@@ -1,10 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import DeviceCredentials from '../views/DeviceCredentials.vue'
 
 const routes = [
   {
     path: '/',
-    component: {
-      template: '<div class="dashboard-placeholder"></div>',
+    redirect: '/device-credentials',
+  },
+  {
+    path: '/device-credentials',
+    name: 'DeviceCredentials',
+    component: DeviceCredentials,
+    meta: {
+      title: '设备生产凭证管理',
     },
   },
 ]
