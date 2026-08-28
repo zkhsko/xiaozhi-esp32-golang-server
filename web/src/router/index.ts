@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import DeviceCredentials from '../views/DeviceCredentials.vue'
 import DeviceActivations from '../views/DeviceActivations.vue'
+import ASRConfigs from '../views/ASRConfigs.vue'
 
 const routes = [
   {
@@ -21,6 +22,14 @@ const routes = [
     component: DeviceActivations,
     meta: {
       title: '设备激活关系管理',
+    },
+  },
+  {
+    path: '/asr-configs',
+    name: 'ASRConfigs',
+    component: ASRConfigs,
+    meta: {
+      title: 'ASR 语音识别配置',
     },
   },
 ]

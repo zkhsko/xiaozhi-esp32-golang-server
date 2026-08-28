@@ -187,4 +187,69 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	if wSPA2.Code != http.StatusOK {
 		t.Fatalf("SPA route for activations failed, code=%d", wSPA2.Code)
 	}
+
+	// 13. ASR 配置 E2E 创建
+	createASRBody, _ := json.Marshal(SaveASRConfigRequest{
+		Name:             "E2E 百炼 ASR",
+		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+		APIKey:           "sk-e2e-asr-key",
+		Model:            "qwen-audio-3.0-asr-flash-streaming",
+		Hotwords:         "小智,测试热词",
+		ConnectTimeoutMS: 5000,
+	})
+	reqASRCreate := httptest.NewRequest(http.MethodPost, "/admin-api/asr-config/save", bytes.NewReader(createASRBody))
+	reqASRCreate.Header.Set("Content-Type", "application/json")
+	wASRCreate := httptest.NewRecorder()
+	r.ServeHTTP(wASRCreate, reqASRCreate)
+
+	if wASRCreate.Code != http.StatusOK {
+		t.Fatalf("create asr config failed: %s", wASRCreate.Body.String())
+	}
+	var asrCreateResp struct {
+		Success bool          `json:"success"`
+		Data    ASRConfigItem `json:"data"`
+	}
+	_ = json.Unmarshal(wASRCreate.Body.Bytes(), &asrCreateResp)
+	if !asrCreateResp.Success || asrCreateResp.Data.ID == 0 || !asrCreateResp.Data.HasAPIKey {
+		t.Fatalf("unexpected asr create resp: %+v", asrCreateResp)
+	}
+	createdASRID := asrCreateResp.Data.ID
+
+	// 14. ASR 配置列表查询
+	reqASRList := httptest.NewRequest(http.MethodGet, "/admin-api/asr-config?name=E2E", nil)
+	wASRList := httptest.NewRecorder()
+	r.ServeHTTP(wASRList, reqASRList)
+
+	if wASRList.Code != http.StatusOK {
+		t.Fatalf("list asr config failed: %s", wASRList.Body.String())
+	}
+	var asrListResp struct {
+		Success bool              `json:"success"`
+		Data    ASRConfigListData `json:"data"`
+	}
+	_ = json.Unmarshal(wASRList.Body.Bytes(), &asrListResp)
+	if asrListResp.Data.Total != 1 || len(asrListResp.Data.Items) != 1 {
+		t.Fatalf("expected 1 ASR config item, got %d", asrListResp.Data.Total)
+	}
+
+	// 15. ASR 配置单条删除
+	delASRBody, _ := json.Marshal(DeleteASRConfigRequest{ID: createdASRID})
+	reqDelASR := httptest.NewRequest(http.MethodPost, "/admin-api/asr-config/delete", bytes.NewReader(delASRBody))
+	reqDelASR.Header.Set("Content-Type", "application/json")
+	wDelASR := httptest.NewRecorder()
+	r.ServeHTTP(wDelASR, reqDelASR)
+
+	if wDelASR.Code != http.StatusOK {
+		t.Fatalf("delete asr config failed: %s", wDelASR.Body.String())
+	}
+
+	// 16. 访问 /admin/asr-configs 确保静态 SPA 路由可 fallback 到 index.html
+	reqSPA3 := httptest.NewRequest(http.MethodGet, "/admin/asr-configs", nil)
+	wSPA3 := httptest.NewRecorder()
+	r.ServeHTTP(wSPA3, reqSPA3)
+
+	if wSPA3.Code != http.StatusOK {
+		t.Fatalf("SPA route for asr-configs failed, code=%d", wSPA3.Code)
+	}
 }
+

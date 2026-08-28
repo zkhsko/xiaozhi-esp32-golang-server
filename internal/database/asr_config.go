@@ -260,3 +260,48 @@ func (d *Database) ListASRConfigs(ctx context.Context, filter ASRConfigFilter) (
 
 	return configs, total, nil
 }
+
+// DeleteASRConfig 删除指定 ID 的 ASR 配置记录。
+func (d *Database) DeleteASRConfig(ctx context.Context, id uint64) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if id == 0 {
+		return ErrInvalidASRConfigID
+	}
+
+	res := d.gormDB.WithContext(ctx).Where("id = ?", id).Delete(&ASRConfig{})
+	if res.Error != nil {
+		return fmt.Errorf("delete asr config: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return ErrASRConfigNotFound
+	}
+	return nil
+}
+
+// BatchDeleteASRConfigs 批量删除指定 ID 列表的 ASR 配置记录。
+func (d *Database) BatchDeleteASRConfigs(ctx context.Context, ids []uint64) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	validIDs := make([]uint64, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			validIDs = append(validIDs, id)
+		}
+	}
+	if len(validIDs) == 0 {
+		return nil
+	}
+
+	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIDs).Delete(&ASRConfig{}).Error; err != nil {
+		return fmt.Errorf("batch delete asr configs: %w", err)
+	}
+	return nil
+}
+

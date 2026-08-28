@@ -18,6 +18,10 @@
           <el-icon><Connection /></el-icon>
           <span>设备激活表</span>
         </el-menu-item>
+        <el-menu-item index="/asr-configs">
+          <el-icon><Microphone /></el-icon>
+          <span>ASR 配置表</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -41,7 +45,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Cpu, Key, Connection } from '@element-plus/icons-vue'
+import { Cpu, Key, Connection, Microphone } from '@element-plus/icons-vue'
 
 const route = useRoute()
 

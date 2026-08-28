@@ -122,6 +122,50 @@ type BatchDeleteActivationRequest struct {
 	IDs []uint64 `json:"ids"`
 }
 
+// ASRConfigItem 表示单条 ASR 配置 DTO（api_key 脱敏为 has_api_key）。
+type ASRConfigItem struct {
+	ID               uint64    `json:"id"`
+	Name             string    `json:"name"`
+	Endpoint         string    `json:"endpoint"`
+	HasAPIKey        bool      `json:"has_api_key"`
+	Model            string    `json:"model"`
+	Hotwords         string    `json:"hotwords"`
+	ConnectTimeoutMS int64     `json:"connect_timeout_ms"`
+	Enabled          bool      `json:"enabled"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// ASRConfigListData ASR 配置列表响应数据。
+type ASRConfigListData struct {
+	Items    []ASRConfigItem `json:"items"`
+	Total    int64           `json:"total"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"page_size"`
+}
+
+// SaveASRConfigRequest 保存或更新 ASR 配置请求体。
+type SaveASRConfigRequest struct {
+	ID               uint64 `json:"id"`
+	Name             string `json:"name"`
+	Endpoint         string `json:"endpoint"`
+	APIKey           string `json:"api_key"` // write-only；更新时留空表示保留原 Key
+	Model            string `json:"model"`
+	Hotwords         string `json:"hotwords"`
+	ConnectTimeoutMS int64  `json:"connect_timeout_ms"`
+	Enabled          *bool  `json:"enabled"`
+}
+
+// DeleteASRConfigRequest 删除单条 ASR 配置请求体。
+type DeleteASRConfigRequest struct {
+	ID uint64 `json:"id"`
+}
+
+// BatchDeleteASRConfigRequest 批量删除 ASR 配置请求体。
+type BatchDeleteASRConfigRequest struct {
+	IDs []uint64 `json:"ids"`
+}
+
 // AdminHandler 处理 /admin-api/ 管理接口。
 type AdminHandler struct {
 	cfg    *config.Config
@@ -159,6 +203,14 @@ func (h *AdminHandler) Routes() http.Handler {
 	r.Post("/device-activation/update", h.handleUpdateActivation)
 	r.Post("/device-activation/delete", h.handleDeleteActivation)
 	r.Post("/device-activation/batch-delete", h.handleBatchDeleteActivations)
+
+	// ASR Config 接口
+	r.Get("/asr-config", h.handleListASRConfigs)
+	r.Get("/asr-config/list", h.handleListASRConfigs)
+	r.Post("/asr-config/save", h.handleSaveASRConfig)
+	r.Post("/asr-config/update", h.handleSaveASRConfig)
+	r.Post("/asr-config/delete", h.handleDeleteASRConfig)
+	r.Post("/asr-config/batch-delete", h.handleBatchDeleteASRConfigs)
 
 	return r
 }
@@ -697,4 +749,250 @@ func (h *AdminHandler) handleBatchDeleteActivations(w http.ResponseWriter, r *ht
 		Message: "device activations deleted successfully",
 	})
 }
+
+// handleListASRConfigs 分页获取 ASR 语音识别配置列表。
+func (h *AdminHandler) handleListASRConfigs(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	query := r.URL.Query()
+	page, _ := strconv.Atoi(query.Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(query.Get("page_size"))
+	if pageSize <= 0 {
+		pageSize = 10
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
+
+	filter := database.ASRConfigFilter{
+		Name:     query.Get("name"),
+		Page:     page,
+		PageSize: pageSize,
+	}
+
+	if enabledStr := query.Get("enabled"); enabledStr != "" {
+		if enabledVal, err := strconv.ParseBool(enabledStr); err == nil {
+			filter.Enabled = &enabledVal
+		}
+	}
+
+	configs, total, err := h.db.ListASRConfigs(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("failed to list asr configs", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	items := make([]ASRConfigItem, 0, len(configs))
+	for _, cfg := range configs {
+		items = append(items, ASRConfigItem{
+			ID:               cfg.ID,
+			Name:             cfg.Name,
+			Endpoint:         cfg.Endpoint,
+			HasAPIKey:        len(strings.TrimSpace(cfg.APIKey)) > 0,
+			Model:            cfg.Model,
+			Hotwords:         cfg.Hotwords,
+			ConnectTimeoutMS: cfg.ConnectTimeoutMS,
+			Enabled:          cfg.Enabled,
+			CreatedAt:        cfg.CreatedAt,
+			UpdatedAt:        cfg.UpdatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Data: ASRConfigListData{
+			Items:    items,
+			Total:    total,
+			Page:     page,
+			PageSize: pageSize,
+		},
+	})
+}
+
+// handleSaveASRConfig 创建或更新 ASR 语音识别配置（ID 为 0 时创建，ID > 0 时按 ID 覆盖）。
+func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req SaveASRConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	connectTimeout := req.ConnectTimeoutMS
+	if connectTimeout == 0 {
+		connectTimeout = 5000
+	}
+
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+
+	if req.ID == 0 {
+		// 创建新配置
+		cfg := &database.ASRConfig{
+			Name:             strings.TrimSpace(req.Name),
+			Endpoint:         strings.TrimSpace(req.Endpoint),
+			APIKey:           strings.TrimSpace(req.APIKey),
+			Model:            strings.TrimSpace(req.Model),
+			Hotwords:         req.Hotwords,
+			ConnectTimeoutMS: connectTimeout,
+			Enabled:          enabled,
+		}
+
+		if err := h.db.CreateASRConfig(r.Context(), cfg); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, AdminResponse{
+			Success: true,
+			Message: "ASR 配置创建成功",
+			Data: ASRConfigItem{
+				ID:               cfg.ID,
+				Name:             cfg.Name,
+				Endpoint:         cfg.Endpoint,
+				HasAPIKey:        len(cfg.APIKey) > 0,
+				Model:            cfg.Model,
+				Hotwords:         cfg.Hotwords,
+				ConnectTimeoutMS: cfg.ConnectTimeoutMS,
+				Enabled:          cfg.Enabled,
+				CreatedAt:        cfg.CreatedAt,
+				UpdatedAt:        cfg.UpdatedAt,
+			},
+		})
+		return
+	}
+
+	// 覆盖更新已有配置
+	existing, err := h.db.FindASRConfigByID(r.Context(), req.ID)
+	if err != nil {
+		if errors.Is(err, database.ErrASRConfigNotFound) {
+			http.Error(w, "asr config not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	apiKey := existing.APIKey
+	if strings.TrimSpace(req.APIKey) != "" {
+		apiKey = strings.TrimSpace(req.APIKey)
+	}
+
+	if req.Enabled == nil {
+		enabled = existing.Enabled
+	}
+
+	updatedCfg := &database.ASRConfig{
+		ID:               req.ID,
+		Name:             strings.TrimSpace(req.Name),
+		Endpoint:         strings.TrimSpace(req.Endpoint),
+		APIKey:           apiKey,
+		Model:            strings.TrimSpace(req.Model),
+		Hotwords:         req.Hotwords,
+		ConnectTimeoutMS: connectTimeout,
+		Enabled:          enabled,
+	}
+
+	if err := h.db.UpdateASRConfigByID(r.Context(), updatedCfg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "ASR 配置更新成功",
+		Data: ASRConfigItem{
+			ID:               updatedCfg.ID,
+			Name:             updatedCfg.Name,
+			Endpoint:         updatedCfg.Endpoint,
+			HasAPIKey:        len(apiKey) > 0,
+			Model:            updatedCfg.Model,
+			Hotwords:         updatedCfg.Hotwords,
+			ConnectTimeoutMS: updatedCfg.ConnectTimeoutMS,
+			Enabled:          updatedCfg.Enabled,
+			UpdatedAt:        time.Now(),
+		},
+	})
+}
+
+// handleDeleteASRConfig 删除指定 ID 的 ASR 配置记录。
+func (h *AdminHandler) handleDeleteASRConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req DeleteASRConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == 0 {
+		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeleteASRConfig(r.Context(), req.ID); err != nil {
+		if errors.Is(err, database.ErrASRConfigNotFound) {
+			http.Error(w, "asr config not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to delete asr config", "id", req.ID, "error", err)
+		http.Error(w, "failed to delete asr config", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "ASR 配置删除成功",
+	})
+}
+
+// handleBatchDeleteASRConfigs 批量删除 ASR 配置记录。
+func (h *AdminHandler) handleBatchDeleteASRConfigs(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req BatchDeleteASRConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.BatchDeleteASRConfigs(r.Context(), req.IDs); err != nil {
+		h.logger.Error("failed to batch delete asr configs", "error", err)
+		http.Error(w, "failed to batch delete asr configs", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: fmt.Sprintf("成功批量删除 %d 条 ASR 配置", len(req.IDs)),
+	})
+}
+
 

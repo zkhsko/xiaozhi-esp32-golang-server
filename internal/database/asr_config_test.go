@@ -416,4 +416,71 @@ func TestASRConfig_NilDB(t *testing.T) {
 	if _, _, err := nilDB.ListASRConfigs(ctx, ASRConfigFilter{}); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
+	if err := nilDB.DeleteASRConfig(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
+		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
+	}
+	if err := nilDB.BatchDeleteASRConfigs(ctx, []uint64{1}); !errors.Is(err, ErrDatabaseInstanceRequired) {
+		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
+	}
 }
+
+func TestASRConfig_DeleteAndBatchDelete(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	cfg1 := &ASRConfig{
+		Name:             "待删除配置1",
+		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+		Model:            "model-del-1",
+		ConnectTimeoutMS: 5000,
+		Enabled:          true,
+	}
+	cfg2 := &ASRConfig{
+		Name:             "待删除配置2",
+		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+		Model:            "model-del-2",
+		ConnectTimeoutMS: 5000,
+		Enabled:          true,
+	}
+	cfg3 := &ASRConfig{
+		Name:             "待删除配置3",
+		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+		Model:            "model-del-3",
+		ConnectTimeoutMS: 5000,
+		Enabled:          true,
+	}
+
+	_ = db.CreateASRConfig(ctx, cfg1)
+	_ = db.CreateASRConfig(ctx, cfg2)
+	_ = db.CreateASRConfig(ctx, cfg3)
+
+	// 1. Delete single config
+	if err := db.DeleteASRConfig(ctx, cfg1.ID); err != nil {
+		t.Fatalf("DeleteASRConfig failed: %v", err)
+	}
+
+	// Verify deleted
+	_, err := db.FindASRConfigByID(ctx, cfg1.ID)
+	if !errors.Is(err, ErrASRConfigNotFound) {
+		t.Fatalf("expected ErrASRConfigNotFound after delete, got %v", err)
+	}
+
+	// Delete non-existent
+	if err := db.DeleteASRConfig(ctx, 99999); !errors.Is(err, ErrASRConfigNotFound) {
+		t.Fatalf("expected ErrASRConfigNotFound for non-existent ID, got %v", err)
+	}
+
+	// 2. Batch delete
+	if err := db.BatchDeleteASRConfigs(ctx, []uint64{cfg2.ID, cfg3.ID}); err != nil {
+		t.Fatalf("BatchDeleteASRConfigs failed: %v", err)
+	}
+
+	_, total, err := db.ListASRConfigs(ctx, ASRConfigFilter{})
+	if err != nil {
+		t.Fatalf("ListASRConfigs failed: %v", err)
+	}
+	if total != 0 {
+		t.Fatalf("expected total 0 after batch delete, got %d", total)
+	}
+}
+
