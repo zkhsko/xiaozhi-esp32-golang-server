@@ -23,7 +23,7 @@
           <span class="header-title">{{ currentTitle }}</span>
         </div>
         <div class="header-right">
-          <el-tag effect="plain" type="primary">ESP32 Admin v1.0.0</el-tag>
+          <el-tag effect="plain" type="info">v1.0.0</el-tag>
         </div>
       </el-header>
 

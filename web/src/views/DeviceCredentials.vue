@@ -55,21 +55,6 @@
           >
             批量删除 ({{ selectedRows.length }})
           </el-button>
-          <el-dropdown @command="handleExportCommand">
-            <el-button :icon="Download">
-              导出 CSV 数据 <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="selected" :disabled="selectedRows.length === 0">
-                  导出已选记录 ({{ selectedRows.length }} 条)
-                </el-dropdown-item>
-                <el-dropdown-item command="current">
-                  导出当前页 ({{ tableData.length }} 条)
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
         </div>
         <div class="toolbar-right">
           <el-tooltip content="刷新数据" placement="top">
@@ -108,30 +93,18 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="hmac_key" label="出厂 HMAC Key" min-width="260">
+        <el-table-column prop="hmac_key" label="出厂 HMAC Key" min-width="240">
           <template #default="{ row }">
             <div class="key-cell">
-              <span class="code-font">
-                {{ showPlainKey[row.id] ? row.hmac_key : maskKey(row.hmac_key) }}
-              </span>
-              <div class="key-actions">
-                <el-tooltip :content="showPlainKey[row.id] ? '隐藏明文' : '查看明文'" placement="top">
-                  <el-button
-                    link
-                    type="primary"
-                    :icon="showPlainKey[row.id] ? View : Hide"
-                    @click="toggleKeyVisibility(row.id)"
-                  />
-                </el-tooltip>
-                <el-tooltip content="复制 HMAC Key" placement="top">
-                  <el-button
-                    link
-                    type="primary"
-                    :icon="CopyDocument"
-                    @click="copyText(row.hmac_key, 'HMAC Key')"
-                  />
-                </el-tooltip>
-              </div>
+              <span class="code-font">{{ maskKey(row.hmac_key) }}</span>
+              <el-tooltip content="复制 HMAC Key" placement="top">
+                <el-button
+                  link
+                  type="primary"
+                  :icon="CopyDocument"
+                  @click="copyText(row.hmac_key, 'HMAC Key')"
+                />
+              </el-tooltip>
             </div>
           </template>
         </el-table-column>
@@ -274,14 +247,9 @@
           </el-button>
         </div>
         <div v-else style="display: flex; justify-content: space-between; align-items: center;">
-          <div>
-            <el-button type="primary" plain :icon="Download" @click="exportGeneratedCSV">
-              下载 CSV 文件
-            </el-button>
-            <el-button :icon="CopyDocument" @click="copyGeneratedText">
-              复制全部内容
-            </el-button>
-          </div>
+          <el-button :icon="CopyDocument" @click="copyGeneratedText">
+            复制全部内容
+          </el-button>
           <el-button type="primary" @click="generateDialog.visible = false">
             完成
           </el-button>
@@ -340,13 +308,9 @@ import {
   RefreshRight,
   Plus,
   Delete,
-  Download,
   Refresh,
   CopyDocument,
-  View,
-  Hide,
   Edit,
-  ArrowDown,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -369,7 +333,6 @@ const searchForm = reactive({
 const loading = ref(false)
 const tableData = ref<CredentialItem[]>([])
 const selectedRows = ref<CredentialItem[]>([])
-const showPlainKey = reactive<Record<number, boolean>>({})
 
 const pagination = reactive({
   page: 1,
@@ -464,11 +427,6 @@ function maskKey(key: string): string {
   if (!key) return ''
   if (key.length <= 16) return key
   return `${key.slice(0, 8)}········${key.slice(-8)}`
-}
-
-// 切换 Key 明文/密文展示
-function toggleKeyVisibility(id: number) {
-  showPlainKey[id] = !showPlainKey[id]
 }
 
 // 复制文本到剪贴板
@@ -575,10 +533,6 @@ async function submitGenerate() {
   }
 }
 
-function exportGeneratedCSV() {
-  exportCSV(generateDialog.generatedItems, `device_credentials_batch_${Date.now()}.csv`)
-}
-
 function copyGeneratedText() {
   const content = generateDialog.generatedItems
     .map(item => `${item.serial_number},${item.hmac_key},${item.device_type}`)
@@ -655,52 +609,6 @@ async function handleBatchDelete() {
   }
 }
 
-// 导出 CSV
-function handleExportCommand(command: string) {
-  if (command === 'selected') {
-    if (selectedRows.value.length === 0) {
-      ElMessage.warning('请先勾选需要导出的记录')
-      return
-    }
-    exportCSV(selectedRows.value, `device_credentials_selected_${Date.now()}.csv`)
-  } else if (command === 'current') {
-    if (tableData.value.length === 0) {
-      ElMessage.warning('当前页没有数据可导出')
-      return
-    }
-    exportCSV(tableData.value, `device_credentials_page_${Date.now()}.csv`)
-  }
-}
-
-function exportCSV(items: CredentialItem[], filename: string) {
-  const header = ['ID', '序列号(SN)', 'HMAC Key', '设备类型', '认证方式', '状态', '创建时间']
-  const rows = items.map(item => [
-    item.id,
-    item.serial_number,
-    item.hmac_key,
-    item.device_type,
-    item.auth_method,
-    item.credential_status,
-    item.created_at,
-  ])
-
-  const csvContent = [
-    header.join(','),
-    ...rows.map(r => r.map(cell => `"${String(cell || '').replace(/"/g, '""')}"`).join(',')),
-  ].join('\n')
-
-  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.setAttribute('href', url)
-  link.setAttribute('download', filename)
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
-  ElMessage.success(`已导出 ${items.length} 条记录`)
-}
-
 onMounted(() => {
   loadData()
 })
@@ -761,13 +669,6 @@ onMounted(() => {
 .copy-btn {
   margin-left: 6px;
   padding: 2px 4px;
-}
-
-.key-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: 8px;
 }
 
 .pagination-wrapper {
