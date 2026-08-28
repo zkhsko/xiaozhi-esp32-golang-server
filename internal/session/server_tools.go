@@ -26,7 +26,7 @@ func DefaultServerTools() []ai.Tool {
 	return []ai.Tool{
 		{
 			Name:        ServerToolGetCurrentTime,
-			Description: "获取服务端当前的日期、时间、星期和时区信息",
+			Description: "获取服务端当前的日期、时间、星期和时区信息。当用户询问现在几点、今天几号、星期几等时间日期相关问题时调用此工具",
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -34,7 +34,7 @@ func DefaultServerTools() []ai.Tool {
 		},
 		{
 			Name:        ServerToolCloseSession,
-			Description: "关闭当前会话并断开连接。当用户表示想要结束对话、退下、去睡觉、断开连接、再见或不再需要交互时调用此工具",
+			Description: "关闭当前会话并断开连接。当用户表达想要结束对话、退下、退下吧、去睡觉、去睡吧、睡觉了、不聊了、再见、拜拜、断开连接、退出、闭嘴、不要再说了、结束对话或不再需要交互时必须立即调用此工具",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -74,7 +74,7 @@ func executeServerTool(ctx context.Context, name string, _ string) (string, erro
 func executeCloseSession() (string, error) {
 	data := map[string]any{
 		"status":  "success",
-		"message": "session will be closed after this turn",
+		"message": "session will be closed after this turn. You must now say a short goodbye to the user.",
 	}
 	bytes, err := json.Marshal(data)
 	if err != nil {

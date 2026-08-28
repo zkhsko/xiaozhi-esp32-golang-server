@@ -350,10 +350,13 @@ func (s *Session) getMCPTools() []ai.Tool {
 // DeviceControlInstruction 相关控制提示词模板常量。
 const (
 	// DeviceControlInstructionHeader 控制提示词引导头。
-	DeviceControlInstructionHeader = "当用户需要控制设备、查询设备状态、查询时间或结束退出对话时，请务必直接调用对应的工具（Tool Call），不要拒绝："
+	DeviceControlInstructionHeader = "【重要工具调用规范】\n你具备直接控制设备、查询状态与调用服务端能力的一系列工具权限。当用户的意图或指令与可用工具的功能相匹配时，必须坚决直接发起对应的工具调用（Tool Call），严禁拒绝，严禁仅在纯文本中口头假装执行："
 
 	// DeviceControlInstructionFooter 控制提示词反馈指导尾。
-	DeviceControlInstructionFooter = "当用户表达上述意图（如退下、再见、关灯、设置音量等）时，必须立即调用对应的工具，执行完成后根据返回结果简要向用户反馈。"
+	DeviceControlInstructionFooter = `【通用工具执行准则】
+1. 意图驱动调用：凡用户请求涉及控制、调节、查询、系统设置、时间获取或结束退出交互等工具支持的操作，必须直接发起对应的工具调用，不得只用文字口头应付。
+2. 依赖与多步调用：若某个操作需要获取设备实时状态或参数作为前置条件且当前未知，必须先调用对应的查询工具，在获得结果后再发起后续控制工具调用。
+3. 真实反馈与简洁表达：禁止在文本回复中向用户输出工具调用的 JSON 格式或技术标识。工具执行完成后，根据真实返回结果用简明自然的口语向用户反馈。`
 )
 
 // FormatDeviceToolsPrompt 将控制提示词和工具列表（原样 JSON）整理为合理的提示词段落。

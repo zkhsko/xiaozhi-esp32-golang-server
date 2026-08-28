@@ -304,6 +304,9 @@ func (s *bailianLLMStream) ToolCalls() []ai.ToolCall {
 	result := make([]ai.ToolCall, 0, len(s.toolCallsIndices))
 	for _, idx := range s.toolCallsIndices {
 		if call, ok := s.toolCallsByIndex[idx]; ok && call != nil {
+			if call.Id == "" {
+				call.Id = fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), idx)
+			}
 			result = append(result, *call)
 		}
 	}
