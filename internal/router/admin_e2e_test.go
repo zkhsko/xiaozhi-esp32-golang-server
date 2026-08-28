@@ -127,4 +127,64 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	if !bytes.Contains(wSPA.Body.Bytes(), []byte("<!DOCTYPE html>")) && !bytes.Contains(wSPA.Body.Bytes(), []byte("<html")) {
 		t.Fatalf("expected index.html response for SPA route")
 	}
+
+	// 8. 测试 device_activation 初始数据及列表查询
+	initialAct, err := db.ActivateDeviceBySerialNumber(context.Background(), "e2e-sn-act-001", "11:22:33:44:55:66", "e2e-client-001")
+	if err != nil {
+		t.Fatalf("activate device failed: %v", err)
+	}
+	createdActID := initialAct.ID
+
+	// 9. 查询设备激活列表
+	reqActList := httptest.NewRequest(http.MethodGet, "/admin-api/device-activation?serial_number=e2e-sn", nil)
+	wActList := httptest.NewRecorder()
+	r.ServeHTTP(wActList, reqActList)
+
+	if wActList.Code != http.StatusOK {
+		t.Fatalf("list activation failed: %s", wActList.Body.String())
+	}
+	var actListResp struct {
+		Success bool                     `json:"success"`
+		Data    DeviceActivationListData `json:"data"`
+	}
+	_ = json.Unmarshal(wActList.Body.Bytes(), &actListResp)
+	if actListResp.Data.Total != 1 {
+		t.Fatalf("expected 1 activation item, got %d", actListResp.Data.Total)
+	}
+
+	// 10. 更新激活状态为 frozen
+	updateActBody, _ := json.Marshal(UpdateActivationRequest{
+		ID:               createdActID,
+		ActivationStatus: "frozen",
+	})
+	reqUpdateAct := httptest.NewRequest(http.MethodPost, "/admin-api/device-activation/update", bytes.NewReader(updateActBody))
+	reqUpdateAct.Header.Set("Content-Type", "application/json")
+	wUpdateAct := httptest.NewRecorder()
+	r.ServeHTTP(wUpdateAct, reqUpdateAct)
+
+	if wUpdateAct.Code != http.StatusOK {
+		t.Fatalf("update activation failed: %s", wUpdateAct.Body.String())
+	}
+
+	// 11. 删除激活记录
+	delActBody, _ := json.Marshal(DeleteActivationRequest{
+		ID: createdActID,
+	})
+	reqDelAct := httptest.NewRequest(http.MethodPost, "/admin-api/device-activation/delete", bytes.NewReader(delActBody))
+	reqDelAct.Header.Set("Content-Type", "application/json")
+	wDelAct := httptest.NewRecorder()
+	r.ServeHTTP(wDelAct, reqDelAct)
+
+	if wDelAct.Code != http.StatusOK {
+		t.Fatalf("delete activation failed: %s", wDelAct.Body.String())
+	}
+
+	// 12. 访问 /admin/device-activations 确保静态 SPA 路由可 fallback 到 index.html
+	reqSPA2 := httptest.NewRequest(http.MethodGet, "/admin/device-activations", nil)
+	wSPA2 := httptest.NewRecorder()
+	r.ServeHTTP(wSPA2, reqSPA2)
+
+	if wSPA2.Code != http.StatusOK {
+		t.Fatalf("SPA route for activations failed, code=%d", wSPA2.Code)
+	}
 }

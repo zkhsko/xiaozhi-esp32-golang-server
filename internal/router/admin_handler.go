@@ -84,6 +84,44 @@ type BatchDeleteCredentialRequest struct {
 	IDs []uint64 `json:"ids"`
 }
 
+// ActivationItem 表示单条设备激活关系 DTO。
+type ActivationItem struct {
+	ID               uint64    `json:"id"`
+	SerialNumber     string    `json:"serial_number"`
+	DeviceID         string    `json:"device_id"`
+	ClientID         string    `json:"client_id,omitempty"`
+	ActivationStatus string    `json:"activation_status"`
+	ActivatedAt      time.Time `json:"activated_at"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// DeviceActivationListData 设备激活列表响应数据。
+type DeviceActivationListData struct {
+	Items    []ActivationItem `json:"items"`
+	Total    int64            `json:"total"`
+	Page     int              `json:"page"`
+	PageSize int              `json:"page_size"`
+}
+
+// UpdateActivationRequest 更新激活记录请求体。
+type UpdateActivationRequest struct {
+	ID               uint64 `json:"id"`
+	DeviceID         string `json:"device_id"`
+	ClientID         string `json:"client_id"`
+	ActivationStatus string `json:"activation_status"`
+}
+
+// DeleteActivationRequest 删除单条激活记录请求体。
+type DeleteActivationRequest struct {
+	ID uint64 `json:"id"`
+}
+
+// BatchDeleteActivationRequest 批量删除激活记录请求体。
+type BatchDeleteActivationRequest struct {
+	IDs []uint64 `json:"ids"`
+}
+
 // AdminHandler 处理 /admin-api/ 管理接口。
 type AdminHandler struct {
 	cfg    *config.Config
@@ -107,12 +145,20 @@ func NewAdminHandler(cfg *config.Config, db *database.Database, l *slog.Logger) 
 func (h *AdminHandler) Routes() http.Handler {
 	r := chi.NewRouter()
 
+	// Device HMAC Credential 接口
 	r.Get("/device-hmac-credential", h.handleListCredentials)
 	r.Get("/device-hmac-credential/list", h.handleListCredentials)
 	r.Post("/device-hmac-credential/generate", h.handleGenerateCredential)
 	r.Post("/device-hmac-credential/update", h.handleUpdateCredential)
 	r.Post("/device-hmac-credential/delete", h.handleDeleteCredential)
 	r.Post("/device-hmac-credential/batch-delete", h.handleBatchDeleteCredentials)
+
+	// Device Activation 接口
+	r.Get("/device-activation", h.handleListActivations)
+	r.Get("/device-activation/list", h.handleListActivations)
+	r.Post("/device-activation/update", h.handleUpdateActivation)
+	r.Post("/device-activation/delete", h.handleDeleteActivation)
+	r.Post("/device-activation/batch-delete", h.handleBatchDeleteActivations)
 
 	return r
 }
@@ -470,3 +516,185 @@ func generateRandomSerialNumber() (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
+
+// handleListActivations 分页获取设备激活关系列表。
+func (h *AdminHandler) handleListActivations(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	query := r.URL.Query()
+	page, _ := strconv.Atoi(query.Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(query.Get("page_size"))
+	if pageSize <= 0 {
+		pageSize = 10
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
+
+	filter := database.DeviceActivationFilter{
+		SerialNumber:     query.Get("serial_number"),
+		DeviceID:         query.Get("device_id"),
+		ClientID:         query.Get("client_id"),
+		ActivationStatus: query.Get("activation_status"),
+		Page:             page,
+		PageSize:         pageSize,
+	}
+
+	acts, total, err := h.db.ListDeviceActivations(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("failed to list device activations", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	items := make([]ActivationItem, 0, len(acts))
+	for _, a := range acts {
+		items = append(items, ActivationItem{
+			ID:               a.ID,
+			SerialNumber:     a.SerialNumber,
+			DeviceID:         a.DeviceID,
+			ClientID:         a.ClientID,
+			ActivationStatus: a.ActivationStatus,
+			ActivatedAt:      a.ActivatedAt,
+			CreatedAt:        a.CreatedAt,
+			UpdatedAt:        a.UpdatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Data: DeviceActivationListData{
+			Items:    items,
+			Total:    total,
+			Page:     page,
+			PageSize: pageSize,
+		},
+	})
+}
+
+// handleUpdateActivation 更新指定设备激活记录。
+func (h *AdminHandler) handleUpdateActivation(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req UpdateActivationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == 0 {
+		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
+		return
+	}
+
+	updates := make(map[string]any)
+	if req.DeviceID != "" {
+		updates["device_id"] = strings.TrimSpace(req.DeviceID)
+	}
+	if req.ClientID != "" {
+		updates["client_id"] = strings.TrimSpace(req.ClientID)
+	}
+	if req.ActivationStatus != "" {
+		updates["activation_status"] = strings.TrimSpace(req.ActivationStatus)
+	}
+
+	if len(updates) == 0 {
+		writeJSON(w, http.StatusOK, AdminResponse{
+			Success: true,
+			Message: "nothing to update",
+		})
+		return
+	}
+
+	if err := h.db.UpdateDeviceActivation(r.Context(), req.ID, updates); err != nil {
+		if errors.Is(err, database.ErrActivationNotFound) {
+			http.Error(w, "activation not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to update activation", "id", req.ID, "error", err)
+		http.Error(w, "failed to update activation", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "device activation updated successfully",
+	})
+}
+
+// handleDeleteActivation 删除指定设备激活记录。
+func (h *AdminHandler) handleDeleteActivation(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req DeleteActivationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == 0 {
+		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeleteDeviceActivation(r.Context(), req.ID); err != nil {
+		if errors.Is(err, database.ErrActivationNotFound) {
+			http.Error(w, "activation not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to delete activation", "id", req.ID, "error", err)
+		http.Error(w, "failed to delete activation", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "device activation deleted successfully",
+	})
+}
+
+// handleBatchDeleteActivations 批量删除设备激活记录。
+func (h *AdminHandler) handleBatchDeleteActivations(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req BatchDeleteActivationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.BatchDeleteDeviceActivations(r.Context(), req.IDs); err != nil {
+		h.logger.Error("failed to batch delete activations", "error", err)
+		http.Error(w, "failed to batch delete activations", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "device activations deleted successfully",
+	})
+}
+

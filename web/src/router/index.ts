@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import DeviceCredentials from '../views/DeviceCredentials.vue'
+import DeviceActivations from '../views/DeviceActivations.vue'
 
 const routes = [
   {
@@ -12,6 +13,14 @@ const routes = [
     component: DeviceCredentials,
     meta: {
       title: '设备生产凭证管理',
+    },
+  },
+  {
+    path: '/device-activations',
+    name: 'DeviceActivations',
+    component: DeviceActivations,
+    meta: {
+      title: '设备激活关系管理',
     },
   },
 ]

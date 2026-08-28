@@ -14,6 +14,10 @@ import (
 const (
 	// ActivationStatusActive 表示设备处于正常激活状态，可正常连接与交互。
 	ActivationStatusActive = "active"
+	// ActivationStatusFrozen 表示设备处于冻结状态，暂时禁止连接。
+	ActivationStatusFrozen = "frozen"
+	// ActivationStatusRevoked 表示设备处于作废/注销状态。
+	ActivationStatusRevoked = "revoked"
 )
 
 // 哨兵错误定义。
@@ -24,6 +28,8 @@ var (
 	ErrEmptyDeviceID = errors.New("device id cannot be empty")
 	// ErrEmptyClientID 表示设备 Client-Id 为空。
 	ErrEmptyClientID = errors.New("client id cannot be empty")
+	// ErrInvalidActivation 表示设备激活记录对象为 nil 或非法。
+	ErrInvalidActivation = errors.New("invalid device activation")
 )
 
 // DeviceActivation 映射 device_activation 设备激活关系表。
@@ -49,6 +55,16 @@ type DeviceActivation struct {
 	ActivatedAt      time.Time `gorm:"column:activated_at;not null" json:"activated_at"`
 	CreatedAt        time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
 	UpdatedAt        time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
+}
+
+// DeviceActivationFilter 定义设备激活关系查询过滤条件。
+type DeviceActivationFilter struct {
+	SerialNumber     string
+	DeviceID         string
+	ClientID         string
+	ActivationStatus string
+	Page             int
+	PageSize         int
 }
 
 // TableName 指定 DeviceActivation 对应的表名。
@@ -355,4 +371,135 @@ func (d *Database) FindDeviceActivationByDeviceIDAndClientID(ctx context.Context
 	}
 
 	return &act, nil
+}
+
+// ListDeviceActivations 分页查询设备激活记录列表。
+func (d *Database) ListDeviceActivations(ctx context.Context, filter DeviceActivationFilter) ([]*DeviceActivation, int64, error) {
+	if d == nil || d.gormDB == nil {
+		return nil, 0, ErrDatabaseInstanceRequired
+	}
+
+	query := d.gormDB.WithContext(ctx).Model(&DeviceActivation{})
+
+	if sn := strings.TrimSpace(filter.SerialNumber); sn != "" {
+		query = query.Where("serial_number LIKE ?", "%"+sn+"%")
+	}
+	if did := strings.TrimSpace(filter.DeviceID); did != "" {
+		query = query.Where("device_id LIKE ?", "%"+did+"%")
+	}
+	if cid := strings.TrimSpace(filter.ClientID); cid != "" {
+		query = query.Where("client_id LIKE ?", "%"+cid+"%")
+	}
+	if status := strings.TrimSpace(filter.ActivationStatus); status != "" {
+		query = query.Where("activation_status = ?", status)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count device activations: %w", err)
+	}
+
+	page := filter.Page
+	if page <= 0 {
+		page = 1
+	}
+	pageSize := filter.PageSize
+	if pageSize <= 0 {
+		pageSize = 10
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
+
+	offset := (page - 1) * pageSize
+	var acts []*DeviceActivation
+	err := query.Order("id DESC").Offset(offset).Limit(pageSize).Find(&acts).Error
+	if err != nil {
+		return nil, 0, fmt.Errorf("query device activations list: %w", err)
+	}
+
+	return acts, total, nil
+}
+
+// UpdateDeviceActivation 更新指定 ID 的设备激活记录字段。
+func (d *Database) UpdateDeviceActivation(ctx context.Context, id uint64, updates map[string]any) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if id == 0 {
+		return ErrInvalidActivation
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+
+	allowedUpdates := make(map[string]any)
+	if val, ok := updates["device_id"]; ok {
+		allowedUpdates["device_id"] = strings.TrimSpace(fmt.Sprintf("%v", val))
+	}
+	if val, ok := updates["client_id"]; ok {
+		allowedUpdates["client_id"] = strings.TrimSpace(fmt.Sprintf("%v", val))
+	}
+	if val, ok := updates["activation_status"]; ok {
+		allowedUpdates["activation_status"] = strings.TrimSpace(fmt.Sprintf("%v", val))
+	}
+	if len(allowedUpdates) == 0 {
+		return nil
+	}
+	allowedUpdates["updated_at"] = time.Now()
+
+	res := d.gormDB.WithContext(ctx).
+		Model(&DeviceActivation{}).
+		Where("id = ?", id).
+		Updates(allowedUpdates)
+	if res.Error != nil {
+		return fmt.Errorf("update device activation: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return ErrActivationNotFound
+	}
+	return nil
+}
+
+// DeleteDeviceActivation 删除指定 ID 的设备激活记录。
+func (d *Database) DeleteDeviceActivation(ctx context.Context, id uint64) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if id == 0 {
+		return ErrInvalidActivation
+	}
+
+	res := d.gormDB.WithContext(ctx).Where("id = ?", id).Delete(&DeviceActivation{})
+	if res.Error != nil {
+		return fmt.Errorf("delete device activation: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return ErrActivationNotFound
+	}
+	return nil
+}
+
+// BatchDeleteDeviceActivations 批量删除指定 ID 的设备激活记录。
+func (d *Database) BatchDeleteDeviceActivations(ctx context.Context, ids []uint64) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	validIDs := make([]uint64, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			validIDs = append(validIDs, id)
+		}
+	}
+	if len(validIDs) == 0 {
+		return nil
+	}
+
+	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIDs).Delete(&DeviceActivation{}).Error; err != nil {
+		return fmt.Errorf("batch delete device activations: %w", err)
+	}
+	return nil
 }

@@ -418,3 +418,104 @@ func TestBindDeviceWithSN_RedundantDeviceTypeFromCredential(t *testing.T) {
 		t.Errorf("expected token device_type %q, got %q", expectedType, tok.DeviceType)
 	}
 }
+
+func TestDeviceActivationCRUDAndFiltering(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	// 1. Activate devices
+	act1, err := db.ActivateDeviceBySerialNumber(ctx, "sn-act-crud-001", "dev-id-001", "client-id-001")
+	if err != nil {
+		t.Fatalf("ActivateDeviceBySerialNumber act1 failed: %v", err)
+	}
+	if act1.ID == 0 {
+		t.Fatalf("expected non-zero ID for act1")
+	}
+
+	act2, err := db.ActivateDeviceBySerialNumber(ctx, "sn-act-crud-002", "dev-id-002", "client-id-002")
+	if err != nil {
+		t.Fatalf("ActivateDeviceBySerialNumber act2 failed: %v", err)
+	}
+	_ = db.UpdateDeviceActivation(ctx, act2.ID, map[string]any{"activation_status": ActivationStatusFrozen})
+
+	// 2. List with pagination
+	list, total, err := db.ListDeviceActivations(ctx, DeviceActivationFilter{
+		Page:     1,
+		PageSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("ListDeviceActivations failed: %v", err)
+	}
+	if total != 2 {
+		t.Errorf("expected total 2, got %d", total)
+	}
+	if len(list) != 2 {
+		t.Errorf("expected 2 items, got %d", len(list))
+	}
+
+	// 3. Filter by serial_number
+	listSN, totalSN, err := db.ListDeviceActivations(ctx, DeviceActivationFilter{
+		SerialNumber: "crud-001",
+	})
+	if err != nil {
+		t.Fatalf("ListDeviceActivations by SN failed: %v", err)
+	}
+	if totalSN != 1 || len(listSN) != 1 || listSN[0].SerialNumber != "sn-act-crud-001" {
+		t.Errorf("unexpected SN filter result: total=%d, list=%+v", totalSN, listSN)
+	}
+
+	// 4. Filter by status
+	listStatus, totalStatus, err := db.ListDeviceActivations(ctx, DeviceActivationFilter{
+		ActivationStatus: ActivationStatusFrozen,
+	})
+	if err != nil {
+		t.Fatalf("ListDeviceActivations by Status failed: %v", err)
+	}
+	if totalStatus != 1 || listStatus[0].SerialNumber != "sn-act-crud-002" {
+		t.Errorf("unexpected status filter result: total=%d, list=%+v", totalStatus, listStatus)
+	}
+
+	// 5. Update activation
+	err = db.UpdateDeviceActivation(ctx, act1.ID, map[string]any{
+		"device_id":         "dev-id-001-updated",
+		"activation_status": ActivationStatusRevoked,
+	})
+	if err != nil {
+		t.Fatalf("UpdateDeviceActivation failed: %v", err)
+	}
+
+	updatedAct, err := db.FindDeviceActivationBySerialNumber(ctx, "sn-act-crud-001")
+	if err != nil {
+		t.Fatalf("FindDeviceActivationBySerialNumber failed: %v", err)
+	}
+	if updatedAct.DeviceID != "dev-id-001-updated" {
+		t.Errorf("expected updated device_id, got %q", updatedAct.DeviceID)
+	}
+	if updatedAct.ActivationStatus != ActivationStatusRevoked {
+		t.Errorf("expected status revoked, got %q", updatedAct.ActivationStatus)
+	}
+
+	// 6. Delete single activation
+	if err := db.DeleteDeviceActivation(ctx, act1.ID); err != nil {
+		t.Fatalf("DeleteDeviceActivation failed: %v", err)
+	}
+	_, err = db.FindDeviceActivationBySerialNumber(ctx, "sn-act-crud-001")
+	if !errors.Is(err, ErrActivationNotFound) {
+		t.Errorf("expected ErrActivationNotFound after delete, got: %v", err)
+	}
+
+	// 7. Batch delete activations
+	act3, _ := db.ActivateDeviceBySerialNumber(ctx, "sn-act-crud-003", "dev-id-003", "")
+
+	if err := db.BatchDeleteDeviceActivations(ctx, []uint64{act2.ID, act3.ID}); err != nil {
+		t.Fatalf("BatchDeleteDeviceActivations failed: %v", err)
+	}
+
+	_, totalRemaining, err := db.ListDeviceActivations(ctx, DeviceActivationFilter{})
+	if err != nil {
+		t.Fatalf("ListDeviceActivations after batch delete failed: %v", err)
+	}
+	if totalRemaining != 0 {
+		t.Errorf("expected 0 remaining activations, got %d", totalRemaining)
+	}
+}

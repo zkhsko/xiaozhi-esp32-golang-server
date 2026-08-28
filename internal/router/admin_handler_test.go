@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -257,5 +258,98 @@ func TestAdminCredentialBatchDelete(t *testing.T) {
 	listAfter, totalAfter, _ := db.ListDeviceHmacCredentials(context.Background(), database.DeviceHmacCredentialFilter{})
 	if totalAfter != 0 || len(listAfter) != 0 {
 		t.Fatalf("expected 0 items after batch delete, got %d", totalAfter)
+	}
+}
+
+func TestAdminDeviceActivationEndpoints(t *testing.T) {
+	db := setupTestRouterDB(t)
+	cfg := &config.Config{}
+	adminHandler := NewAdminHandler(cfg, db, nil)
+	routes := adminHandler.Routes()
+
+	// 1. Setup Initial Activation
+	initialAct, err := db.ActivateDeviceBySerialNumber(context.Background(), "sn-test-act-001", "dev-test-act-001", "cli-test-001")
+	if err != nil {
+		t.Fatalf("activate device failed: %v", err)
+	}
+	actID := initialAct.ID
+
+	// 2. Test List Activation
+	reqList := httptest.NewRequest(http.MethodGet, "/device-activation?page=1&page_size=10", nil)
+	wList := httptest.NewRecorder()
+	routes.ServeHTTP(wList, reqList)
+
+	if wList.Code != http.StatusOK {
+		t.Fatalf("list activations failed, code=%d, body=%s", wList.Code, wList.Body.String())
+	}
+	var listResp struct {
+		Success bool                     `json:"success"`
+		Data    DeviceActivationListData `json:"data"`
+	}
+	if err := json.Unmarshal(wList.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal listResp failed: %v", err)
+	}
+	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
+		t.Fatalf("unexpected list data total: %d, len: %d", listResp.Data.Total, len(listResp.Data.Items))
+	}
+
+	// 3. Test Update Activation
+	updateBody := []byte(fmt.Sprintf(`{
+		"id": %d,
+		"device_id": "dev-test-act-001-mod",
+		"activation_status": "frozen"
+	}`, actID))
+	reqUpdate := httptest.NewRequest(http.MethodPost, "/device-activation/update", bytes.NewReader(updateBody))
+	reqUpdate.Header.Set("Content-Type", "application/json")
+	wUpdate := httptest.NewRecorder()
+	routes.ServeHTTP(wUpdate, reqUpdate)
+
+	if wUpdate.Code != http.StatusOK {
+		t.Fatalf("update activation failed, code=%d, body=%s", wUpdate.Code, wUpdate.Body.String())
+	}
+
+	act, err := db.FindDeviceActivationBySerialNumber(context.Background(), "sn-test-act-001")
+	if err != nil {
+		t.Fatalf("find activation failed: %v", err)
+	}
+	if act.DeviceID != "dev-test-act-001-mod" || act.ActivationStatus != "frozen" {
+		t.Fatalf("unexpected updated activation: %+v", act)
+	}
+
+	// 4. Test Single Delete
+	deleteBody := []byte(fmt.Sprintf(`{"id": %d}`, actID))
+	reqDelete := httptest.NewRequest(http.MethodPost, "/device-activation/delete", bytes.NewReader(deleteBody))
+	reqDelete.Header.Set("Content-Type", "application/json")
+	wDelete := httptest.NewRecorder()
+	routes.ServeHTTP(wDelete, reqDelete)
+
+	if wDelete.Code != http.StatusOK {
+		t.Fatalf("delete activation failed, code=%d, body=%s", wDelete.Code, wDelete.Body.String())
+	}
+
+	// 5. Test Batch Delete
+	act1, _ := db.ActivateDeviceBySerialNumber(context.Background(), "sn-batch-del-1", "dev-1", "")
+	act2, _ := db.ActivateDeviceBySerialNumber(context.Background(), "sn-batch-del-2", "dev-2", "")
+
+	_, totalAfterCreate, _ := db.ListDeviceActivations(context.Background(), database.DeviceActivationFilter{})
+	if totalAfterCreate != 2 {
+		t.Fatalf("expected 2 items for batch delete, got %d", totalAfterCreate)
+	}
+
+	batchDelBody, _ := json.Marshal(BatchDeleteActivationRequest{
+		IDs: []uint64{act1.ID, act2.ID},
+	})
+	reqBatchDel := httptest.NewRequest(http.MethodPost, "/device-activation/batch-delete", bytes.NewReader(batchDelBody))
+	reqBatchDel.Header.Set("Content-Type", "application/json")
+	wBatchDel := httptest.NewRecorder()
+	routes.ServeHTTP(wBatchDel, reqBatchDel)
+
+	if wBatchDel.Code != http.StatusOK {
+		t.Fatalf("batch delete activation failed, code=%d, body=%s", wBatchDel.Code, wBatchDel.Body.String())
+	}
+
+	_, finalTotal, _ := db.ListDeviceActivations(context.Background(), database.DeviceActivationFilter{})
+	if finalTotal != 0 {
+		t.Fatalf("expected 0 items after batch delete, got %d", finalTotal)
 	}
 }
