@@ -6,6 +6,7 @@ export interface TTSConfigItem {
   has_api_key: boolean
   model: string
   voices: string
+  proxy_url: string
   connect_timeout_ms: number
   first_audio_timeout_ms: number
   sentence_timeout_ms: number
@@ -43,6 +44,7 @@ export interface SaveTTSConfigParams {
   api_key?: string
   model: string
   voices?: string
+  proxy_url?: string
   connect_timeout_ms?: number
   first_audio_timeout_ms?: number
   sentence_timeout_ms?: number

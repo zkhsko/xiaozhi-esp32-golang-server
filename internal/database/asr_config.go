@@ -44,6 +44,10 @@ var (
 	ErrInvalidASRHotwordsLength = errors.New("asr hotwords length exceeds 1048576 bytes")
 	// ErrInvalidASRHotwordsJSON 表示 ASR 热词格式非法（非空时必须为合法 JSON 格式）。
 	ErrInvalidASRHotwordsJSON = errors.New("asr hotwords must be valid json format")
+	// ErrInvalidASRProxyURLLength 表示 ASR Proxy URL 长度超过 1024 字节。
+	ErrInvalidASRProxyURLLength = errors.New("asr proxy_url length exceeds 1024 bytes")
+	// ErrInvalidASRProxyURLScheme 表示 ASR Proxy URL 协议非法（只允许 http, https, socks5, socks5h）。
+	ErrInvalidASRProxyURLScheme = errors.New("asr proxy_url scheme must be http, https, socks5, or socks5h")
 	// ErrInvalidASRConnectTimeout 表示 ASR 连接超时不在合法范围（3000 ~ 30000 毫秒）。
 	ErrInvalidASRConnectTimeout = errors.New("asr connect_timeout_ms must be between 3000 and 30000 ms")
 )
@@ -62,6 +66,7 @@ var (
 // - api_key: 明文 API Key（脱敏时不输出，json:"-"），最大 1024 字节。
 // - model: ASR 模型名称，最大 255 字节。
 // - hotwords: 热词配置（JSON 格式，如 ["小智", "智能音箱"] 或 [{"word": "小智", "weight": 10}]），文本类型。
+// - proxy_url: 代理服务器地址（支持 http/https/socks5/socks5h，非空即启用），最大 1024 字节。
 // - connect_timeout_ms: 连接超时时间（毫秒），合法范围 3000 ~ 30000。
 // - enabled: 是否允许 Agent 引用（布尔值，默认 true）。
 // - created_at: 创建时间。
@@ -74,6 +79,7 @@ type ASRConfig struct {
 	APIKey           string    `gorm:"column:api_key;size:1024;not null;default:''" json:"-"`
 	Model            string    `gorm:"column:model;size:255;not null" json:"model"`
 	Hotwords         string    `gorm:"column:hotwords;type:text;not null" json:"hotwords"`
+	ProxyURL         string    `gorm:"column:proxy_url;size:1024;not null;default:''" json:"proxy_url"`
 	ConnectTimeoutMS int64     `gorm:"column:connect_timeout_ms;not null;default:5000" json:"connect_timeout_ms"`
 	Enabled          bool      `gorm:"column:enabled;not null" json:"enabled"`
 	CreatedAt        time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
@@ -139,6 +145,17 @@ func (c *ASRConfig) Validate() error {
 		}
 	}
 
+	proxyURL := strings.TrimSpace(c.ProxyURL)
+	if proxyURL != "" {
+		if len(proxyURL) > 1024 {
+			return ErrInvalidASRProxyURLLength
+		}
+		pu, err := url.Parse(proxyURL)
+		if err != nil || pu.Host == "" || (pu.Scheme != "http" && pu.Scheme != "https" && pu.Scheme != "socks5" && pu.Scheme != "socks5h") {
+			return ErrInvalidASRProxyURLScheme
+		}
+	}
+
 	if c.ConnectTimeoutMS < 3000 || c.ConnectTimeoutMS > 30000 {
 		return ErrInvalidASRConnectTimeout
 	}
@@ -172,6 +189,7 @@ func (d *Database) CreateASRConfig(ctx context.Context, cfg *ASRConfig) error {
 	cfg.Provider = strings.TrimSpace(cfg.Provider)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.ProxyURL = strings.TrimSpace(cfg.ProxyURL)
 
 	if err := d.gormDB.WithContext(ctx).Create(cfg).Error; err != nil {
 		return fmt.Errorf("create asr config: %w", err)
@@ -225,6 +243,7 @@ func (d *Database) UpdateASRConfigByID(ctx context.Context, cfg *ASRConfig) erro
 		"api_key":            cfg.APIKey,
 		"model":              strings.TrimSpace(cfg.Model),
 		"hotwords":           cfg.Hotwords,
+		"proxy_url":          strings.TrimSpace(cfg.ProxyURL),
 		"connect_timeout_ms": cfg.ConnectTimeoutMS,
 		"enabled":            cfg.Enabled,
 		"updated_at":         time.Now(),

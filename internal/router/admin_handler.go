@@ -131,6 +131,7 @@ type ASRConfigItem struct {
 	HasAPIKey        bool      `json:"has_api_key"`
 	Model            string    `json:"model"`
 	Hotwords         string    `json:"hotwords"`
+	ProxyURL         string    `json:"proxy_url"`
 	ConnectTimeoutMS int64     `json:"connect_timeout_ms"`
 	Enabled          bool      `json:"enabled"`
 	CreatedAt        time.Time `json:"created_at"`
@@ -154,6 +155,7 @@ type SaveASRConfigRequest struct {
 	APIKey           string `json:"api_key"` // write-only；更新时留空表示保留原 Key
 	Model            string `json:"model"`
 	Hotwords         string `json:"hotwords"`
+	ProxyURL         string `json:"proxy_url"`
 	ConnectTimeoutMS int64  `json:"connect_timeout_ms"`
 	Enabled          *bool  `json:"enabled"`
 }
@@ -176,6 +178,7 @@ type LLMConfigItem struct {
 	Endpoint            string    `json:"endpoint"`
 	HasAPIKey           bool      `json:"has_api_key"`
 	Model               string    `json:"model"`
+	ProxyURL            string    `json:"proxy_url"`
 	FirstTokenTimeoutMS int64     `json:"first_token_timeout_ms"`
 	OverallTimeoutMS    int64     `json:"overall_timeout_ms"`
 	Enabled             bool      `json:"enabled"`
@@ -199,6 +202,7 @@ type SaveLLMConfigRequest struct {
 	Endpoint            string `json:"endpoint"`
 	APIKey              string `json:"api_key"` // write-only；更新时留空表示保留原 Key
 	Model               string `json:"model"`
+	ProxyURL            string `json:"proxy_url"`
 	FirstTokenTimeoutMS int64  `json:"first_token_timeout_ms"`
 	OverallTimeoutMS    int64  `json:"overall_timeout_ms"`
 	Enabled             *bool  `json:"enabled"`
@@ -223,6 +227,7 @@ type TTSConfigItem struct {
 	HasAPIKey           bool      `json:"has_api_key"`
 	Model               string    `json:"model"`
 	Voices              string    `json:"voices"`
+	ProxyURL            string    `json:"proxy_url"`
 	ConnectTimeoutMS    int64     `json:"connect_timeout_ms"`
 	FirstAudioTimeoutMS int64     `json:"first_audio_timeout_ms"`
 	SentenceTimeoutMS   int64     `json:"sentence_timeout_ms"`
@@ -248,6 +253,7 @@ type SaveTTSConfigRequest struct {
 	APIKey              string `json:"api_key"` // write-only；更新时留空表示保留原 Key
 	Model               string `json:"model"`
 	Voices              string `json:"voices"`
+	ProxyURL            string `json:"proxy_url"`
 	ConnectTimeoutMS    int64  `json:"connect_timeout_ms"`
 	FirstAudioTimeoutMS int64  `json:"first_audio_timeout_ms"`
 	SentenceTimeoutMS   int64  `json:"sentence_timeout_ms"`
@@ -1020,6 +1026,7 @@ func (h *AdminHandler) handleListASRConfigs(w http.ResponseWriter, r *http.Reque
 			HasAPIKey:        len(strings.TrimSpace(cfg.APIKey)) > 0,
 			Model:            cfg.Model,
 			Hotwords:         cfg.Hotwords,
+			ProxyURL:         cfg.ProxyURL,
 			ConnectTimeoutMS: cfg.ConnectTimeoutMS,
 			Enabled:          cfg.Enabled,
 			CreatedAt:        cfg.CreatedAt,
@@ -1073,6 +1080,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 			APIKey:           strings.TrimSpace(req.APIKey),
 			Model:            strings.TrimSpace(req.Model),
 			Hotwords:         req.Hotwords,
+			ProxyURL:         strings.TrimSpace(req.ProxyURL),
 			ConnectTimeoutMS: connectTimeout,
 			Enabled:          enabled,
 		}
@@ -1093,6 +1101,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 				HasAPIKey:        len(cfg.APIKey) > 0,
 				Model:            cfg.Model,
 				Hotwords:         cfg.Hotwords,
+				ProxyURL:         cfg.ProxyURL,
 				ConnectTimeoutMS: cfg.ConnectTimeoutMS,
 				Enabled:          cfg.Enabled,
 				CreatedAt:        cfg.CreatedAt,
@@ -1134,6 +1143,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 		APIKey:           apiKey,
 		Model:            strings.TrimSpace(req.Model),
 		Hotwords:         req.Hotwords,
+		ProxyURL:         strings.TrimSpace(req.ProxyURL),
 		ConnectTimeoutMS: connectTimeout,
 		Enabled:          enabled,
 	}
@@ -1154,6 +1164,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 			HasAPIKey:        len(apiKey) > 0,
 			Model:            updatedCfg.Model,
 			Hotwords:         updatedCfg.Hotwords,
+			ProxyURL:         updatedCfg.ProxyURL,
 			ConnectTimeoutMS: updatedCfg.ConnectTimeoutMS,
 			Enabled:          updatedCfg.Enabled,
 			UpdatedAt:        time.Now(),
@@ -1276,6 +1287,7 @@ func (h *AdminHandler) handleListLLMConfigs(w http.ResponseWriter, r *http.Reque
 			Endpoint:            cfg.Endpoint,
 			HasAPIKey:           len(strings.TrimSpace(cfg.APIKey)) > 0,
 			Model:               cfg.Model,
+			ProxyURL:            cfg.ProxyURL,
 			FirstTokenTimeoutMS: cfg.FirstTokenTimeoutMS,
 			OverallTimeoutMS:    cfg.OverallTimeoutMS,
 			Enabled:             cfg.Enabled,
@@ -1334,6 +1346,7 @@ func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Reques
 			Endpoint:            strings.TrimSpace(req.Endpoint),
 			APIKey:              strings.TrimSpace(req.APIKey),
 			Model:               strings.TrimSpace(req.Model),
+			ProxyURL:            strings.TrimSpace(req.ProxyURL),
 			FirstTokenTimeoutMS: firstTokenTimeout,
 			OverallTimeoutMS:    overallTimeout,
 			Enabled:             enabled,
@@ -1354,6 +1367,7 @@ func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Reques
 				Endpoint:            cfg.Endpoint,
 				HasAPIKey:           len(cfg.APIKey) > 0,
 				Model:               cfg.Model,
+				ProxyURL:            cfg.ProxyURL,
 				FirstTokenTimeoutMS: cfg.FirstTokenTimeoutMS,
 				OverallTimeoutMS:    cfg.OverallTimeoutMS,
 				Enabled:             cfg.Enabled,
@@ -1395,6 +1409,7 @@ func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Reques
 		Endpoint:            strings.TrimSpace(req.Endpoint),
 		APIKey:              apiKey,
 		Model:               strings.TrimSpace(req.Model),
+		ProxyURL:            strings.TrimSpace(req.ProxyURL),
 		FirstTokenTimeoutMS: firstTokenTimeout,
 		OverallTimeoutMS:    overallTimeout,
 		Enabled:             enabled,
@@ -1415,6 +1430,7 @@ func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Reques
 			Endpoint:            updatedCfg.Endpoint,
 			HasAPIKey:           len(apiKey) > 0,
 			Model:               updatedCfg.Model,
+			ProxyURL:            updatedCfg.ProxyURL,
 			FirstTokenTimeoutMS: updatedCfg.FirstTokenTimeoutMS,
 			OverallTimeoutMS:    updatedCfg.OverallTimeoutMS,
 			Enabled:             updatedCfg.Enabled,
@@ -1539,6 +1555,7 @@ func (h *AdminHandler) handleListTTSConfigs(w http.ResponseWriter, r *http.Reque
 			HasAPIKey:           len(strings.TrimSpace(cfg.APIKey)) > 0,
 			Model:               cfg.Model,
 			Voices:              cfg.Voices,
+			ProxyURL:            cfg.ProxyURL,
 			ConnectTimeoutMS:    cfg.ConnectTimeoutMS,
 			FirstAudioTimeoutMS: cfg.FirstAudioTimeoutMS,
 			SentenceTimeoutMS:   cfg.SentenceTimeoutMS,
@@ -1609,6 +1626,7 @@ func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Reques
 			APIKey:              strings.TrimSpace(req.APIKey),
 			Model:               strings.TrimSpace(req.Model),
 			Voices:              voices,
+			ProxyURL:            strings.TrimSpace(req.ProxyURL),
 			ConnectTimeoutMS:    connectTimeout,
 			FirstAudioTimeoutMS: firstAudioTimeout,
 			SentenceTimeoutMS:   sentenceTimeout,
@@ -1631,6 +1649,7 @@ func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Reques
 				HasAPIKey:           len(cfg.APIKey) > 0,
 				Model:               cfg.Model,
 				Voices:              cfg.Voices,
+				ProxyURL:            cfg.ProxyURL,
 				ConnectTimeoutMS:    cfg.ConnectTimeoutMS,
 				FirstAudioTimeoutMS: cfg.FirstAudioTimeoutMS,
 				SentenceTimeoutMS:   cfg.SentenceTimeoutMS,
@@ -1678,6 +1697,7 @@ func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Reques
 		APIKey:              apiKey,
 		Model:               strings.TrimSpace(req.Model),
 		Voices:              voices,
+		ProxyURL:            strings.TrimSpace(req.ProxyURL),
 		ConnectTimeoutMS:    connectTimeout,
 		FirstAudioTimeoutMS: firstAudioTimeout,
 		SentenceTimeoutMS:   sentenceTimeout,
@@ -1700,6 +1720,7 @@ func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Reques
 			HasAPIKey:           len(apiKey) > 0,
 			Model:               updatedCfg.Model,
 			Voices:              updatedCfg.Voices,
+			ProxyURL:            updatedCfg.ProxyURL,
 			ConnectTimeoutMS:    updatedCfg.ConnectTimeoutMS,
 			FirstAudioTimeoutMS: updatedCfg.FirstAudioTimeoutMS,
 			SentenceTimeoutMS:   updatedCfg.SentenceTimeoutMS,

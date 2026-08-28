@@ -19,6 +19,7 @@ func TestASRConfig_CRUD(t *testing.T) {
 		APIKey:           "sk-test-asr-api-key-123456",
 		Model:            "qwen-audio-3.0-asr-flash-streaming",
 		Hotwords:         `["小智","智能音箱","ESP32"]`,
+		ProxyURL:         "http://127.0.0.1:7890",
 		ConnectTimeoutMS: 5000,
 		Enabled:          true,
 	}
@@ -54,6 +55,9 @@ func TestASRConfig_CRUD(t *testing.T) {
 	if found.Hotwords != `["小智","智能音箱","ESP32"]` {
 		t.Errorf("expected hotwords %q, got %q", `["小智","智能音箱","ESP32"]`, found.Hotwords)
 	}
+	if found.ProxyURL != "http://127.0.0.1:7890" {
+		t.Errorf("expected proxy_url %q, got %q", "http://127.0.0.1:7890", found.ProxyURL)
+	}
 	if found.ConnectTimeoutMS != 5000 {
 		t.Errorf("expected connect_timeout_ms 5000, got %d", found.ConnectTimeoutMS)
 	}
@@ -68,6 +72,7 @@ func TestASRConfig_CRUD(t *testing.T) {
 	found.APIKey = "sk-new-key-654321"
 	found.Model = "qwen-audio-asr-v2"
 	found.Hotwords = `["小智二代","新热词","ESP32-S3"]`
+	found.ProxyURL = "socks5://127.0.0.1:1080"
 	found.ConnectTimeoutMS = 10000
 	found.Enabled = false
 
@@ -98,6 +103,9 @@ func TestASRConfig_CRUD(t *testing.T) {
 	}
 	if updated.Hotwords != `["小智二代","新热词","ESP32-S3"]` {
 		t.Errorf("expected updated hotwords %q, got %q", `["小智二代","新热词","ESP32-S3"]`, updated.Hotwords)
+	}
+	if updated.ProxyURL != "socks5://127.0.0.1:1080" {
+		t.Errorf("expected updated proxy_url %q, got %q", "socks5://127.0.0.1:1080", updated.ProxyURL)
 	}
 	if updated.ConnectTimeoutMS != 10000 {
 		t.Errorf("expected updated connect_timeout_ms 10000, got %d", updated.ConnectTimeoutMS)
@@ -447,6 +455,39 @@ func TestASRConfig_Validation(t *testing.T) {
 				ConnectTimeoutMS: 5000,
 			},
 			expectedErr: ErrInvalidASRHotwordsLength,
+		},
+		{
+			name: "proxy_url exceeds 1024 bytes",
+			cfg: &ASRConfig{
+				Name:             "valid-name",
+				Endpoint:         "wss://example.com/asr",
+				Model:            "model-1",
+				ProxyURL:         "http://example.com/" + strings.Repeat("p", 1024),
+				ConnectTimeoutMS: 5000,
+			},
+			expectedErr: ErrInvalidASRProxyURLLength,
+		},
+		{
+			name: "proxy_url invalid scheme ftp",
+			cfg: &ASRConfig{
+				Name:             "valid-name",
+				Endpoint:         "wss://example.com/asr",
+				Model:            "model-1",
+				ProxyURL:         "ftp://127.0.0.1:21",
+				ConnectTimeoutMS: 5000,
+			},
+			expectedErr: ErrInvalidASRProxyURLScheme,
+		},
+		{
+			name: "proxy_url valid socks5h",
+			cfg: &ASRConfig{
+				Name:             "valid-name",
+				Endpoint:         "wss://example.com/asr",
+				Model:            "model-1",
+				ProxyURL:         "socks5h://127.0.0.1:1080",
+				ConnectTimeoutMS: 5000,
+			},
+			expectedErr: nil,
 		},
 	}
 

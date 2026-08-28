@@ -197,6 +197,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		APIKey:           "sk-e2e-asr-key",
 		Model:            "qwen-audio-3.0-asr-flash-streaming",
 		Hotwords:         `["小智", "测试热词"]`,
+		ProxyURL:         "http://127.0.0.1:7890",
 		ConnectTimeoutMS: 5000,
 	})
 	reqASRCreate := httptest.NewRequest(http.MethodPost, "/admin-api/asr-config/save", bytes.NewReader(createASRBody))
@@ -212,7 +213,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    ASRConfigItem `json:"data"`
 	}
 	_ = json.Unmarshal(wASRCreate.Body.Bytes(), &asrCreateResp)
-	if !asrCreateResp.Success || asrCreateResp.Data.ID == 0 || !asrCreateResp.Data.HasAPIKey || asrCreateResp.Data.Provider != "bailian" {
+	if !asrCreateResp.Success || asrCreateResp.Data.ID == 0 || !asrCreateResp.Data.HasAPIKey || asrCreateResp.Data.Provider != "bailian" || asrCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected asr create resp: %+v", asrCreateResp)
 	}
 	createdASRID := asrCreateResp.Data.ID
@@ -230,8 +231,8 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    ASRConfigListData `json:"data"`
 	}
 	_ = json.Unmarshal(wASRList.Body.Bytes(), &asrListResp)
-	if asrListResp.Data.Total != 1 || len(asrListResp.Data.Items) != 1 || asrListResp.Data.Items[0].Provider != "bailian" {
-		t.Fatalf("expected 1 ASR config item with provider bailian, got %v", asrListResp.Data.Items)
+	if asrListResp.Data.Total != 1 || len(asrListResp.Data.Items) != 1 || asrListResp.Data.Items[0].Provider != "bailian" || asrListResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("expected 1 ASR config item with provider bailian and proxy_url, got %v", asrListResp.Data.Items)
 	}
 
 	// 15. ASR 配置单条删除
@@ -261,6 +262,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Endpoint:            "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
 		APIKey:              "sk-e2e-llm-key",
 		Model:               "qwen-max",
+		ProxyURL:            "http://127.0.0.1:7890",
 		FirstTokenTimeoutMS: 5000,
 		OverallTimeoutMS:    30000,
 	})
@@ -277,7 +279,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    LLMConfigItem `json:"data"`
 	}
 	_ = json.Unmarshal(wLLMCreate.Body.Bytes(), &llmCreateResp)
-	if !llmCreateResp.Success || llmCreateResp.Data.ID == 0 || !llmCreateResp.Data.HasAPIKey || llmCreateResp.Data.Provider != "bailian" {
+	if !llmCreateResp.Success || llmCreateResp.Data.ID == 0 || !llmCreateResp.Data.HasAPIKey || llmCreateResp.Data.Provider != "bailian" || llmCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected llm create resp: %+v", llmCreateResp)
 	}
 	createdLLMID := llmCreateResp.Data.ID
@@ -295,8 +297,8 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    LLMConfigListData `json:"data"`
 	}
 	_ = json.Unmarshal(wLLMList.Body.Bytes(), &llmListResp)
-	if llmListResp.Data.Total != 1 || len(llmListResp.Data.Items) != 1 || llmListResp.Data.Items[0].Provider != "bailian" {
-		t.Fatalf("expected 1 LLM config item with provider bailian, got %v", llmListResp.Data.Items)
+	if llmListResp.Data.Total != 1 || len(llmListResp.Data.Items) != 1 || llmListResp.Data.Items[0].Provider != "bailian" || llmListResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("expected 1 LLM config item with provider bailian and proxy_url, got %v", llmListResp.Data.Items)
 	}
 
 	// 19. LLM 配置单条删除
@@ -327,6 +329,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		APIKey:              "sk-e2e-tts-key",
 		Model:               "cosyvoice-v1",
 		Voices:              `["longanlingxi", "longxiaochun"]`,
+		ProxyURL:            "http://127.0.0.1:7890",
 		ConnectTimeoutMS:    5000,
 		FirstAudioTimeoutMS: 5000,
 		SentenceTimeoutMS:   10000,
@@ -344,7 +347,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    TTSConfigItem `json:"data"`
 	}
 	_ = json.Unmarshal(wTTSCreate.Body.Bytes(), &ttsCreateResp)
-	if !ttsCreateResp.Success || ttsCreateResp.Data.ID == 0 || !ttsCreateResp.Data.HasAPIKey || ttsCreateResp.Data.Provider != "bailian" {
+	if !ttsCreateResp.Success || ttsCreateResp.Data.ID == 0 || !ttsCreateResp.Data.HasAPIKey || ttsCreateResp.Data.Provider != "bailian" || ttsCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected tts create resp: %+v", ttsCreateResp)
 	}
 	createdTTSID := ttsCreateResp.Data.ID
@@ -362,8 +365,8 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    TTSConfigListData `json:"data"`
 	}
 	_ = json.Unmarshal(wTTSList.Body.Bytes(), &ttsListResp)
-	if ttsListResp.Data.Total != 1 || len(ttsListResp.Data.Items) != 1 || ttsListResp.Data.Items[0].Provider != "bailian" {
-		t.Fatalf("expected 1 TTS config item with provider bailian, got %v", ttsListResp.Data.Items)
+	if ttsListResp.Data.Total != 1 || len(ttsListResp.Data.Items) != 1 || ttsListResp.Data.Items[0].Provider != "bailian" || ttsListResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("expected 1 TTS config item with provider bailian and proxy_url, got %v", ttsListResp.Data.Items)
 	}
 
 	// 23. TTS 配置单条删除

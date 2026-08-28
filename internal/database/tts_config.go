@@ -44,6 +44,10 @@ var (
 	ErrInvalidTTSVoicesJSON = errors.New("tts voices must be valid json")
 	// ErrInvalidTTSVoicesLength 表示 TTS 音色列表长度超过 1048576 字节（1MB）。
 	ErrInvalidTTSVoicesLength = errors.New("tts voices length exceeds 1048576 bytes")
+	// ErrInvalidTTSProxyURLLength 表示 TTS Proxy URL 长度超过 1024 字节。
+	ErrInvalidTTSProxyURLLength = errors.New("tts proxy_url length exceeds 1024 bytes")
+	// ErrInvalidTTSProxyURLScheme 表示 TTS Proxy URL 协议非法（只允许 http, https, socks5, socks5h）。
+	ErrInvalidTTSProxyURLScheme = errors.New("tts proxy_url scheme must be http, https, socks5, or socks5h")
 	// ErrInvalidTTSConnectTimeout 表示 TTS 连接超时不在合法范围（3000 ~ 30000 毫秒）。
 	ErrInvalidTTSConnectTimeout = errors.New("tts connect_timeout_ms must be between 3000 and 30000 ms")
 	// ErrInvalidTTSFirstAudioTimeout 表示 TTS 首音频超时不在合法范围（3000 ~ 30000 毫秒）。
@@ -66,6 +70,7 @@ var (
 // - api_key: 明文 API Key（脱敏时不输出，json:"-"），最大 1024 字节。
 // - model: TTS 模型名称，最大 255 字节。
 // - voices: 支持的音色列表（限制 JSON 格式，最大 1MB，默认为 '[]'），文本类型。
+// - proxy_url: 代理服务器地址（支持 http/https/socks5/socks5h，非空即启用），最大 1024 字节。
 // - connect_timeout_ms: 连接超时时间（毫秒），合法范围 3000 ~ 30000。
 // - first_audio_timeout_ms: 首音频超时时间（毫秒），合法范围 3000 ~ 30000。
 // - sentence_timeout_ms: 单句超时时间（毫秒），合法范围 5000 ~ 60000。
@@ -80,6 +85,7 @@ type TTSConfig struct {
 	APIKey              string    `gorm:"column:api_key;size:1024;not null;default:''" json:"-"`
 	Model               string    `gorm:"column:model;size:255;not null" json:"model"`
 	Voices              string    `gorm:"column:voices;type:text;not null" json:"voices"`
+	ProxyURL            string    `gorm:"column:proxy_url;size:1024;not null;default:''" json:"proxy_url"`
 	ConnectTimeoutMS    int64     `gorm:"column:connect_timeout_ms;not null;default:5000" json:"connect_timeout_ms"`
 	FirstAudioTimeoutMS int64     `gorm:"column:first_audio_timeout_ms;not null;default:5000" json:"first_audio_timeout_ms"`
 	SentenceTimeoutMS   int64     `gorm:"column:sentence_timeout_ms;not null;default:10000" json:"sentence_timeout_ms"`
@@ -149,6 +155,17 @@ func (c *TTSConfig) Validate() error {
 		c.Voices = voices
 	}
 
+	proxyURL := strings.TrimSpace(c.ProxyURL)
+	if proxyURL != "" {
+		if len(proxyURL) > 1024 {
+			return ErrInvalidTTSProxyURLLength
+		}
+		pu, err := url.Parse(proxyURL)
+		if err != nil || pu.Host == "" || (pu.Scheme != "http" && pu.Scheme != "https" && pu.Scheme != "socks5" && pu.Scheme != "socks5h") {
+			return ErrInvalidTTSProxyURLScheme
+		}
+	}
+
 	if c.ConnectTimeoutMS < 3000 || c.ConnectTimeoutMS > 30000 {
 		return ErrInvalidTTSConnectTimeout
 	}
@@ -190,6 +207,7 @@ func (d *Database) CreateTTSConfig(ctx context.Context, cfg *TTSConfig) error {
 	cfg.Provider = strings.TrimSpace(cfg.Provider)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.ProxyURL = strings.TrimSpace(cfg.ProxyURL)
 
 	if err := d.gormDB.WithContext(ctx).Create(cfg).Error; err != nil {
 		return fmt.Errorf("create tts config: %w", err)
@@ -243,6 +261,7 @@ func (d *Database) UpdateTTSConfigByID(ctx context.Context, cfg *TTSConfig) erro
 		"api_key":                cfg.APIKey,
 		"model":                  strings.TrimSpace(cfg.Model),
 		"voices":                 cfg.Voices,
+		"proxy_url":               strings.TrimSpace(cfg.ProxyURL),
 		"connect_timeout_ms":     cfg.ConnectTimeoutMS,
 		"first_audio_timeout_ms": cfg.FirstAudioTimeoutMS,
 		"sentence_timeout_ms":    cfg.SentenceTimeoutMS,

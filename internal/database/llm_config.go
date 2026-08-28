@@ -39,6 +39,10 @@ var (
 	ErrEmptyLLMModel = errors.New("llm model cannot be empty")
 	// ErrInvalidLLMModelLength 表示 LLM 模型长度超过 255 字节。
 	ErrInvalidLLMModelLength = errors.New("llm model length exceeds 255 bytes")
+	// ErrInvalidLLMProxyURLLength 表示 LLM Proxy URL 长度超过 1024 字节。
+	ErrInvalidLLMProxyURLLength = errors.New("llm proxy_url length exceeds 1024 bytes")
+	// ErrInvalidLLMProxyURLScheme 表示 LLM Proxy URL 协议非法（只允许 http, https, socks5, socks5h）。
+	ErrInvalidLLMProxyURLScheme = errors.New("llm proxy_url scheme must be http, https, socks5, or socks5h")
 	// ErrInvalidLLMFirstTokenTimeout 表示 LLM 首 Token 超时不在合法范围（3000 ~ 30000 毫秒）。
 	ErrInvalidLLMFirstTokenTimeout = errors.New("llm first_token_timeout_ms must be between 3000 and 30000 ms")
 	// ErrInvalidLLMOverallTimeout 表示 LLM 总超时不在合法范围（10000 ~ 180000 毫秒）。
@@ -60,6 +64,7 @@ var (
 // - endpoint: LLM HTTP Endpoint，必须以 http:// 或 https:// 开头，最大 1024 字节。
 // - api_key: 明文 API Key（脱敏时不输出，json:"-"），最大 1024 字节。
 // - model: LLM 模型名称，最大 255 字节。
+// - proxy_url: 代理服务器地址（支持 http/https/socks5/socks5h，非空即启用），最大 1024 字节。
 // - first_token_timeout_ms: 首 Token 超时时间（毫秒），合法范围 3000 ~ 30000。
 // - overall_timeout_ms: 总超时时间（毫秒），合法范围 10000 ~ 180000，且必须大于 first_token_timeout_ms。
 // - enabled: 是否允许 Agent 引用（布尔值，默认 true）。
@@ -72,6 +77,7 @@ type LLMConfig struct {
 	Endpoint            string    `gorm:"column:endpoint;size:1024;not null" json:"endpoint"`
 	APIKey              string    `gorm:"column:api_key;size:1024;not null;default:''" json:"-"`
 	Model               string    `gorm:"column:model;size:255;not null" json:"model"`
+	ProxyURL            string    `gorm:"column:proxy_url;size:1024;not null;default:''" json:"proxy_url"`
 	FirstTokenTimeoutMS int64     `gorm:"column:first_token_timeout_ms;not null;default:5000" json:"first_token_timeout_ms"`
 	OverallTimeoutMS    int64     `gorm:"column:overall_timeout_ms;not null;default:30000" json:"overall_timeout_ms"`
 	Enabled             bool      `gorm:"column:enabled;not null" json:"enabled"`
@@ -127,6 +133,17 @@ func (c *LLMConfig) Validate() error {
 		return ErrInvalidLLMModelLength
 	}
 
+	proxyURL := strings.TrimSpace(c.ProxyURL)
+	if proxyURL != "" {
+		if len(proxyURL) > 1024 {
+			return ErrInvalidLLMProxyURLLength
+		}
+		pu, err := url.Parse(proxyURL)
+		if err != nil || pu.Host == "" || (pu.Scheme != "http" && pu.Scheme != "https" && pu.Scheme != "socks5" && pu.Scheme != "socks5h") {
+			return ErrInvalidLLMProxyURLScheme
+		}
+	}
+
 	if c.FirstTokenTimeoutMS < 3000 || c.FirstTokenTimeoutMS > 30000 {
 		return ErrInvalidLLMFirstTokenTimeout
 	}
@@ -168,6 +185,7 @@ func (d *Database) CreateLLMConfig(ctx context.Context, cfg *LLMConfig) error {
 	cfg.Provider = strings.TrimSpace(cfg.Provider)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.ProxyURL = strings.TrimSpace(cfg.ProxyURL)
 
 	if err := d.gormDB.WithContext(ctx).Create(cfg).Error; err != nil {
 		return fmt.Errorf("create llm config: %w", err)
@@ -220,6 +238,7 @@ func (d *Database) UpdateLLMConfigByID(ctx context.Context, cfg *LLMConfig) erro
 		"endpoint":               strings.TrimSpace(cfg.Endpoint),
 		"api_key":                cfg.APIKey,
 		"model":                  strings.TrimSpace(cfg.Model),
+		"proxy_url":               strings.TrimSpace(cfg.ProxyURL),
 		"first_token_timeout_ms": cfg.FirstTokenTimeoutMS,
 		"overall_timeout_ms":    cfg.OverallTimeoutMS,
 		"enabled":                cfg.Enabled,

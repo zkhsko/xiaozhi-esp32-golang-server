@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS asr_config (
     api_key VARCHAR(1024) NOT NULL DEFAULT '',                     -- 明文 API Key（迁移默认记录初始为空）
     model VARCHAR(255) NOT NULL,                                   -- ASR 模型
     hotwords TEXT NOT NULL DEFAULT '',                             -- 热词配置，支持大量文本
+    proxy_url VARCHAR(1024) NOT NULL DEFAULT '',                   -- 代理地址（非空即启用）
     connect_timeout_ms INTEGER NOT NULL DEFAULT 5000,              -- 连接超时，毫秒
     enabled INTEGER NOT NULL DEFAULT 1,                            -- 是否允许 Agent 引用（0: 禁用, 1: 启用）
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 创建时间
@@ -112,6 +113,7 @@ CREATE TABLE IF NOT EXISTS llm_config (
     endpoint VARCHAR(1024) NOT NULL,                               -- LLM HTTP Endpoint
     api_key VARCHAR(1024) NOT NULL DEFAULT '',                     -- 明文 API Key（迁移默认记录初始为空）
     model VARCHAR(255) NOT NULL,                                   -- LLM 模型
+    proxy_url VARCHAR(1024) NOT NULL DEFAULT '',                   -- 代理地址（非空即启用）
     first_token_timeout_ms INTEGER NOT NULL DEFAULT 5000,          -- 首 Token 超时，毫秒
     overall_timeout_ms INTEGER NOT NULL DEFAULT 30000,             -- 总超时，毫秒
     enabled INTEGER NOT NULL DEFAULT 1,                            -- 是否允许 Agent 引用（0: 禁用, 1: 启用）
@@ -130,6 +132,7 @@ CREATE TABLE IF NOT EXISTS tts_config (
     api_key VARCHAR(1024) NOT NULL DEFAULT '',                     -- 明文 API Key（迁移默认记录初始为空）
     model VARCHAR(255) NOT NULL,                                   -- TTS 模型
     voices TEXT NOT NULL DEFAULT '[]',                             -- 支持的音色列表（JSON 格式）
+    proxy_url VARCHAR(1024) NOT NULL DEFAULT '',                   -- 代理地址（非空即启用）
     connect_timeout_ms INTEGER NOT NULL DEFAULT 5000,              -- 连接超时，毫秒
     first_audio_timeout_ms INTEGER NOT NULL DEFAULT 5000,          -- 首音频超时，毫秒
     sentence_timeout_ms INTEGER NOT NULL DEFAULT 10000,            -- 单句超时，毫秒

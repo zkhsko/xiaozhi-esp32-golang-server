@@ -6,6 +6,7 @@ export interface ASRConfigItem {
   has_api_key: boolean
   model: string
   hotwords: string
+  proxy_url: string
   connect_timeout_ms: number
   enabled: boolean
   created_at: string
@@ -41,6 +42,7 @@ export interface SaveASRConfigParams {
   api_key?: string
   model: string
   hotwords?: string
+  proxy_url?: string
   connect_timeout_ms?: number
   enabled?: boolean
 }

@@ -116,6 +116,24 @@
           </template>
         </el-table-column>
 
+        <el-table-column prop="proxy_url" label="代理地址 (Proxy)" min-width="180">
+          <template #default="{ row }">
+            <div class="cell-flex" v-if="row.proxy_url">
+              <span class="code-font">{{ row.proxy_url }}</span>
+              <el-tooltip content="复制代理地址" placement="top">
+                <el-button
+                  link
+                  type="primary"
+                  :icon="CopyDocument"
+                  class="copy-btn"
+                  @click="copyText(row.proxy_url, '代理地址')"
+                />
+              </el-tooltip>
+            </div>
+            <span v-else class="text-muted">未配置代理</span>
+          </template>
+        </el-table-column>
+
         <el-table-column prop="model" label="模型标识 (Model)" min-width="190">
           <template #default="{ row }">
             <div class="cell-flex">
@@ -276,6 +294,14 @@
           <span class="form-item-tip">ASR WebSocket 协议地址，必须以 ws:// 或 wss:// 开头</span>
         </el-form-item>
 
+        <el-form-item label="代理地址" prop="proxy_url">
+          <el-input
+            v-model="configDialog.form.proxy_url"
+            clearable
+          />
+          <span class="form-item-tip">代理服务器地址（支持 http://, https://, socks5://, socks5h://），非空即启用</span>
+        </el-form-item>
+
         <el-form-item label="模型标识" prop="model">
           <el-input
             v-model="configDialog.form.model"
@@ -415,6 +441,7 @@ const configDialog = reactive({
     name: '',
     provider: 'bailian',
     endpoint: '',
+    proxy_url: '',
     model: '',
     api_key: '',
     connect_timeout_ms: 5000,
@@ -431,6 +458,23 @@ const validateEndpoint = (_rule: any, value: string, callback: any) => {
   const trimmed = value.trim()
   if (!trimmed.startsWith('ws://') && !trimmed.startsWith('wss://')) {
     return callback(new Error('服务端点必须以 ws:// 或 wss:// 开头'))
+  }
+  callback()
+}
+
+// 校验代理地址格式
+const validateProxyURL = (_rule: any, value: string, callback: any) => {
+  if (!value || !value.trim()) {
+    return callback()
+  }
+  const trimmed = value.trim()
+  if (
+    !trimmed.startsWith('http://') &&
+    !trimmed.startsWith('https://') &&
+    !trimmed.startsWith('socks5://') &&
+    !trimmed.startsWith('socks5h://')
+  ) {
+    return callback(new Error('代理地址必须以 http://、https://、socks5:// 或 socks5h:// 开头'))
   }
   callback()
 }
@@ -459,6 +503,9 @@ const configRules: FormRules = {
   ],
   endpoint: [
     { required: true, validator: validateEndpoint, trigger: 'blur' },
+  ],
+  proxy_url: [
+    { validator: validateProxyURL, trigger: 'blur' },
   ],
   model: [
     { required: true, message: '请输入模型标识', trigger: 'blur' },
@@ -545,6 +592,7 @@ function openCreateDialog() {
     name: '',
     provider: 'bailian',
     endpoint: '',
+    proxy_url: '',
     model: '',
     api_key: '',
     connect_timeout_ms: 5000,
@@ -570,6 +618,7 @@ function openEditDialog(row: ASRConfigItem) {
     name: row.name,
     provider: row.provider || 'bailian',
     endpoint: row.endpoint,
+    proxy_url: row.proxy_url || '',
     model: row.model,
     api_key: '', // 编辑时默认留空
     connect_timeout_ms: row.connect_timeout_ms || 5000,
@@ -606,6 +655,7 @@ async function submitConfig() {
         name: configDialog.form.name.trim(),
         provider: configDialog.form.provider.trim(),
         endpoint: configDialog.form.endpoint.trim(),
+        proxy_url: configDialog.form.proxy_url.trim() || '',
         model: configDialog.form.model.trim(),
         api_key: configDialog.form.api_key.trim() || undefined,
         connect_timeout_ms: configDialog.form.connect_timeout_ms,
@@ -637,6 +687,7 @@ async function handleToggleEnabled(row: ASRConfigItem & { _switchLoading?: boole
       name: row.name,
       provider: row.provider,
       endpoint: row.endpoint,
+      proxy_url: row.proxy_url,
       model: row.model,
       connect_timeout_ms: row.connect_timeout_ms,
       hotwords: row.hotwords,

@@ -18,6 +18,7 @@ func TestLLMConfig_CRUD(t *testing.T) {
 		Endpoint:            "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
 		APIKey:              "sk-test-llm-api-key-123456",
 		Model:               "qwen-max",
+		ProxyURL:            "http://127.0.0.1:7890",
 		FirstTokenTimeoutMS: 5000,
 		OverallTimeoutMS:    30000,
 		Enabled:             true,
@@ -51,6 +52,9 @@ func TestLLMConfig_CRUD(t *testing.T) {
 	if found.Model != "qwen-max" {
 		t.Errorf("expected model %q, got %q", "qwen-max", found.Model)
 	}
+	if found.ProxyURL != "http://127.0.0.1:7890" {
+		t.Errorf("expected proxy_url %q, got %q", "http://127.0.0.1:7890", found.ProxyURL)
+	}
 	if found.FirstTokenTimeoutMS != 5000 {
 		t.Errorf("expected first_token_timeout_ms 5000, got %d", found.FirstTokenTimeoutMS)
 	}
@@ -67,6 +71,7 @@ func TestLLMConfig_CRUD(t *testing.T) {
 	found.Endpoint = "http://localhost:8000/v1/chat/completions"
 	found.APIKey = "sk-new-llm-key-654321"
 	found.Model = "qwen-plus"
+	found.ProxyURL = "socks5://127.0.0.1:1080"
 	found.FirstTokenTimeoutMS = 8000
 	found.OverallTimeoutMS = 45000
 	found.Enabled = false
@@ -95,6 +100,9 @@ func TestLLMConfig_CRUD(t *testing.T) {
 	}
 	if updated.Model != "qwen-plus" {
 		t.Errorf("expected updated model %q, got %q", "qwen-plus", updated.Model)
+	}
+	if updated.ProxyURL != "socks5://127.0.0.1:1080" {
+		t.Errorf("expected updated proxy_url %q, got %q", "socks5://127.0.0.1:1080", updated.ProxyURL)
 	}
 	if updated.FirstTokenTimeoutMS != 8000 {
 		t.Errorf("expected updated first_token_timeout_ms 8000, got %d", updated.FirstTokenTimeoutMS)
@@ -441,6 +449,42 @@ func TestLLMConfig_Validation(t *testing.T) {
 				OverallTimeoutMS:    15000,
 			},
 			expectedErr: ErrLLMOverallTimeoutMustExceedFirstToken,
+		},
+		{
+			name: "proxy_url exceeds 1024 bytes",
+			cfg: &LLMConfig{
+				Name:                "valid-name",
+				Endpoint:            "https://example.com/llm",
+				Model:               "model-1",
+				ProxyURL:            "http://example.com/" + strings.Repeat("p", 1024),
+				FirstTokenTimeoutMS: 5000,
+				OverallTimeoutMS:    30000,
+			},
+			expectedErr: ErrInvalidLLMProxyURLLength,
+		},
+		{
+			name: "proxy_url invalid scheme ftp",
+			cfg: &LLMConfig{
+				Name:                "valid-name",
+				Endpoint:            "https://example.com/llm",
+				Model:               "model-1",
+				ProxyURL:            "ftp://127.0.0.1:21",
+				FirstTokenTimeoutMS: 5000,
+				OverallTimeoutMS:    30000,
+			},
+			expectedErr: ErrInvalidLLMProxyURLScheme,
+		},
+		{
+			name: "proxy_url valid socks5h",
+			cfg: &LLMConfig{
+				Name:                "valid-name",
+				Endpoint:            "https://example.com/llm",
+				Model:               "model-1",
+				ProxyURL:            "socks5h://127.0.0.1:1080",
+				FirstTokenTimeoutMS: 5000,
+				OverallTimeoutMS:    30000,
+			},
+			expectedErr: nil,
 		},
 	}
 

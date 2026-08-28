@@ -20,6 +20,7 @@ func TestTTSConfig_CRUD(t *testing.T) {
 		APIKey:              "sk-test-tts-api-key-123456",
 		Model:               "cosyvoice-v1",
 		Voices:              `["longanlingxi","longxiaochun","longxiaoxia","longwanwan"]`,
+		ProxyURL:            "http://127.0.0.1:7890",
 		ConnectTimeoutMS:    5000,
 		FirstAudioTimeoutMS: 5000,
 		SentenceTimeoutMS:   10000,
@@ -57,6 +58,9 @@ func TestTTSConfig_CRUD(t *testing.T) {
 	if found.Voices != `["longanlingxi","longxiaochun","longxiaoxia","longwanwan"]` {
 		t.Errorf("expected voices %q, got %q", `["longanlingxi","longxiaochun","longxiaoxia","longwanwan"]`, found.Voices)
 	}
+	if found.ProxyURL != "http://127.0.0.1:7890" {
+		t.Errorf("expected proxy_url %q, got %q", "http://127.0.0.1:7890", found.ProxyURL)
+	}
 	if found.ConnectTimeoutMS != 5000 {
 		t.Errorf("expected connect_timeout_ms 5000, got %d", found.ConnectTimeoutMS)
 	}
@@ -77,6 +81,7 @@ func TestTTSConfig_CRUD(t *testing.T) {
 	found.APIKey = "sk-new-tts-key-654321"
 	found.Model = "cosyvoice-v2"
 	found.Voices = `["longanlingxi","longxiaochun","new_voice_custom"]`
+	found.ProxyURL = "socks5://127.0.0.1:1080"
 	found.ConnectTimeoutMS = 8000
 	found.FirstAudioTimeoutMS = 7000
 	found.SentenceTimeoutMS = 15000
@@ -109,6 +114,9 @@ func TestTTSConfig_CRUD(t *testing.T) {
 	}
 	if updated.Voices != `["longanlingxi","longxiaochun","new_voice_custom"]` {
 		t.Errorf("expected updated voices %q, got %q", `["longanlingxi","longxiaochun","new_voice_custom"]`, updated.Voices)
+	}
+	if updated.ProxyURL != "socks5://127.0.0.1:1080" {
+		t.Errorf("expected updated proxy_url %q, got %q", "socks5://127.0.0.1:1080", updated.ProxyURL)
 	}
 	if updated.ConnectTimeoutMS != 8000 {
 		t.Errorf("expected updated connect_timeout_ms 8000, got %d", updated.ConnectTimeoutMS)
@@ -651,6 +659,45 @@ func TestTTSConfig_Validation(t *testing.T) {
 				SentenceTimeoutMS:   10000,
 			},
 			expectedErr: ErrInvalidTTSVoicesLength,
+		},
+		{
+			name: "proxy_url exceeds 1024 bytes",
+			cfg: &TTSConfig{
+				Name:                "valid-name",
+				Endpoint:            "wss://example.com/tts",
+				Model:               "model-1",
+				ProxyURL:            "http://example.com/" + strings.Repeat("p", 1024),
+				ConnectTimeoutMS:    5000,
+				FirstAudioTimeoutMS: 5000,
+				SentenceTimeoutMS:   10000,
+			},
+			expectedErr: ErrInvalidTTSProxyURLLength,
+		},
+		{
+			name: "proxy_url invalid scheme ftp",
+			cfg: &TTSConfig{
+				Name:                "valid-name",
+				Endpoint:            "wss://example.com/tts",
+				Model:               "model-1",
+				ProxyURL:            "ftp://127.0.0.1:21",
+				ConnectTimeoutMS:    5000,
+				FirstAudioTimeoutMS: 5000,
+				SentenceTimeoutMS:   10000,
+			},
+			expectedErr: ErrInvalidTTSProxyURLScheme,
+		},
+		{
+			name: "proxy_url valid socks5h",
+			cfg: &TTSConfig{
+				Name:                "valid-name",
+				Endpoint:            "wss://example.com/tts",
+				Model:               "model-1",
+				ProxyURL:            "socks5h://127.0.0.1:1080",
+				ConnectTimeoutMS:    5000,
+				FirstAudioTimeoutMS: 5000,
+				SentenceTimeoutMS:   10000,
+			},
+			expectedErr: nil,
 		},
 	}
 

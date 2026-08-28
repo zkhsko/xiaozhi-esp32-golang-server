@@ -5,6 +5,7 @@ export interface LLMConfigItem {
   endpoint: string
   has_api_key: boolean
   model: string
+  proxy_url: string
   first_token_timeout_ms: number
   overall_timeout_ms: number
   enabled: boolean
@@ -40,6 +41,7 @@ export interface SaveLLMConfigParams {
   endpoint: string
   api_key?: string
   model: string
+  proxy_url?: string
   first_token_timeout_ms?: number
   overall_timeout_ms?: number
   enabled?: boolean

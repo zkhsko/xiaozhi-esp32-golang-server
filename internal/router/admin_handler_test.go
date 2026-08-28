@@ -368,6 +368,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 		"api_key": "sk-secret-key-123456",
 		"model": "qwen-audio-3.0-asr-flash-streaming",
 		"hotwords": "[\"小智\", \"ESP32\", \"智能音箱\"]",
+		"proxy_url": "http://127.0.0.1:7890",
 		"connect_timeout_ms": 6000,
 		"enabled": true
 	}`)
@@ -396,6 +397,9 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	if createResp.Data.Provider != "bailian" {
 		t.Fatalf("expected provider bailian, got %q", createResp.Data.Provider)
 	}
+	if createResp.Data.ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("expected proxy_url http://127.0.0.1:7890, got %q", createResp.Data.ProxyURL)
+	}
 	asrID := createResp.Data.ID
 
 	// 2. List ASR Configs
@@ -416,7 +420,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
 		t.Fatalf("unexpected list count: total=%d, items=%d", listResp.Data.Total, len(listResp.Data.Items))
 	}
-	if listResp.Data.Items[0].Name != "百炼语音识别" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "bailian" {
+	if listResp.Data.Items[0].Name != "百炼语音识别" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "bailian" || listResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected item content: %+v", listResp.Data.Items[0])
 	}
 
@@ -429,6 +433,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 		"api_key": "",
 		"model": "qwen-audio-asr-v2",
 		"hotwords": "[\"小智\", \"ESP32\", \"智能音箱\", \"修改热词\"]",
+		"proxy_url": "socks5://127.0.0.1:1080",
 		"connect_timeout_ms": 8000,
 		"enabled": false
 	}`, asrID))
@@ -449,7 +454,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	if found.APIKey != "sk-secret-key-123456" {
 		t.Errorf("expected preserved api_key 'sk-secret-key-123456', got %q", found.APIKey)
 	}
-	if found.Name != "百炼语音识别-修改版" || found.Model != "qwen-audio-asr-v2" || found.Enabled != false || found.Provider != "volcengine" {
+	if found.Name != "百炼语音识别-修改版" || found.Model != "qwen-audio-asr-v2" || found.Enabled != false || found.Provider != "volcengine" || found.ProxyURL != "socks5://127.0.0.1:1080" {
 		t.Errorf("unexpected updated fields in DB: %+v", found)
 	}
 
@@ -504,6 +509,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 		"endpoint": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
 		"api_key": "sk-secret-llm-key-123456",
 		"model": "qwen-max",
+		"proxy_url": "http://127.0.0.1:7890",
 		"first_token_timeout_ms": 6000,
 		"overall_timeout_ms": 35000,
 		"enabled": true
@@ -533,6 +539,9 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	if createResp.Data.Provider != "bailian" {
 		t.Fatalf("expected provider bailian, got %q", createResp.Data.Provider)
 	}
+	if createResp.Data.ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("expected proxy_url http://127.0.0.1:7890, got %q", createResp.Data.ProxyURL)
+	}
 	llmID := createResp.Data.ID
 
 	// 2. List LLM Configs
@@ -553,7 +562,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
 		t.Fatalf("unexpected list count: total=%d, items=%d", listResp.Data.Total, len(listResp.Data.Items))
 	}
-	if listResp.Data.Items[0].Name != "百炼大语言模型" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "bailian" {
+	if listResp.Data.Items[0].Name != "百炼大语言模型" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "bailian" || listResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected item content: %+v", listResp.Data.Items[0])
 	}
 
@@ -565,6 +574,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 		"endpoint": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
 		"api_key": "",
 		"model": "qwen-plus",
+		"proxy_url": "socks5://127.0.0.1:1080",
 		"first_token_timeout_ms": 8000,
 		"overall_timeout_ms": 40000,
 		"enabled": false
@@ -586,7 +596,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	if found.APIKey != "sk-secret-llm-key-123456" {
 		t.Errorf("expected preserved api_key 'sk-secret-llm-key-123456', got %q", found.APIKey)
 	}
-	if found.Name != "百炼大语言模型-修改版" || found.Model != "qwen-plus" || found.Enabled != false || found.Provider != "openai" {
+	if found.Name != "百炼大语言模型-修改版" || found.Model != "qwen-plus" || found.Enabled != false || found.Provider != "openai" || found.ProxyURL != "socks5://127.0.0.1:1080" {
 		t.Errorf("unexpected updated fields in DB: %+v", found)
 	}
 
@@ -642,6 +652,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 		"api_key": "sk-secret-tts-key-123456",
 		"model": "cosyvoice-v1",
 		"voices": "[\"longanlingxi\", \"longxiaochun\"]",
+		"proxy_url": "http://127.0.0.1:7890",
 		"connect_timeout_ms": 6000,
 		"first_audio_timeout_ms": 6000,
 		"sentence_timeout_ms": 12000,
@@ -672,6 +683,9 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	if createResp.Data.Provider != "bailian" {
 		t.Fatalf("expected provider bailian, got %q", createResp.Data.Provider)
 	}
+	if createResp.Data.ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("expected proxy_url http://127.0.0.1:7890, got %q", createResp.Data.ProxyURL)
+	}
 	ttsID := createResp.Data.ID
 
 	// 2. List TTS Configs
@@ -692,7 +706,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
 		t.Fatalf("unexpected list count: total=%d, items=%d", listResp.Data.Total, len(listResp.Data.Items))
 	}
-	if listResp.Data.Items[0].Name != "百炼语音合成" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "bailian" {
+	if listResp.Data.Items[0].Name != "百炼语音合成" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "bailian" || listResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected item content: %+v", listResp.Data.Items[0])
 	}
 
@@ -705,6 +719,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 		"api_key": "",
 		"model": "cosyvoice-v2",
 		"voices": "[\"longanlingxi\", \"longxiaochun\", \"new_voice\"]",
+		"proxy_url": "socks5://127.0.0.1:1080",
 		"connect_timeout_ms": 8000,
 		"first_audio_timeout_ms": 7000,
 		"sentence_timeout_ms": 15000,
@@ -727,7 +742,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	if found.APIKey != "sk-secret-tts-key-123456" {
 		t.Errorf("expected preserved api_key 'sk-secret-tts-key-123456', got %q", found.APIKey)
 	}
-	if found.Name != "百炼语音合成-修改版" || found.Model != "cosyvoice-v2" || found.Enabled != false || found.Provider != "volcengine" {
+	if found.Name != "百炼语音合成-修改版" || found.Model != "cosyvoice-v2" || found.Enabled != false || found.Provider != "volcengine" || found.ProxyURL != "socks5://127.0.0.1:1080" {
 		t.Errorf("unexpected updated fields in DB: %+v", found)
 	}
 
