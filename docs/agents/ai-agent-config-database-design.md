@@ -80,8 +80,8 @@
 ### 3.5 系统提示词和音色
 
 - `system_prompt` 保存到 `agent_config`。
-- `voice` 保存到 `agent_config`。
-- `tts_config` 不保存音色。
+- `voice` 保存到 `agent_config`（表示 Agent 当前使用的具体音色）。
+- `tts_config.voices` 保存该 TTS 配置支持的音色列表。
 - 同一个 TTS 配置可以被多个 Agent 引用，并由各 Agent 使用不同音色。
 
 ## 4. 非目标
@@ -170,14 +170,13 @@ overall_timeout_ms > first_token_timeout_ms
 | `endpoint` | VARCHAR(1024) | NOT NULL | TTS WebSocket Endpoint |
 | `api_key` | VARCHAR(1024) | NOT NULL | 明文 API Key；迁移默认记录初始为空 |
 | `model` | VARCHAR(255) | NOT NULL | TTS 模型 |
+| `voices` | TEXT | NOT NULL DEFAULT '' | 支持的音色列表（JSON 格式） |
 | `connect_timeout_ms` | BIGINT | NOT NULL | 连接超时，毫秒 |
 | `first_audio_timeout_ms` | BIGINT | NOT NULL | 首音频超时，毫秒 |
 | `sentence_timeout_ms` | BIGINT | NOT NULL | 单句超时，毫秒 |
 | `enabled` | BOOLEAN | NOT NULL DEFAULT TRUE | 是否允许 Agent 引用 |
 | `created_at` | 时间类型 | NOT NULL | 创建时间 |
 | `updated_at` | 时间类型 | NOT NULL | 更新时间 |
-
-`tts_config` 不包含 `voice`。
 
 ### 6.4 `agent_config`
 
@@ -219,6 +218,7 @@ overall_timeout_ms > first_token_timeout_ms
 | `endpoint` | 非空；ASR/TTS 只允许 `ws`、`wss`；LLM 只允许 `http`、`https` |
 | `api_key` | 运行时必须非空，字节数不超过 1024；错误不得回显原值 |
 | `model` | 非空，字节数不超过 255 |
+| `voices` | 必须为合法 JSON 格式（空值默认规范化为 `[]`），UTF-8 字节数不超过 1048576 (1MB) |
 | `system_prompt` | 去除首尾空白后非空，UTF-8 字节数不超过 16384 |
 | `voice` | 去除首尾空白后非空，UTF-8 字节数不超过 128 |
 
@@ -487,12 +487,11 @@ Goose 迁移创建：
 - `endpoint`
 - write-only `api_key`
 - `model`
+- `voices`
 - `connect_timeout`
 - `first_audio_timeout`
 - `sentence_timeout`
 - `enabled`
-
-不包含音色。
 
 ### 15.4 Agent 配置
 

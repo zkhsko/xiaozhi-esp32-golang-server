@@ -123,7 +123,28 @@ CREATE TABLE IF NOT EXISTS asr_config (
 );
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+-- tts_config: 语音合成 TTS 配置表
+CREATE TABLE IF NOT EXISTS tts_config (
+    id BIGSERIAL PRIMARY KEY,                                       -- 配置内部自增主键
+    name VARCHAR(128) NOT NULL,                                    -- 配置展示名称（非唯一）
+    endpoint VARCHAR(1024) NOT NULL,                               -- TTS WebSocket Endpoint
+    api_key VARCHAR(1024) NOT NULL DEFAULT '',                     -- 明文 API Key（迁移默认记录初始为空）
+    model VARCHAR(255) NOT NULL,                                   -- TTS 模型
+    voices TEXT NOT NULL DEFAULT '[]',                             -- 支持的音色列表（JSON 格式）
+    connect_timeout_ms BIGINT NOT NULL DEFAULT 5000,               -- 连接超时，毫秒
+    first_audio_timeout_ms BIGINT NOT NULL DEFAULT 5000,           -- 首音频超时，毫秒
+    sentence_timeout_ms BIGINT NOT NULL DEFAULT 10000,             -- 单句超时，毫秒
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,                         -- 是否允许 Agent 引用
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,     -- 创建时间
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP      -- 最近更新时间
+);
+-- +goose StatementEnd
+
 -- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS tts_config;
+-- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE IF EXISTS asr_config;
 -- +goose StatementEnd
