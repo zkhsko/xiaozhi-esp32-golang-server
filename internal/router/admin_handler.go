@@ -126,6 +126,7 @@ type BatchDeleteActivationRequest struct {
 type ASRConfigItem struct {
 	ID               uint64    `json:"id"`
 	Name             string    `json:"name"`
+	Provider         string    `json:"provider"`
 	Endpoint         string    `json:"endpoint"`
 	HasAPIKey        bool      `json:"has_api_key"`
 	Model            string    `json:"model"`
@@ -148,6 +149,7 @@ type ASRConfigListData struct {
 type SaveASRConfigRequest struct {
 	ID               uint64 `json:"id"`
 	Name             string `json:"name"`
+	Provider         string `json:"provider"`
 	Endpoint         string `json:"endpoint"`
 	APIKey           string `json:"api_key"` // write-only；更新时留空表示保留原 Key
 	Model            string `json:"model"`
@@ -772,6 +774,7 @@ func (h *AdminHandler) handleListASRConfigs(w http.ResponseWriter, r *http.Reque
 
 	filter := database.ASRConfigFilter{
 		Name:     query.Get("name"),
+		Provider: query.Get("provider"),
 		Page:     page,
 		PageSize: pageSize,
 	}
@@ -794,6 +797,7 @@ func (h *AdminHandler) handleListASRConfigs(w http.ResponseWriter, r *http.Reque
 		items = append(items, ASRConfigItem{
 			ID:               cfg.ID,
 			Name:             cfg.Name,
+			Provider:         cfg.Provider,
 			Endpoint:         cfg.Endpoint,
 			HasAPIKey:        len(strings.TrimSpace(cfg.APIKey)) > 0,
 			Model:            cfg.Model,
@@ -840,10 +844,13 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 		enabled = *req.Enabled
 	}
 
+	provider := strings.TrimSpace(req.Provider)
+
 	if req.ID == 0 {
 		// 创建新配置
 		cfg := &database.ASRConfig{
 			Name:             strings.TrimSpace(req.Name),
+			Provider:         provider,
 			Endpoint:         strings.TrimSpace(req.Endpoint),
 			APIKey:           strings.TrimSpace(req.APIKey),
 			Model:            strings.TrimSpace(req.Model),
@@ -863,6 +870,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 			Data: ASRConfigItem{
 				ID:               cfg.ID,
 				Name:             cfg.Name,
+				Provider:         cfg.Provider,
 				Endpoint:         cfg.Endpoint,
 				HasAPIKey:        len(cfg.APIKey) > 0,
 				Model:            cfg.Model,
@@ -892,6 +900,10 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 		apiKey = strings.TrimSpace(req.APIKey)
 	}
 
+	if strings.TrimSpace(req.Provider) == "" {
+		provider = existing.Provider
+	}
+
 	if req.Enabled == nil {
 		enabled = existing.Enabled
 	}
@@ -899,6 +911,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 	updatedCfg := &database.ASRConfig{
 		ID:               req.ID,
 		Name:             strings.TrimSpace(req.Name),
+		Provider:         provider,
 		Endpoint:         strings.TrimSpace(req.Endpoint),
 		APIKey:           apiKey,
 		Model:            strings.TrimSpace(req.Model),
@@ -918,6 +931,7 @@ func (h *AdminHandler) handleSaveASRConfig(w http.ResponseWriter, r *http.Reques
 		Data: ASRConfigItem{
 			ID:               updatedCfg.ID,
 			Name:             updatedCfg.Name,
+			Provider:         updatedCfg.Provider,
 			Endpoint:         updatedCfg.Endpoint,
 			HasAPIKey:        len(apiKey) > 0,
 			Model:            updatedCfg.Model,

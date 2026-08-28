@@ -112,6 +112,7 @@ CREATE INDEX IF NOT EXISTS idx_device_agent_ref_agent_config_id ON device_agent_
 CREATE TABLE IF NOT EXISTS asr_config (
     id BIGSERIAL PRIMARY KEY,                                       -- 配置内部自增主键
     name VARCHAR(128) NOT NULL,                                    -- 配置展示名称（非唯一）
+    provider VARCHAR(64) NOT NULL DEFAULT '',                      -- ASR 服务商/平台：bailian / volcengine / openai 等
     endpoint VARCHAR(1024) NOT NULL,                               -- ASR WebSocket Endpoint
     api_key VARCHAR(1024) NOT NULL DEFAULT '',                     -- 明文 API Key（迁移默认记录初始为空）
     model VARCHAR(255) NOT NULL,                                   -- ASR 模型
@@ -128,6 +129,7 @@ CREATE TABLE IF NOT EXISTS asr_config (
 CREATE TABLE IF NOT EXISTS llm_config (
     id BIGSERIAL PRIMARY KEY,                                       -- 配置内部自增主键
     name VARCHAR(128) NOT NULL,                                    -- 配置展示名称（非唯一）
+    provider VARCHAR(64) NOT NULL DEFAULT '',                      -- LLM 服务商/平台：bailian / openai / deepseek / ollama 等
     endpoint VARCHAR(1024) NOT NULL,                               -- LLM HTTP Endpoint
     api_key VARCHAR(1024) NOT NULL DEFAULT '',                     -- 明文 API Key（迁移默认记录初始为空）
     model VARCHAR(255) NOT NULL,                                   -- LLM 模型
@@ -144,6 +146,7 @@ CREATE TABLE IF NOT EXISTS llm_config (
 CREATE TABLE IF NOT EXISTS tts_config (
     id BIGSERIAL PRIMARY KEY,                                       -- 配置内部自增主键
     name VARCHAR(128) NOT NULL,                                    -- 配置展示名称（非唯一）
+    provider VARCHAR(64) NOT NULL DEFAULT '',                      -- TTS 服务商/平台：bailian / volcengine / openai 等
     endpoint VARCHAR(1024) NOT NULL,                               -- TTS WebSocket Endpoint
     api_key VARCHAR(1024) NOT NULL DEFAULT '',                     -- 明文 API Key（迁移默认记录初始为空）
     model VARCHAR(255) NOT NULL,                                   -- TTS 模型

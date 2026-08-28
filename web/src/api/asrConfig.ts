@@ -1,6 +1,7 @@
 export interface ASRConfigItem {
   id: number
   name: string
+  provider: string
   endpoint: string
   has_api_key: boolean
   model: string
@@ -15,6 +16,7 @@ export interface ListQueryParams {
   page: number
   page_size: number
   name?: string
+  provider?: string
   enabled?: boolean | string
 }
 
@@ -34,6 +36,7 @@ export interface ApiResponse<T = any> {
 export interface SaveASRConfigParams {
   id?: number
   name: string
+  provider?: string
   endpoint: string
   api_key?: string
   model: string
@@ -49,6 +52,7 @@ export async function fetchASRConfigs(params: ListQueryParams): Promise<ApiRespo
   query.set('page', String(params.page))
   query.set('page_size', String(params.page_size))
   if (params.name) query.set('name', params.name)
+  if (params.provider) query.set('provider', params.provider)
   if (params.enabled !== undefined && params.enabled !== '') {
     query.set('enabled', String(params.enabled))
   }

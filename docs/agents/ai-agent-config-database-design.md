@@ -129,6 +129,7 @@ TTS #3 ──> Agent #1（voice = longanlingxi）
 | --- | --- | --- | --- |
 | `id` | BIGINT | 主键、自增 | 配置身份 |
 | `name` | VARCHAR(128) | NOT NULL，非唯一 | 展示名称 |
+| `provider` | VARCHAR(64) | NOT NULL DEFAULT '' | 服务提供商/平台（如 `bailian` / `volcengine` / `openai` 等） |
 | `endpoint` | VARCHAR(1024) | NOT NULL | ASR WebSocket Endpoint |
 | `api_key` | VARCHAR(1024) | NOT NULL | 明文 API Key；迁移默认记录初始为空 |
 | `model` | VARCHAR(255) | NOT NULL | ASR 模型 |
@@ -146,6 +147,7 @@ TTS #3 ──> Agent #1（voice = longanlingxi）
 | --- | --- | --- | --- |
 | `id` | BIGINT | 主键、自增 | 配置身份 |
 | `name` | VARCHAR(128) | NOT NULL，非唯一 | 展示名称 |
+| `provider` | VARCHAR(64) | NOT NULL DEFAULT '' | 服务提供商/平台（如 `bailian` / `openai` / `deepseek` / `ollama` 等） |
 | `endpoint` | VARCHAR(1024) | NOT NULL | LLM HTTP Endpoint |
 | `api_key` | VARCHAR(1024) | NOT NULL | 明文 API Key；迁移默认记录初始为空 |
 | `model` | VARCHAR(255) | NOT NULL | LLM 模型 |
@@ -167,6 +169,7 @@ overall_timeout_ms > first_token_timeout_ms
 | --- | --- | --- | --- |
 | `id` | BIGINT | 主键、自增 | 配置身份 |
 | `name` | VARCHAR(128) | NOT NULL，非唯一 | 展示名称 |
+| `provider` | VARCHAR(64) | NOT NULL DEFAULT '' | 服务提供商/平台（如 `bailian` / `volcengine` / `openai` 等） |
 | `endpoint` | VARCHAR(1024) | NOT NULL | TTS WebSocket Endpoint |
 | `api_key` | VARCHAR(1024) | NOT NULL | 明文 API Key；迁移默认记录初始为空 |
 | `model` | VARCHAR(255) | NOT NULL | TTS 模型 |
@@ -214,6 +217,7 @@ overall_timeout_ms > first_token_timeout_ms
 | 字段 | 校验 |
 | --- | --- |
 | `name` | 去除首尾空白后非空，UTF-8 字节数不超过 128；允许重复 |
+| `provider` | 可选，UTF-8 字节数不超过 64；缺省为 `''` |
 | `endpoint` | 非空；ASR/TTS 只允许 `ws`、`wss`；LLM 只允许 `http`、`https` |
 | `api_key` | 运行时必须非空，字节数不超过 1024；错误不得回显原值 |
 | `model` | 非空，字节数不超过 255 |

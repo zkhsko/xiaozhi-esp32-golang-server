@@ -191,6 +191,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	// 13. ASR 配置 E2E 创建
 	createASRBody, _ := json.Marshal(SaveASRConfigRequest{
 		Name:             "E2E 百炼 ASR",
+		Provider:         "bailian",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:           "sk-e2e-asr-key",
 		Model:            "qwen-audio-3.0-asr-flash-streaming",
@@ -210,7 +211,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    ASRConfigItem `json:"data"`
 	}
 	_ = json.Unmarshal(wASRCreate.Body.Bytes(), &asrCreateResp)
-	if !asrCreateResp.Success || asrCreateResp.Data.ID == 0 || !asrCreateResp.Data.HasAPIKey {
+	if !asrCreateResp.Success || asrCreateResp.Data.ID == 0 || !asrCreateResp.Data.HasAPIKey || asrCreateResp.Data.Provider != "bailian" {
 		t.Fatalf("unexpected asr create resp: %+v", asrCreateResp)
 	}
 	createdASRID := asrCreateResp.Data.ID
@@ -228,8 +229,8 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    ASRConfigListData `json:"data"`
 	}
 	_ = json.Unmarshal(wASRList.Body.Bytes(), &asrListResp)
-	if asrListResp.Data.Total != 1 || len(asrListResp.Data.Items) != 1 {
-		t.Fatalf("expected 1 ASR config item, got %d", asrListResp.Data.Total)
+	if asrListResp.Data.Total != 1 || len(asrListResp.Data.Items) != 1 || asrListResp.Data.Items[0].Provider != "bailian" {
+		t.Fatalf("expected 1 ASR config item with provider bailian, got %v", asrListResp.Data.Items)
 	}
 
 	// 15. ASR 配置单条删除

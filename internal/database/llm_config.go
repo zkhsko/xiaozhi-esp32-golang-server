@@ -23,6 +23,10 @@ var (
 	ErrEmptyLLMConfigName = errors.New("llm config name cannot be empty")
 	// ErrInvalidLLMConfigNameLength 表示 LLM 配置名称长度超过 128 字节。
 	ErrInvalidLLMConfigNameLength = errors.New("llm config name length exceeds 128 bytes")
+	// ErrEmptyLLMProvider 表示 LLM 服务商/平台为空。
+	ErrEmptyLLMProvider = errors.New("llm provider cannot be empty")
+	// ErrInvalidLLMProviderLength 表示 LLM 服务商/平台长度超过 64 字节。
+	ErrInvalidLLMProviderLength = errors.New("llm provider length exceeds 64 bytes")
 	// ErrEmptyLLMEndpoint 表示 LLM Endpoint 为空。
 	ErrEmptyLLMEndpoint = errors.New("llm endpoint cannot be empty")
 	// ErrInvalidLLMEndpointScheme 表示 LLM Endpoint 协议非法（只允许 http 或 https）。
@@ -52,6 +56,7 @@ var (
 // 字段约束与索引规范：
 // - id: 主键自增。
 // - name: 展示名称，非唯一（允许重复），最大 128 字节。
+// - provider: 服务商/平台标识（如 bailian / openai / deepseek / ollama），默认空字符串，最大 64 字节。
 // - endpoint: LLM HTTP Endpoint，必须以 http:// 或 https:// 开头，最大 1024 字节。
 // - api_key: 明文 API Key（脱敏时不输出，json:"-"），最大 1024 字节。
 // - model: LLM 模型名称，最大 255 字节。
@@ -63,6 +68,7 @@ var (
 type LLMConfig struct {
 	ID                  uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	Name                string    `gorm:"column:name;size:128;not null" json:"name"`
+	Provider            string    `gorm:"column:provider;size:64;not null;default:''" json:"provider"`
 	Endpoint            string    `gorm:"column:endpoint;size:1024;not null" json:"endpoint"`
 	APIKey              string    `gorm:"column:api_key;size:1024;not null;default:''" json:"-"`
 	Model               string    `gorm:"column:model;size:255;not null" json:"model"`
@@ -90,6 +96,11 @@ func (c *LLMConfig) Validate() error {
 	}
 	if len(name) > 128 {
 		return ErrInvalidLLMConfigNameLength
+	}
+
+	provider := strings.TrimSpace(c.Provider)
+	if len(provider) > 64 {
+		return ErrInvalidLLMProviderLength
 	}
 
 	endpoint := strings.TrimSpace(c.Endpoint)
@@ -134,6 +145,7 @@ func (c *LLMConfig) Validate() error {
 // LLMConfigFilter 定义 LLM 配置查询过滤条件。
 type LLMConfigFilter struct {
 	Name     string
+	Provider string
 	Enabled  *bool
 	Page     int
 	PageSize int
@@ -153,6 +165,7 @@ func (d *Database) CreateLLMConfig(ctx context.Context, cfg *LLMConfig) error {
 	}
 
 	cfg.Name = strings.TrimSpace(cfg.Name)
+	cfg.Provider = strings.TrimSpace(cfg.Provider)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 
@@ -203,6 +216,7 @@ func (d *Database) UpdateLLMConfigByID(ctx context.Context, cfg *LLMConfig) erro
 
 	updates := map[string]any{
 		"name":                   strings.TrimSpace(cfg.Name),
+		"provider":               strings.TrimSpace(cfg.Provider),
 		"endpoint":               strings.TrimSpace(cfg.Endpoint),
 		"api_key":                cfg.APIKey,
 		"model":                  strings.TrimSpace(cfg.Model),
@@ -236,6 +250,9 @@ func (d *Database) ListLLMConfigs(ctx context.Context, filter LLMConfigFilter) (
 
 	if name := strings.TrimSpace(filter.Name); name != "" {
 		query = query.Where("name LIKE ?", "%"+name+"%")
+	}
+	if provider := strings.TrimSpace(filter.Provider); provider != "" {
+		query = query.Where("provider = ?", provider)
 	}
 	if filter.Enabled != nil {
 		query = query.Where("enabled = ?", *filter.Enabled)

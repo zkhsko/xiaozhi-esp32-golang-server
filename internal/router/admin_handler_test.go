@@ -363,6 +363,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	// 1. Create ASR Config via /asr-config/save
 	createBody := []byte(`{
 		"name": "百炼语音识别",
+		"provider": "bailian",
 		"endpoint": "wss://dashscope.aliyuncs.com/api-v1/ws",
 		"api_key": "sk-secret-key-123456",
 		"model": "qwen-audio-3.0-asr-flash-streaming",
@@ -392,6 +393,9 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	if !createResp.Data.HasAPIKey {
 		t.Fatalf("expected has_api_key true")
 	}
+	if createResp.Data.Provider != "bailian" {
+		t.Fatalf("expected provider bailian, got %q", createResp.Data.Provider)
+	}
 	asrID := createResp.Data.ID
 
 	// 2. List ASR Configs
@@ -412,7 +416,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
 		t.Fatalf("unexpected list count: total=%d, items=%d", listResp.Data.Total, len(listResp.Data.Items))
 	}
-	if listResp.Data.Items[0].Name != "百炼语音识别" || !listResp.Data.Items[0].HasAPIKey {
+	if listResp.Data.Items[0].Name != "百炼语音识别" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "bailian" {
 		t.Fatalf("unexpected item content: %+v", listResp.Data.Items[0])
 	}
 
@@ -420,6 +424,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	updateBody := []byte(fmt.Sprintf(`{
 		"id": %d,
 		"name": "百炼语音识别-修改版",
+		"provider": "volcengine",
 		"endpoint": "wss://dashscope.aliyuncs.com/api-v1/ws",
 		"api_key": "",
 		"model": "qwen-audio-asr-v2",
@@ -444,7 +449,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	if found.APIKey != "sk-secret-key-123456" {
 		t.Errorf("expected preserved api_key 'sk-secret-key-123456', got %q", found.APIKey)
 	}
-	if found.Name != "百炼语音识别-修改版" || found.Model != "qwen-audio-asr-v2" || found.Enabled != false {
+	if found.Name != "百炼语音识别-修改版" || found.Model != "qwen-audio-asr-v2" || found.Enabled != false || found.Provider != "volcengine" {
 		t.Errorf("unexpected updated fields in DB: %+v", found)
 	}
 

@@ -8,15 +8,28 @@
             v-model="searchForm.name"
             placeholder="支持模糊搜索配置名称"
             clearable
-            style="width: 220px;"
+            style="width: 200px;"
           />
+        </el-form-item>
+        <el-form-item label="服务平台">
+          <el-select
+            v-model="searchForm.provider"
+            placeholder="全部平台"
+            clearable
+            style="width: 160px;"
+          >
+            <el-option label="全部平台" value="" />
+            <el-option label="阿里百炼 (bailian)" value="bailian" />
+            <el-option label="火山引擎 (volcengine)" value="volcengine" />
+            <el-option label="OpenAI (openai)" value="openai" />
+          </el-select>
         </el-form-item>
         <el-form-item label="启用状态">
           <el-select
             v-model="searchForm.enabled"
             placeholder="全部状态"
             clearable
-            style="width: 150px;"
+            style="width: 140px;"
           >
             <el-option label="全部状态" value="" />
             <el-option label="已启用" value="true" />
@@ -72,6 +85,18 @@
               <el-icon class="name-icon"><Microphone /></el-icon>
               <span class="name-text">{{ row.name }}</span>
             </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="provider" label="服务平台" width="130" align="center">
+          <template #default="{ row }">
+            <el-tag
+              :type="row.provider === 'bailian' ? 'primary' : row.provider === 'volcengine' ? 'warning' : 'info'"
+              effect="plain"
+              size="small"
+            >
+              {{ row.provider || 'bailian' }}
+            </el-tag>
           </template>
         </el-table-column>
 
@@ -230,6 +255,22 @@
           <span class="form-item-tip">用于在 Agent 配置中展示与标识此 ASR 配置</span>
         </el-form-item>
 
+        <el-form-item label="服务平台" prop="provider">
+          <el-select
+            v-model="configDialog.form.provider"
+            filterable
+            allow-create
+            default-first-option
+            placeholder="请选择或输入平台标识，如 bailian"
+            style="width: 100%;"
+          >
+            <el-option label="阿里百炼 (bailian)" value="bailian" />
+            <el-option label="火山引擎 (volcengine)" value="volcengine" />
+            <el-option label="OpenAI (openai)" value="openai" />
+          </el-select>
+          <span class="form-item-tip">服务商/平台标识（如 bailian / volcengine / openai）</span>
+        </el-form-item>
+
         <el-form-item label="服务端点" prop="endpoint">
           <el-input
             v-model="configDialog.form.endpoint"
@@ -351,6 +392,7 @@ import {
 // 搜索表单
 const searchForm = reactive({
   name: '',
+  provider: '',
   enabled: '',
 })
 
@@ -374,6 +416,7 @@ const configDialog = reactive({
   form: {
     id: 0,
     name: '',
+    provider: '',
     endpoint: '',
     model: '',
     api_key: '',
@@ -413,6 +456,9 @@ const configRules: FormRules = {
     { required: true, message: '请输入配置名称', trigger: 'blur' },
     { max: 128, message: '配置名称不能超过 128 字符', trigger: 'blur' },
   ],
+  provider: [
+    { max: 64, message: '服务平台标识不能超过 64 字符', trigger: 'blur' },
+  ],
   endpoint: [
     { required: true, validator: validateEndpoint, trigger: 'blur' },
   ],
@@ -443,6 +489,7 @@ async function loadData() {
       page: pagination.page,
       page_size: pagination.pageSize,
       name: searchForm.name.trim() || undefined,
+      provider: searchForm.provider.trim() || undefined,
       enabled: searchForm.enabled || undefined,
     })
     if (res.success && res.data) {
@@ -469,6 +516,7 @@ function handleSearch() {
 
 function handleReset() {
   searchForm.name = ''
+  searchForm.provider = ''
   searchForm.enabled = ''
   pagination.page = 1
   loadData()
@@ -497,6 +545,7 @@ function openCreateDialog() {
   configDialog.form = {
     id: 0,
     name: '',
+    provider: '',
     endpoint: '',
     model: '',
     api_key: '',
@@ -521,6 +570,7 @@ function openEditDialog(row: ASRConfigItem) {
   configDialog.form = {
     id: row.id,
     name: row.name,
+    provider: row.provider || '',
     endpoint: row.endpoint,
     model: row.model,
     api_key: '', // 编辑时默认留空
@@ -556,6 +606,7 @@ async function submitConfig() {
       const payload = {
         id: configDialog.isEdit ? configDialog.form.id : undefined,
         name: configDialog.form.name.trim(),
+        provider: configDialog.form.provider.trim(),
         endpoint: configDialog.form.endpoint.trim(),
         model: configDialog.form.model.trim(),
         api_key: configDialog.form.api_key.trim() || undefined,
@@ -586,6 +637,7 @@ async function handleToggleEnabled(row: ASRConfigItem & { _switchLoading?: boole
     const res = await saveASRConfig({
       id: row.id,
       name: row.name,
+      provider: row.provider,
       endpoint: row.endpoint,
       model: row.model,
       connect_timeout_ms: row.connect_timeout_ms,

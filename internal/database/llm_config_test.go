@@ -14,6 +14,7 @@ func TestLLMConfig_CRUD(t *testing.T) {
 	// 1. Create LLMConfig
 	cfg := &LLMConfig{
 		Name:                "百炼大语言模型",
+		Provider:            "bailian",
 		Endpoint:            "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
 		APIKey:              "sk-test-llm-api-key-123456",
 		Model:               "qwen-max",
@@ -38,6 +39,9 @@ func TestLLMConfig_CRUD(t *testing.T) {
 	if found.Name != "百炼大语言模型" {
 		t.Errorf("expected name %q, got %q", "百炼大语言模型", found.Name)
 	}
+	if found.Provider != "bailian" {
+		t.Errorf("expected provider %q, got %q", "bailian", found.Provider)
+	}
 	if found.Endpoint != "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation" {
 		t.Errorf("expected endpoint %q, got %q", "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation", found.Endpoint)
 	}
@@ -59,6 +63,7 @@ func TestLLMConfig_CRUD(t *testing.T) {
 
 	// 3. Update by ID
 	found.Name = "百炼大语言模型-更新版"
+	found.Provider = "openai"
 	found.Endpoint = "http://localhost:8000/v1/chat/completions"
 	found.APIKey = "sk-new-llm-key-654321"
 	found.Model = "qwen-plus"
@@ -78,6 +83,9 @@ func TestLLMConfig_CRUD(t *testing.T) {
 	}
 	if updated.Name != "百炼大语言模型-更新版" {
 		t.Errorf("expected updated name %q, got %q", "百炼大语言模型-更新版", updated.Name)
+	}
+	if updated.Provider != "openai" {
+		t.Errorf("expected updated provider %q, got %q", "openai", updated.Provider)
 	}
 	if updated.Endpoint != "http://localhost:8000/v1/chat/completions" {
 		t.Errorf("expected updated endpoint %q, got %q", "http://localhost:8000/v1/chat/completions", updated.Endpoint)
@@ -126,6 +134,7 @@ func TestLLMConfig_DuplicateNameAllowed(t *testing.T) {
 
 	cfg1 := &LLMConfig{
 		Name:                "同名LLM配置",
+		Provider:            "",
 		Endpoint:            "https://dashscope.aliyuncs.com/api/v1/chat",
 		Model:               "model-1",
 		FirstTokenTimeoutMS: 5000,
@@ -134,6 +143,7 @@ func TestLLMConfig_DuplicateNameAllowed(t *testing.T) {
 	}
 	cfg2 := &LLMConfig{
 		Name:                "同名LLM配置",
+		Provider:            "",
 		Endpoint:            "https://dashscope.aliyuncs.com/api/v2/chat",
 		Model:               "model-2",
 		FirstTokenTimeoutMS: 6000,
@@ -150,6 +160,9 @@ func TestLLMConfig_DuplicateNameAllowed(t *testing.T) {
 	if cfg1.ID == cfg2.ID {
 		t.Fatalf("expected distinct IDs for duplicate names, got %d and %d", cfg1.ID, cfg2.ID)
 	}
+	if cfg1.Provider != "" || cfg2.Provider != "" {
+		t.Fatalf("expected empty default provider, got %q and %q", cfg1.Provider, cfg2.Provider)
+	}
 }
 
 func TestLLMConfig_ListAndFilter(t *testing.T) {
@@ -157,9 +170,9 @@ func TestLLMConfig_ListAndFilter(t *testing.T) {
 	ctx := context.Background()
 
 	items := []*LLMConfig{
-		{Name: "LLM-Alpha", Endpoint: "https://alpha.example.com/llm", Model: "m1", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true},
-		{Name: "LLM-Beta", Endpoint: "https://beta.example.com/llm", Model: "m2", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true},
-		{Name: "LLM-Gamma", Endpoint: "https://gamma.example.com/llm", Model: "m3", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: false},
+		{Name: "LLM-Alpha", Provider: "bailian", Endpoint: "https://alpha.example.com/llm", Model: "m1", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true},
+		{Name: "LLM-Beta", Provider: "openai", Endpoint: "https://beta.example.com/llm", Model: "m2", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true},
+		{Name: "LLM-Gamma", Provider: "deepseek", Endpoint: "https://gamma.example.com/llm", Model: "m3", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: false},
 	}
 
 	for _, item := range items {
@@ -184,6 +197,15 @@ func TestLLMConfig_ListAndFilter(t *testing.T) {
 	}
 	if total != 1 || len(list) != 1 || list[0].Name != "LLM-Alpha" {
 		t.Errorf("unexpected name filter result: total %d, items %v", total, list)
+	}
+
+	// 2.1 Filter by Provider
+	list, total, err = db.ListLLMConfigs(ctx, LLMConfigFilter{Provider: "openai"})
+	if err != nil {
+		t.Fatalf("ListLLMConfigs with provider filter failed: %v", err)
+	}
+	if total != 1 || len(list) != 1 || list[0].Provider != "openai" {
+		t.Errorf("unexpected provider filter result: total %d, items %v", total, list)
 	}
 
 	// 3. Filter by Enabled = true
@@ -245,12 +267,25 @@ func TestLLMConfig_Validation(t *testing.T) {
 			name: "name exceeds 128 bytes",
 			cfg: &LLMConfig{
 				Name:                strings.Repeat("a", 129),
+				Provider:            "bailian",
 				Endpoint:            "https://example.com/llm",
 				Model:               "model-1",
 				FirstTokenTimeoutMS: 5000,
 				OverallTimeoutMS:    30000,
 			},
 			expectedErr: ErrInvalidLLMConfigNameLength,
+		},
+		{
+			name: "provider exceeds 64 bytes",
+			cfg: &LLMConfig{
+				Name:                "valid-name",
+				Provider:            strings.Repeat("p", 65),
+				Endpoint:            "https://example.com/llm",
+				Model:               "model-1",
+				FirstTokenTimeoutMS: 5000,
+				OverallTimeoutMS:    30000,
+			},
+			expectedErr: ErrInvalidLLMProviderLength,
 		},
 		{
 			name: "empty endpoint",

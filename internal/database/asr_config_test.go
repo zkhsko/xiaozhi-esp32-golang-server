@@ -14,6 +14,7 @@ func TestASRConfig_CRUD(t *testing.T) {
 	// 1. Create ASRConfig
 	cfg := &ASRConfig{
 		Name:             "百炼语音识别",
+		Provider:         "bailian",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:           "sk-test-asr-api-key-123456",
 		Model:            "qwen-audio-3.0-asr-flash-streaming",
@@ -38,6 +39,9 @@ func TestASRConfig_CRUD(t *testing.T) {
 	if found.Name != "百炼语音识别" {
 		t.Errorf("expected name %q, got %q", "百炼语音识别", found.Name)
 	}
+	if found.Provider != "bailian" {
+		t.Errorf("expected provider %q, got %q", "bailian", found.Provider)
+	}
 	if found.Endpoint != "wss://dashscope.aliyuncs.com/api-v1/ws" {
 		t.Errorf("expected endpoint %q, got %q", "wss://dashscope.aliyuncs.com/api-v1/ws", found.Endpoint)
 	}
@@ -59,6 +63,7 @@ func TestASRConfig_CRUD(t *testing.T) {
 
 	// 3. Update by ID
 	found.Name = "百炼语音识别-更新版"
+	found.Provider = "volcengine"
 	found.Endpoint = "ws://localhost:9000/asr"
 	found.APIKey = "sk-new-key-654321"
 	found.Model = "qwen-audio-asr-v2"
@@ -78,6 +83,9 @@ func TestASRConfig_CRUD(t *testing.T) {
 	}
 	if updated.Name != "百炼语音识别-更新版" {
 		t.Errorf("expected updated name %q, got %q", "百炼语音识别-更新版", updated.Name)
+	}
+	if updated.Provider != "volcengine" {
+		t.Errorf("expected updated provider %q, got %q", "volcengine", updated.Provider)
 	}
 	if updated.Endpoint != "ws://localhost:9000/asr" {
 		t.Errorf("expected updated endpoint %q, got %q", "ws://localhost:9000/asr", updated.Endpoint)
@@ -158,6 +166,7 @@ func TestASRConfig_DuplicateNameAllowed(t *testing.T) {
 
 	cfg1 := &ASRConfig{
 		Name:             "同名配置",
+		Provider:         "",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		Model:            "model-1",
 		ConnectTimeoutMS: 5000,
@@ -165,6 +174,7 @@ func TestASRConfig_DuplicateNameAllowed(t *testing.T) {
 	}
 	cfg2 := &ASRConfig{
 		Name:             "同名配置",
+		Provider:         "",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v2/ws",
 		Model:            "model-2",
 		ConnectTimeoutMS: 6000,
@@ -180,6 +190,9 @@ func TestASRConfig_DuplicateNameAllowed(t *testing.T) {
 	if cfg1.ID == cfg2.ID {
 		t.Fatalf("expected distinct IDs for duplicate names, got %d and %d", cfg1.ID, cfg2.ID)
 	}
+	if cfg1.Provider != "" || cfg2.Provider != "" {
+		t.Fatalf("expected empty default provider, got %q and %q", cfg1.Provider, cfg2.Provider)
+	}
 }
 
 func TestASRConfig_ListAndFilter(t *testing.T) {
@@ -187,9 +200,9 @@ func TestASRConfig_ListAndFilter(t *testing.T) {
 	ctx := context.Background()
 
 	items := []*ASRConfig{
-		{Name: "ASR-Alpha", Endpoint: "wss://alpha.example.com/asr", Model: "m1", ConnectTimeoutMS: 5000, Enabled: true},
-		{Name: "ASR-Beta", Endpoint: "wss://beta.example.com/asr", Model: "m2", ConnectTimeoutMS: 5000, Enabled: true},
-		{Name: "ASR-Gamma", Endpoint: "wss://gamma.example.com/asr", Model: "m3", ConnectTimeoutMS: 5000, Enabled: false},
+		{Name: "ASR-Alpha", Provider: "bailian", Endpoint: "wss://alpha.example.com/asr", Model: "m1", ConnectTimeoutMS: 5000, Enabled: true},
+		{Name: "ASR-Beta", Provider: "volcengine", Endpoint: "wss://beta.example.com/asr", Model: "m2", ConnectTimeoutMS: 5000, Enabled: true},
+		{Name: "ASR-Gamma", Provider: "openai", Endpoint: "wss://gamma.example.com/asr", Model: "m3", ConnectTimeoutMS: 5000, Enabled: false},
 	}
 
 	for _, item := range items {
@@ -214,6 +227,15 @@ func TestASRConfig_ListAndFilter(t *testing.T) {
 	}
 	if total != 1 || len(list) != 1 || list[0].Name != "ASR-Alpha" {
 		t.Errorf("unexpected name filter result: total %d, items %v", total, list)
+	}
+
+	// 2.1 Filter by Provider
+	list, total, err = db.ListASRConfigs(ctx, ASRConfigFilter{Provider: "volcengine"})
+	if err != nil {
+		t.Fatalf("ListASRConfigs with provider filter failed: %v", err)
+	}
+	if total != 1 || len(list) != 1 || list[0].Provider != "volcengine" {
+		t.Errorf("unexpected provider filter result: total %d, items %v", total, list)
 	}
 
 	// 3. Filter by Enabled = true
@@ -274,11 +296,23 @@ func TestASRConfig_Validation(t *testing.T) {
 			name: "name exceeds 128 bytes",
 			cfg: &ASRConfig{
 				Name:             strings.Repeat("a", 129),
+				Provider:         "bailian",
 				Endpoint:         "wss://example.com/asr",
 				Model:            "model-1",
 				ConnectTimeoutMS: 5000,
 			},
 			expectedErr: ErrInvalidASRConfigNameLength,
+		},
+		{
+			name: "provider exceeds 64 bytes",
+			cfg: &ASRConfig{
+				Name:             "valid-name",
+				Provider:         strings.Repeat("p", 65),
+				Endpoint:         "wss://example.com/asr",
+				Model:            "model-1",
+				ConnectTimeoutMS: 5000,
+			},
+			expectedErr: ErrInvalidASRProviderLength,
 		},
 		{
 			name: "empty endpoint",

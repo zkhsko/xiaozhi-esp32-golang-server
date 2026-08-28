@@ -362,6 +362,7 @@ type snapshotRow struct {
 	// ASR 字段
 	ASRID               uint64    `gorm:"column:asr_id"`
 	ASRName             string    `gorm:"column:asr_name"`
+	ASRProvider         string    `gorm:"column:asr_provider"`
 	ASREndpoint         string    `gorm:"column:asr_endpoint"`
 	ASRAPIKey           string    `gorm:"column:asr_api_key"`
 	ASRModel            string    `gorm:"column:asr_model"`
@@ -374,6 +375,7 @@ type snapshotRow struct {
 	// LLM 字段
 	LLMID                  uint64    `gorm:"column:llm_id"`
 	LLMName                string    `gorm:"column:llm_name"`
+	LLMProvider            string    `gorm:"column:llm_provider"`
 	LLMEndpoint            string    `gorm:"column:llm_endpoint"`
 	LLMAPIKey              string    `gorm:"column:llm_api_key"`
 	LLMModel               string    `gorm:"column:llm_model"`
@@ -386,6 +388,7 @@ type snapshotRow struct {
 	// TTS 字段
 	TTSID                  uint64    `gorm:"column:tts_id"`
 	TTSName                string    `gorm:"column:tts_name"`
+	TTSProvider            string    `gorm:"column:tts_provider"`
 	TTSEndpoint            string    `gorm:"column:tts_endpoint"`
 	TTSAPIKey              string    `gorm:"column:tts_api_key"`
 	TTSModel               string    `gorm:"column:tts_model"`
@@ -400,9 +403,9 @@ type snapshotRow struct {
 
 const snapshotSelectSQL = `
 	a.id AS agent_id, a.name AS agent_name, a.system_prompt AS agent_system_prompt, a.voice AS agent_voice, a.enabled AS agent_enabled,
-	asr.id AS asr_id, asr.name AS asr_name, asr.endpoint AS asr_endpoint, asr.api_key AS asr_api_key, asr.model AS asr_model, asr.hotwords AS asr_hotwords, asr.connect_timeout_ms AS asr_connect_timeout_ms, asr.enabled AS asr_enabled, asr.created_at AS asr_created_at, asr.updated_at AS asr_updated_at,
-	llm.id AS llm_id, llm.name AS llm_name, llm.endpoint AS llm_endpoint, llm.api_key AS llm_api_key, llm.model AS llm_model, llm.first_token_timeout_ms AS llm_first_token_timeout_ms, llm.overall_timeout_ms AS llm_overall_timeout_ms, llm.enabled AS llm_enabled, llm.created_at AS llm_created_at, llm.updated_at AS llm_updated_at,
-	tts.id AS tts_id, tts.name AS tts_name, tts.endpoint AS tts_endpoint, tts.api_key AS tts_api_key, tts.model AS tts_model, tts.voices AS tts_voices, tts.connect_timeout_ms AS tts_connect_timeout_ms, tts.first_audio_timeout_ms AS tts_first_audio_timeout_ms, tts.sentence_timeout_ms AS tts_sentence_timeout_ms, tts.enabled AS tts_enabled, tts.created_at AS tts_created_at, tts.updated_at AS tts_updated_at
+	asr.id AS asr_id, asr.name AS asr_name, asr.provider AS asr_provider, asr.endpoint AS asr_endpoint, asr.api_key AS asr_api_key, asr.model AS asr_model, asr.hotwords AS asr_hotwords, asr.connect_timeout_ms AS asr_connect_timeout_ms, asr.enabled AS asr_enabled, asr.created_at AS asr_created_at, asr.updated_at AS asr_updated_at,
+	llm.id AS llm_id, llm.name AS llm_name, llm.provider AS llm_provider, llm.endpoint AS llm_endpoint, llm.api_key AS llm_api_key, llm.model AS llm_model, llm.first_token_timeout_ms AS llm_first_token_timeout_ms, llm.overall_timeout_ms AS llm_overall_timeout_ms, llm.enabled AS llm_enabled, llm.created_at AS llm_created_at, llm.updated_at AS llm_updated_at,
+	tts.id AS tts_id, tts.name AS tts_name, tts.provider AS tts_provider, tts.endpoint AS tts_endpoint, tts.api_key AS tts_api_key, tts.model AS tts_model, tts.voices AS tts_voices, tts.connect_timeout_ms AS tts_connect_timeout_ms, tts.first_audio_timeout_ms AS tts_first_audio_timeout_ms, tts.sentence_timeout_ms AS tts_sentence_timeout_ms, tts.enabled AS tts_enabled, tts.created_at AS tts_created_at, tts.updated_at AS tts_updated_at
 `
 
 // toAgentRuntimeSnapshot 将单行 JOIN 结果转换为运行时快照对象。
@@ -428,6 +431,7 @@ func (row *snapshotRow) toAgentRuntimeSnapshot() (*AgentRuntimeSnapshot, error) 
 		ASRConfig: ASRConfig{
 			ID:               row.ASRID,
 			Name:             row.ASRName,
+			Provider:         row.ASRProvider,
 			Endpoint:         row.ASREndpoint,
 			APIKey:           row.ASRAPIKey,
 			Model:            row.ASRModel,
@@ -440,6 +444,7 @@ func (row *snapshotRow) toAgentRuntimeSnapshot() (*AgentRuntimeSnapshot, error) 
 		LLMConfig: LLMConfig{
 			ID:                  row.LLMID,
 			Name:                row.LLMName,
+			Provider:            row.LLMProvider,
 			Endpoint:            row.LLMEndpoint,
 			APIKey:              row.LLMAPIKey,
 			Model:               row.LLMModel,
@@ -452,6 +457,7 @@ func (row *snapshotRow) toAgentRuntimeSnapshot() (*AgentRuntimeSnapshot, error) 
 		TTSConfig: TTSConfig{
 			ID:                  row.TTSID,
 			Name:                row.TTSName,
+			Provider:            row.TTSProvider,
 			Endpoint:            row.TTSEndpoint,
 			APIKey:              row.TTSAPIKey,
 			Model:               row.TTSModel,

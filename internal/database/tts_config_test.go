@@ -15,6 +15,7 @@ func TestTTSConfig_CRUD(t *testing.T) {
 	// 1. Create TTSConfig
 	cfg := &TTSConfig{
 		Name:                "百炼语音合成",
+		Provider:            "bailian",
 		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:              "sk-test-tts-api-key-123456",
 		Model:               "cosyvoice-v1",
@@ -40,6 +41,9 @@ func TestTTSConfig_CRUD(t *testing.T) {
 	}
 	if found.Name != "百炼语音合成" {
 		t.Errorf("expected name %q, got %q", "百炼语音合成", found.Name)
+	}
+	if found.Provider != "bailian" {
+		t.Errorf("expected provider %q, got %q", "bailian", found.Provider)
 	}
 	if found.Endpoint != "wss://dashscope.aliyuncs.com/api-v1/ws" {
 		t.Errorf("expected endpoint %q, got %q", "wss://dashscope.aliyuncs.com/api-v1/ws", found.Endpoint)
@@ -68,6 +72,7 @@ func TestTTSConfig_CRUD(t *testing.T) {
 
 	// 3. Update by ID
 	found.Name = "百炼语音合成-更新版"
+	found.Provider = "volcengine"
 	found.Endpoint = "ws://localhost:9000/tts"
 	found.APIKey = "sk-new-tts-key-654321"
 	found.Model = "cosyvoice-v2"
@@ -89,6 +94,9 @@ func TestTTSConfig_CRUD(t *testing.T) {
 	}
 	if updated.Name != "百炼语音合成-更新版" {
 		t.Errorf("expected updated name %q, got %q", "百炼语音合成-更新版", updated.Name)
+	}
+	if updated.Provider != "volcengine" {
+		t.Errorf("expected updated provider %q, got %q", "volcengine", updated.Provider)
 	}
 	if updated.Endpoint != "ws://localhost:9000/tts" {
 		t.Errorf("expected updated endpoint %q, got %q", "ws://localhost:9000/tts", updated.Endpoint)
@@ -209,6 +217,7 @@ func TestTTSConfig_DuplicateNameAllowed(t *testing.T) {
 
 	cfg1 := &TTSConfig{
 		Name:                "同名TTS配置",
+		Provider:            "",
 		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
 		Model:               "model-1",
 		Voices:              `["voice1"]`,
@@ -219,6 +228,7 @@ func TestTTSConfig_DuplicateNameAllowed(t *testing.T) {
 	}
 	cfg2 := &TTSConfig{
 		Name:                "同名TTS配置",
+		Provider:            "",
 		Endpoint:            "wss://dashscope.aliyuncs.com/api-v2/ws",
 		Model:               "model-2",
 		Voices:              `["voice2"]`,
@@ -237,6 +247,9 @@ func TestTTSConfig_DuplicateNameAllowed(t *testing.T) {
 	if cfg1.ID == cfg2.ID {
 		t.Fatalf("expected distinct IDs for duplicate names, got %d and %d", cfg1.ID, cfg2.ID)
 	}
+	if cfg1.Provider != "" || cfg2.Provider != "" {
+		t.Fatalf("expected empty default provider, got %q and %q", cfg1.Provider, cfg2.Provider)
+	}
 }
 
 func TestTTSConfig_ListAndFilter(t *testing.T) {
@@ -244,9 +257,9 @@ func TestTTSConfig_ListAndFilter(t *testing.T) {
 	ctx := context.Background()
 
 	items := []*TTSConfig{
-		{Name: "TTS-Alpha", Endpoint: "wss://alpha.example.com/tts", Model: "m1", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true},
-		{Name: "TTS-Beta", Endpoint: "wss://beta.example.com/tts", Model: "m2", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true},
-		{Name: "TTS-Gamma", Endpoint: "wss://gamma.example.com/tts", Model: "m3", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: false},
+		{Name: "TTS-Alpha", Provider: "bailian", Endpoint: "wss://alpha.example.com/tts", Model: "m1", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true},
+		{Name: "TTS-Beta", Provider: "volcengine", Endpoint: "wss://beta.example.com/tts", Model: "m2", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true},
+		{Name: "TTS-Gamma", Provider: "openai", Endpoint: "wss://gamma.example.com/tts", Model: "m3", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: false},
 	}
 
 	for _, item := range items {
@@ -271,6 +284,15 @@ func TestTTSConfig_ListAndFilter(t *testing.T) {
 	}
 	if total != 1 || len(list) != 1 || list[0].Name != "TTS-Alpha" {
 		t.Errorf("unexpected name filter result: total %d, items %v", total, list)
+	}
+
+	// 2.1 Filter by Provider
+	list, total, err = db.ListTTSConfigs(ctx, TTSConfigFilter{Provider: "volcengine"})
+	if err != nil {
+		t.Fatalf("ListTTSConfigs with provider filter failed: %v", err)
+	}
+	if total != 1 || len(list) != 1 || list[0].Provider != "volcengine" {
+		t.Errorf("unexpected provider filter result: total %d, items %v", total, list)
 	}
 
 	// 3. Filter by Enabled = true
@@ -333,6 +355,7 @@ func TestTTSConfig_Validation(t *testing.T) {
 			name: "name exceeds 128 bytes",
 			cfg: &TTSConfig{
 				Name:                strings.Repeat("a", 129),
+				Provider:            "bailian",
 				Endpoint:            "wss://example.com/tts",
 				Model:               "model-1",
 				ConnectTimeoutMS:    5000,
@@ -340,6 +363,19 @@ func TestTTSConfig_Validation(t *testing.T) {
 				SentenceTimeoutMS:   10000,
 			},
 			expectedErr: ErrInvalidTTSConfigNameLength,
+		},
+		{
+			name: "provider exceeds 64 bytes",
+			cfg: &TTSConfig{
+				Name:                "valid-name",
+				Provider:            strings.Repeat("p", 65),
+				Endpoint:            "wss://example.com/tts",
+				Model:               "model-1",
+				ConnectTimeoutMS:    5000,
+				FirstAudioTimeoutMS: 5000,
+				SentenceTimeoutMS:   10000,
+			},
+			expectedErr: ErrInvalidTTSProviderLength,
 		},
 		{
 			name: "empty endpoint",

@@ -24,6 +24,10 @@ var (
 	ErrEmptyASRConfigName = errors.New("asr config name cannot be empty")
 	// ErrInvalidASRConfigNameLength 表示 ASR 配置名称长度超过 128 字节。
 	ErrInvalidASRConfigNameLength = errors.New("asr config name length exceeds 128 bytes")
+	// ErrEmptyASRProvider 表示 ASR 服务商/平台为空。
+	ErrEmptyASRProvider = errors.New("asr provider cannot be empty")
+	// ErrInvalidASRProviderLength 表示 ASR 服务商/平台长度超过 64 字节。
+	ErrInvalidASRProviderLength = errors.New("asr provider length exceeds 64 bytes")
 	// ErrEmptyASREndpoint 表示 ASR Endpoint 为空。
 	ErrEmptyASREndpoint = errors.New("asr endpoint cannot be empty")
 	// ErrInvalidASREndpointScheme 表示 ASR Endpoint 协议非法（只允许 ws 或 wss）。
@@ -53,6 +57,7 @@ var (
 // 字段约束与索引规范：
 // - id: 主键自增。
 // - name: 展示名称，非唯一（允许重复），最大 128 字节。
+// - provider: 服务商/平台标识（如 bailian / volcengine / openai），默认空字符串，最大 64 字节。
 // - endpoint: ASR WebSocket Endpoint，必须以 ws:// 或 wss:// 开头，最大 1024 字节。
 // - api_key: 明文 API Key（脱敏时不输出，json:"-"），最大 1024 字节。
 // - model: ASR 模型名称，最大 255 字节。
@@ -64,6 +69,7 @@ var (
 type ASRConfig struct {
 	ID               uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	Name             string    `gorm:"column:name;size:128;not null" json:"name"`
+	Provider         string    `gorm:"column:provider;size:64;not null;default:''" json:"provider"`
 	Endpoint         string    `gorm:"column:endpoint;size:1024;not null" json:"endpoint"`
 	APIKey           string    `gorm:"column:api_key;size:1024;not null;default:''" json:"-"`
 	Model            string    `gorm:"column:model;size:255;not null" json:"model"`
@@ -91,6 +97,11 @@ func (c *ASRConfig) Validate() error {
 	}
 	if len(name) > 128 {
 		return ErrInvalidASRConfigNameLength
+	}
+
+	provider := strings.TrimSpace(c.Provider)
+	if len(provider) > 64 {
+		return ErrInvalidASRProviderLength
 	}
 
 	endpoint := strings.TrimSpace(c.Endpoint)
@@ -138,6 +149,7 @@ func (c *ASRConfig) Validate() error {
 // ASRConfigFilter 定义 ASR 配置查询过滤条件。
 type ASRConfigFilter struct {
 	Name     string
+	Provider string
 	Enabled  *bool
 	Page     int
 	PageSize int
@@ -157,6 +169,7 @@ func (d *Database) CreateASRConfig(ctx context.Context, cfg *ASRConfig) error {
 	}
 
 	cfg.Name = strings.TrimSpace(cfg.Name)
+	cfg.Provider = strings.TrimSpace(cfg.Provider)
 	cfg.Endpoint = strings.TrimSpace(cfg.Endpoint)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 
@@ -207,6 +220,7 @@ func (d *Database) UpdateASRConfigByID(ctx context.Context, cfg *ASRConfig) erro
 
 	updates := map[string]any{
 		"name":               strings.TrimSpace(cfg.Name),
+		"provider":           strings.TrimSpace(cfg.Provider),
 		"endpoint":           strings.TrimSpace(cfg.Endpoint),
 		"api_key":            cfg.APIKey,
 		"model":              strings.TrimSpace(cfg.Model),
@@ -240,6 +254,9 @@ func (d *Database) ListASRConfigs(ctx context.Context, filter ASRConfigFilter) (
 
 	if name := strings.TrimSpace(filter.Name); name != "" {
 		query = query.Where("name LIKE ?", "%"+name+"%")
+	}
+	if provider := strings.TrimSpace(filter.Provider); provider != "" {
+		query = query.Where("provider = ?", provider)
 	}
 	if filter.Enabled != nil {
 		query = query.Where("enabled = ?", *filter.Enabled)
