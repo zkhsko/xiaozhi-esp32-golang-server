@@ -350,39 +350,35 @@ func (s *Session) getMCPTools() []ai.Tool {
 // DeviceControlInstruction 相关控制提示词模板常量。
 const (
 	// DeviceControlInstructionHeader 控制提示词引导头。
-	DeviceControlInstructionHeader = "【重要工具调用规范】\n你具备直接控制设备、查询状态与调用服务端能力的一系列工具权限。当用户的意图或指令与可用工具的功能相匹配时，必须坚决直接发起对应的工具调用（Tool Call），严禁拒绝，严禁仅在纯文本中口头假装执行："
+	DeviceControlInstructionHeader = `【重要工具调用规范】
+你拥有直接控制设备硬件、查询实时状态与调用服务端能力的工具权限。
+当用户的请求或意图与可用工具的功能相匹配时，你必须坚决直接发起工具调用（Tool Call），严禁拒绝，严禁仅以纯文本口头假装执行。`
 
 	// DeviceControlInstructionFooter 控制提示词反馈指导尾。
-	DeviceControlInstructionFooter = `【通用工具执行准则】
-1. 意图驱动调用：凡用户请求涉及控制、调节、查询、系统设置、时间获取或结束退出交互等工具支持的操作，必须直接发起对应的工具调用，不得只用文字口头应付。
-2. 依赖与多步调用：若某个操作需要获取设备实时状态或参数作为前置条件且当前未知，必须先调用对应的查询工具，在获得结果后再发起后续控制工具调用。
-3. 真实反馈与简洁表达：禁止在文本回复中向用户输出工具调用的 JSON 格式或技术标识。工具执行完成后，根据真实返回结果用简明自然的口语向用户反馈。`
+	DeviceControlInstructionFooter = `【工具调用执行准则】
+1. 意图匹配即调用：凡用户请求涉及控制外设、调节参数（如音量/亮度）、查询实时状态或数据（如时间/电量/设备信息）、结束退出对话等工具支持的场景，必须坚决调用对应的工具，不得只用文字应答。
+2. 先查询后控制：若调节操作需要基于设备当前状态（如在当前音量基础上调高/调低），且当前数值未知，第1步必须先调用对应的查询/状态工具获取实时值，待返回结果后再发起控制工具调用。
+3. 真实反馈与简洁口语：严禁在文本中向用户输出工具调用的 JSON 格式或函数名称。工具执行完成后，根据工具实际返回的结果，用简短、自然、亲切的中文口语向用户反馈执行结果。`
 )
 
-// FormatDeviceToolsPrompt 将控制提示词和工具列表（原样 JSON）整理为合理的提示词段落。
+// FormatDeviceToolsPrompt 将控制提示词和工具列表整理为清晰易懂的提示词段落。
 func FormatDeviceToolsPrompt(tools []ai.Tool) string {
 	if len(tools) == 0 {
 		return ""
 	}
 
-	mcpToolsList := make([]MCPTool, 0, len(tools))
-	for _, t := range tools {
-		mcpToolsList = append(mcpToolsList, MCPTool{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.Parameters,
-		})
-	}
-
-	toolsJSON, err := json.MarshalIndent(mcpToolsList, "", "  ")
-	if err != nil {
-		toolsJSON, _ = json.Marshal(mcpToolsList)
-	}
-
 	var sb strings.Builder
 	sb.WriteString(DeviceControlInstructionHeader)
-	sb.WriteString("\n")
-	sb.Write(toolsJSON)
+	sb.WriteString("\n\n【可用工具列表】\n")
+	for _, t := range tools {
+		sb.WriteString("- ")
+		sb.WriteString(t.Name)
+		if t.Description != "" {
+			sb.WriteString(": ")
+			sb.WriteString(t.Description)
+		}
+		sb.WriteString("\n")
+	}
 	sb.WriteString("\n")
 	sb.WriteString(DeviceControlInstructionFooter)
 
