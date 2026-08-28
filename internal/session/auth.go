@@ -41,9 +41,10 @@ var (
 	ErrInvalidProtocolVersion = errors.New("invalid or missing protocol version")
 )
 
-// TokenFinder 定义根据 Access Token 查询设备 Token 记录的接口。
-type TokenFinder interface {
+// DeviceAgentResolver 定义 WebSocket 建连所需的设备 Token 校验与智能体快照单表分步解析契约。
+type DeviceAgentResolver interface {
 	FindDeviceAccessTokenByAccessToken(ctx context.Context, accessToken string) (*database.DeviceAccessToken, error)
+	ResolveAgentRuntimeSnapshotByDeviceType(ctx context.Context, deviceType string) (*database.AgentRuntimeSnapshot, error)
 }
 
 // AuthError 包装认证与请求校验错误及其建议返回的 HTTP 状态码。
@@ -74,11 +75,18 @@ func HTTPStatus(err error) int {
 	if errors.As(err, &authErr) {
 		return authErr.StatusCode
 	}
-	if errors.Is(err, ErrMissingToken) || errors.Is(err, ErrInvalidTokenFormat) || errors.Is(err, ErrInvalidToken) {
+	if errors.Is(err, ErrMissingToken) || errors.Is(err, ErrInvalidTokenFormat) || errors.Is(err, ErrInvalidToken) || errors.Is(err, database.ErrAccessTokenNotFound) {
 		return http.StatusUnauthorized
 	}
-	if errors.Is(err, ErrHeaderTooLarge) || errors.Is(err, ErrInvalidProtocolVersion) {
+	if errors.Is(err, ErrHeaderTooLarge) || errors.Is(err, ErrInvalidProtocolVersion) || errors.Is(err, database.ErrDeviceTypeNotFound) || errors.Is(err, database.ErrEmptyDeviceType) {
 		return http.StatusBadRequest
+	}
+	if errors.Is(err, database.ErrAgentConfigNotFound) ||
+		errors.Is(err, database.ErrReferencedASRNotFound) || errors.Is(err, database.ErrReferencedASRDisabled) ||
+		errors.Is(err, database.ErrReferencedLLMNotFound) || errors.Is(err, database.ErrReferencedLLMDisabled) ||
+		errors.Is(err, database.ErrReferencedTTSNotFound) || errors.Is(err, database.ErrReferencedTTSDisabled) ||
+		errors.Is(err, database.ErrDatabaseInstanceRequired) {
+		return http.StatusInternalServerError
 	}
 	return http.StatusBadRequest
 }
@@ -112,10 +120,10 @@ func ValidateHeaders(headers http.Header, maxSingle, maxTotal int) error {
 }
 
 // AuthenticateUpgrade 执行 WebSocket 升级前的请求头校验、协议版本检查与数据库 Token 认证。
-// 校验失败时返回附带 HTTP 状态码的 AuthError；成功时返回表里确定的设备唯一身份 SerialNumber (SN)。
-func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int) (string, error) {
+// 校验失败时返回附带 HTTP 状态码的 AuthError；成功时返回表里确定的设备 Access Token 实体。
+func AuthenticateUpgrade(r *http.Request, finder DeviceAgentResolver, maxHeaderBytes int) (*database.DeviceAccessToken, error) {
 	if r == nil {
-		return "", &AuthError{
+		return nil, &AuthError{
 			StatusCode: http.StatusBadRequest,
 			Err:        errors.New("nil request"),
 		}
@@ -127,7 +135,7 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 		maxSingle = maxHeaderBytes
 	}
 	if err := ValidateHeaders(r.Header, maxSingle, MaxTotalHeaderBytes); err != nil {
-		return "", &AuthError{
+		return nil, &AuthError{
 			StatusCode: http.StatusBadRequest,
 			Err:        err,
 		}
@@ -136,7 +144,7 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 	// 2. 协议版本校验
 	protocolVer := strings.TrimSpace(r.Header.Get("Protocol-Version"))
 	if protocolVer != ProtocolVersion {
-		return "", &AuthError{
+		return nil, &AuthError{
 			StatusCode: http.StatusBadRequest,
 			Err:        ErrInvalidProtocolVersion,
 		}
@@ -145,14 +153,14 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 	// 3. Authorization Bearer Token 提取
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		return "", &AuthError{
+		return nil, &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrMissingToken,
 		}
 	}
 
 	if !strings.HasPrefix(authHeader, BearerPrefix) {
-		return "", &AuthError{
+		return nil, &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidTokenFormat,
 		}
@@ -161,14 +169,14 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 	token := strings.TrimPrefix(authHeader, BearerPrefix)
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return "", &AuthError{
+		return nil, &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidTokenFormat,
 		}
 	}
 
 	if finder == nil {
-		return "", &AuthError{
+		return nil, &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidToken,
 		}
@@ -177,14 +185,14 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 	// 4. 从数据库查询 Access Token 并校验其有效性
 	tok, err := finder.FindDeviceAccessTokenByAccessToken(r.Context(), token)
 	if err != nil {
-		return "", &AuthError{
+		return nil, &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidToken,
 		}
 	}
 
 	if !tok.IsValid(time.Now()) {
-		return "", &AuthError{
+		return nil, &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidToken,
 		}
@@ -193,14 +201,13 @@ func AuthenticateUpgrade(r *http.Request, finder TokenFinder, maxHeaderBytes int
 	tokenHash := sha256.Sum256([]byte(token))
 	expectedHash := sha256.Sum256([]byte(tok.AccessToken))
 	if subtle.ConstantTimeCompare(tokenHash[:], expectedHash[:]) != 1 {
-		return "", &AuthError{
+		return nil, &AuthError{
 			StatusCode: http.StatusUnauthorized,
 			Err:        ErrInvalidToken,
 		}
 	}
 
-	// 5. 设备唯一身份 SN 全部以表里的 serial_number 为准
-	return tok.SerialNumber, nil
+	return tok, nil
 }
 
 // LogAuthRejection 记录升级认证被拒绝的诊断日志，严禁打印任何 Token 或 Authorization 明文。

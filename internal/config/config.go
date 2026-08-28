@@ -14,8 +14,7 @@ import (
 
 // 敏感配置所需的环境变量名称。
 const (
-	EnvDashScopeAPIKey = "DASHSCOPE_API_KEY"
-	EnvDatabaseDSN     = "DATABASE_DSN"
+	EnvDatabaseDSN = "DATABASE_DSN"
 )
 
 // 合法取值区间边界常量定义。
@@ -59,24 +58,6 @@ const (
 	minHistoryTurns = 1
 	maxHistoryTurns = 50
 
-	minASRConnectTimeout = 3 * time.Second
-	maxASRConnectTimeout = 30 * time.Second
-
-	minTTSConnectTimeout = 3 * time.Second
-	maxTTSConnectTimeout = 30 * time.Second
-
-	minLLMFirstTokenTimeout = 3 * time.Second
-	maxLLMFirstTokenTimeout = 30 * time.Second
-
-	minLLMOverallTimeout = 10 * time.Second
-	maxLLMOverallTimeout = 180 * time.Second
-
-	minTTSFirstAudioTimeout = 3 * time.Second
-	maxTTSFirstAudioTimeout = 30 * time.Second
-
-	minTTSSentenceTimeout = 5 * time.Second
-	maxTTSSentenceTimeout = 60 * time.Second
-
 	minASRResultTimeout = 1 * time.Second
 	maxASRResultTimeout = 30 * time.Second
 
@@ -111,35 +92,7 @@ type SessionConfig struct {
 	TTSPCMQueueCapacity       int           `yaml:"tts_pcm_queue_capacity"`
 	DownlinkOpusQueueCapacity int           `yaml:"downlink_opus_queue_capacity"`
 	MaxHistoryTurns           int           `yaml:"max_history_turns"`
-	SystemPrompt              string        `yaml:"system_prompt"`
 	ListenPromptEnabled       bool          `yaml:"listen_prompt_enabled"`
-}
-
-// BailianConfig 定义阿里云百炼 ASR、LLM 与 TTS 模型及超时配置。
-type BailianConfig struct {
-	WSEndpoint           string        `yaml:"ws_endpoint"`
-	LLMEndpoint          string        `yaml:"llm_endpoint"`
-	ASRModel             string        `yaml:"asr_model"`
-	LLMModel             string        `yaml:"llm_model"`
-	TTSModel             string        `yaml:"tts_model"`
-	TTSVoice             string        `yaml:"tts_voice"`
-	ASRConnectTimeout    time.Duration `yaml:"asr_connect_timeout"`
-	TTSConnectTimeout    time.Duration `yaml:"tts_connect_timeout"`
-	LLMFirstTokenTimeout time.Duration `yaml:"llm_first_token_timeout"`
-	LLMOverallTimeout    time.Duration `yaml:"llm_overall_timeout"`
-	TTSFirstAudioTimeout time.Duration `yaml:"tts_first_audio_timeout"`
-	TTSSentenceTimeout   time.Duration `yaml:"tts_sentence_timeout"`
-}
-
-// AIConfig 定义人工智能模型服务配置。
-type AIConfig struct {
-	Bailian BailianConfig `yaml:"bailian"`
-}
-
-// ProxyConfig 定义出站接口调用的网络代理配置。
-type ProxyConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	URL     string `yaml:"url"`
 }
 
 // DatabaseConfig 定义数据库连接与连接池配置。
@@ -154,16 +107,11 @@ type DatabaseConfig struct {
 	DSN string `yaml:"-"`
 }
 
-// Config 包含服务端运行所需的全部配置项。
+// Config 包含服务端运行所需的全部基础设施配置项。
 type Config struct {
 	Server   ServerConfig   `yaml:"server"`
 	Session  SessionConfig  `yaml:"session"`
-	AI       AIConfig       `yaml:"ai"`
-	Proxy    ProxyConfig    `yaml:"proxy"`
 	Database DatabaseConfig `yaml:"database"`
-
-	// 敏感凭据从环境变量注入，不出现在 YAML 配置文件中
-	DashScopeAPIKey string `yaml:"-"`
 }
 
 // Load 从指定路径的 YAML 文件加载非敏感配置，合并环境变量中的敏感凭据并完成校验。
@@ -186,7 +134,6 @@ func LoadFromReader(r io.Reader) (*Config, error) {
 		return nil, fmt.Errorf("decode yaml config: %w", err)
 	}
 
-	cfg.DashScopeAPIKey = os.Getenv(EnvDashScopeAPIKey)
 	cfg.Database.DSN = os.Getenv(EnvDatabaseDSN)
 
 	if err := cfg.Validate(); err != nil {
@@ -204,17 +151,8 @@ func (c *Config) Validate() error {
 	if err := c.validateSession(); err != nil {
 		return fmt.Errorf("session config: %w", err)
 	}
-	if err := c.validateAI(); err != nil {
-		return fmt.Errorf("ai config: %w", err)
-	}
-	if err := c.validateProxy(); err != nil {
-		return fmt.Errorf("proxy config: %w", err)
-	}
 	if err := c.validateDatabase(); err != nil {
 		return fmt.Errorf("database config: %w", err)
-	}
-	if err := c.validateCredentials(); err != nil {
-		return fmt.Errorf("credentials: %w", err)
 	}
 	return nil
 }
@@ -280,71 +218,6 @@ func (c *Config) validateSession() error {
 	if err := validateInt("max_history_turns", c.Session.MaxHistoryTurns, minHistoryTurns, maxHistoryTurns); err != nil {
 		return err
 	}
-	if strings.TrimSpace(c.Session.SystemPrompt) == "" {
-		return errors.New("system_prompt is required")
-	}
-	return nil
-}
-
-func (c *Config) validateAI() error {
-	b := &c.AI.Bailian
-	if err := validateWebSocketURL(b.WSEndpoint); err != nil {
-		return fmt.Errorf("ws_endpoint: %w", err)
-	}
-	if err := validateHTTPURL(b.LLMEndpoint); err != nil {
-		return fmt.Errorf("llm_endpoint: %w", err)
-	}
-	if strings.TrimSpace(b.ASRModel) == "" {
-		return errors.New("asr_model is required")
-	}
-	if strings.TrimSpace(b.LLMModel) == "" {
-		return errors.New("llm_model is required")
-	}
-	if strings.TrimSpace(b.TTSModel) == "" {
-		return errors.New("tts_model is required")
-	}
-	if strings.TrimSpace(b.TTSVoice) == "" {
-		return errors.New("tts_voice is required")
-	}
-	if err := validateDuration("asr_connect_timeout", b.ASRConnectTimeout, minASRConnectTimeout, maxASRConnectTimeout); err != nil {
-		return err
-	}
-	if err := validateDuration("tts_connect_timeout", b.TTSConnectTimeout, minTTSConnectTimeout, maxTTSConnectTimeout); err != nil {
-		return err
-	}
-	if err := validateDuration("llm_first_token_timeout", b.LLMFirstTokenTimeout, minLLMFirstTokenTimeout, maxLLMFirstTokenTimeout); err != nil {
-		return err
-	}
-	if err := validateDuration("llm_overall_timeout", b.LLMOverallTimeout, minLLMOverallTimeout, maxLLMOverallTimeout); err != nil {
-		return err
-	}
-	if b.LLMOverallTimeout <= b.LLMFirstTokenTimeout {
-		return fmt.Errorf("llm_overall_timeout (%v) must be greater than llm_first_token_timeout (%v)", b.LLMOverallTimeout, b.LLMFirstTokenTimeout)
-	}
-	if err := validateDuration("tts_first_audio_timeout", b.TTSFirstAudioTimeout, minTTSFirstAudioTimeout, maxTTSFirstAudioTimeout); err != nil {
-		return err
-	}
-	if err := validateDuration("tts_sentence_timeout", b.TTSSentenceTimeout, minTTSSentenceTimeout, maxTTSSentenceTimeout); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *Config) validateProxy() error {
-	if !c.Proxy.Enabled {
-		if c.Proxy.URL != "" {
-			if err := validateProxyURL(c.Proxy.URL); err != nil {
-				return fmt.Errorf("url: %w", err)
-			}
-		}
-		return nil
-	}
-	if strings.TrimSpace(c.Proxy.URL) == "" {
-		return errors.New("url is required when proxy is enabled")
-	}
-	if err := validateProxyURL(c.Proxy.URL); err != nil {
-		return fmt.Errorf("url: %w", err)
-	}
 	return nil
 }
 
@@ -381,13 +254,6 @@ func (c *Config) validateDatabase() error {
 	return nil
 }
 
-func (c *Config) validateCredentials() error {
-	if strings.TrimSpace(c.DashScopeAPIKey) == "" {
-		return fmt.Errorf("dashscope api key is required (environment variable %s)", EnvDashScopeAPIKey)
-	}
-	return nil
-}
-
 func validateWebSocketURL(rawURL string) error {
 	if strings.TrimSpace(rawURL) == "" {
 		return errors.New("url is required")
@@ -398,42 +264,6 @@ func validateWebSocketURL(rawURL string) error {
 	}
 	if u.Scheme != "ws" && u.Scheme != "wss" {
 		return fmt.Errorf("scheme must be ws or wss, got %s", u.Scheme)
-	}
-	if u.Host == "" {
-		return errors.New("url host is required")
-	}
-	return nil
-}
-
-func validateHTTPURL(rawURL string) error {
-	if strings.TrimSpace(rawURL) == "" {
-		return errors.New("url is required")
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("invalid url format: %w", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("scheme must be http or https, got %s", u.Scheme)
-	}
-	if u.Host == "" {
-		return errors.New("url host is required")
-	}
-	return nil
-}
-
-func validateProxyURL(rawURL string) error {
-	if strings.TrimSpace(rawURL) == "" {
-		return errors.New("url is required")
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("invalid url format: %w", err)
-	}
-	switch u.Scheme {
-	case "http", "https", "socks5", "socks5h":
-	default:
-		return fmt.Errorf("scheme must be http, https, socks5, or socks5h, got %s", u.Scheme)
 	}
 	if u.Host == "" {
 		return errors.New("url host is required")

@@ -8,13 +8,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
-	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/database"
 )
 
 // maxASRReadMessageBytes 定义百炼 ASR WebSocket 单帧最大读取字节数（1 MiB）。
@@ -29,29 +30,29 @@ type ASRClient struct {
 	httpClient     *http.Client
 }
 
-// NewASRClient 基于服务端配置构造百炼 ASR 客户端实例。
-func NewASRClient(cfg *config.Config) (*ASRClient, error) {
+// NewASRClient 基于数据库 ASR 配置实体构造百炼 ASR 客户端实例。
+func NewASRClient(cfg *database.ASRConfig) (*ASRClient, error) {
 	if cfg == nil {
-		return nil, errors.New("config cannot be nil")
+		return nil, errors.New("asr config cannot be nil")
 	}
-	if cfg.DashScopeAPIKey == "" {
+	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, errors.New("dashscope api key is required")
 	}
-	if cfg.AI.Bailian.WSEndpoint == "" {
+	if strings.TrimSpace(cfg.Endpoint) == "" {
 		return nil, errors.New("bailian ws endpoint is required")
 	}
-	if cfg.AI.Bailian.ASRModel == "" {
+	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, errors.New("bailian asr model is required")
 	}
 
-	timeout := cfg.AI.Bailian.ASRConnectTimeout
+	timeout := time.Duration(cfg.ConnectTimeoutMS) * time.Millisecond
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
 
 	var httpClient *http.Client
-	if cfg.Proxy.Enabled && cfg.Proxy.URL != "" {
-		proxyURL, err := url.Parse(cfg.Proxy.URL)
+	if strings.TrimSpace(cfg.ProxyURL) != "" {
+		proxyURL, err := url.Parse(strings.TrimSpace(cfg.ProxyURL))
 		if err != nil {
 			return nil, fmt.Errorf("parse proxy url: %w", err)
 		}
@@ -63,9 +64,9 @@ func NewASRClient(cfg *config.Config) (*ASRClient, error) {
 	}
 
 	return &ASRClient{
-		endpoint:       cfg.AI.Bailian.WSEndpoint,
-		apiKey:         cfg.DashScopeAPIKey,
-		model:          cfg.AI.Bailian.ASRModel,
+		endpoint:       strings.TrimSpace(cfg.Endpoint),
+		apiKey:         strings.TrimSpace(cfg.APIKey),
+		model:          strings.TrimSpace(cfg.Model),
 		connectTimeout: timeout,
 		httpClient:     httpClient,
 	}, nil

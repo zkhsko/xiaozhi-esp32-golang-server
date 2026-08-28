@@ -7,32 +7,27 @@ import (
 
 	"github.com/coder/websocket"
 
-	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/ai/factory"
 	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
-// Handler 处理 WebSocket 协议升级、会话准入控制与连接生命周期。
+// Handler 处理 WebSocket 协议升级、设备智能体动态加载、会话准入控制与连接生命周期。
 type Handler struct {
-	cfg       *config.Config
-	db        TokenFinder
-	registry  *Registry
-	asrClient ai.ASRClient
-	llmClient ai.LLMClient
-	ttsClient ai.TTSClient
-	logger    *slog.Logger
+	cfg      *config.Config
+	db       DeviceAgentResolver
+	registry *Registry
+	logger   *slog.Logger
 }
 
 // HandlerOptions 聚合创建 WebSocket HTTP 升级处理器的依赖与配置。
 type HandlerOptions struct {
-	Config    *config.Config
-	DB        TokenFinder
-	Limiter   *SessionLimiter
-	Registry  *Registry
-	ASRClient ai.ASRClient
-	LLMClient ai.LLMClient
-	TTSClient ai.TTSClient
-	Logger    *slog.Logger
+	Config   *config.Config
+	DB       DeviceAgentResolver
+	Limiter  *SessionLimiter
+	Registry *Registry
+	Logger   *slog.Logger
 }
 
 // NewHandler 使用具名选项创建配置就绪的 WebSocket HTTP 升级处理器。
@@ -56,13 +51,10 @@ func NewHandler(opts HandlerOptions) *Handler {
 	}
 
 	return &Handler{
-		cfg:       opts.Config,
-		db:        opts.DB,
-		registry:  reg,
-		asrClient: opts.ASRClient,
-		llmClient: opts.LLMClient,
-		ttsClient: opts.TTSClient,
-		logger:    l,
+		cfg:      opts.Config,
+		db:       opts.DB,
+		registry: reg,
+		logger:   l,
 	}
 }
 
@@ -79,21 +71,6 @@ func (h *Handler) Limiter() *SessionLimiter {
 	return nil
 }
 
-// ASRClient 返回当前关联的 ASR 客户端。
-func (h *Handler) ASRClient() ai.ASRClient {
-	return h.asrClient
-}
-
-// LLMClient 返回当前关联的大语言模型客户端。
-func (h *Handler) LLMClient() ai.LLMClient {
-	return h.llmClient
-}
-
-// TTSClient 返回当前关联的流式语音合成客户端。
-func (h *Handler) TTSClient() ai.TTSClient {
-	return h.ttsClient
-}
-
 // Close 优雅关闭会话处理器及其关联的注册表。
 func (h *Handler) Close(ctx context.Context) error {
 	if h.registry != nil {
@@ -107,7 +84,7 @@ func (h *Handler) Shutdown(ctx context.Context) error {
 	return h.Close(ctx)
 }
 
-// ServeHTTP 校验 HTTP 认证并执行会话准入控制与 WebSocket 升级。
+// ServeHTTP 校验 HTTP 认证并执行单表分步智能体加载、会话准入控制与 WebSocket 升级。
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 1. 校验请求路径（精确匹配 /xiaozhi/v1/）
 	if r.URL.Path != WebSocketPath {
@@ -115,24 +92,56 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. 升级前认证与请求头校验（从数据库查询 Token 鉴权并获取设备 SN）
+	// 2. 升级前认证与请求头校验（从数据库查询 Token 鉴权并获取设备 SN 与 DeviceType）
 	maxHeaderBytes := MaxSingleHeaderBytes
 	if h.cfg != nil && h.cfg.Server.MaxHTTPHeaderBytes > 0 {
 		maxHeaderBytes = h.cfg.Server.MaxHTTPHeaderBytes
 	}
 
-	sn, err := AuthenticateUpgrade(r, h.db, maxHeaderBytes)
+	tok, err := AuthenticateUpgrade(r, h.db, maxHeaderBytes)
 	if err != nil {
 		RejectUpgrade(w, r, h.logger, err)
 		return
 	}
-	LogAuthSuccess(h.logger, r, sn)
+	LogAuthSuccess(h.logger, r, tok.SerialNumber)
 
-	// 3. 活跃会话并发准入控制（满载或停服时拒绝升级并返回 503）
+	// 3. 单表分步点查设备类型绑定的智能体及其组件快照（无 JOIN、Fail Fast）
+	if h.db == nil {
+		RejectUpgrade(w, r, h.logger, database.ErrDatabaseInstanceRequired)
+		return
+	}
+	snapshot, err := h.db.ResolveAgentRuntimeSnapshotByDeviceType(r.Context(), tok.DeviceType)
+	if err != nil {
+		RejectUpgrade(w, r, h.logger, err)
+		return
+	}
+
+	// 4. 工厂实例化该会话专属的 ASR, LLM, TTS 客户端
+	asrClient, err := factory.CreateASRClient(&snapshot.ASRConfig)
+	if err != nil {
+		RejectUpgrade(w, r, h.logger, err)
+		return
+	}
+	llmClient, err := factory.CreateLLMClient(&snapshot.LLMConfig)
+	if err != nil {
+		RejectUpgrade(w, r, h.logger, err)
+		return
+	}
+	ttsQueueCap := DefaultWriteQueueCapacity
+	if h.cfg != nil && h.cfg.Session.TTSPCMQueueCapacity > 0 {
+		ttsQueueCap = h.cfg.Session.TTSPCMQueueCapacity
+	}
+	ttsClient, err := factory.CreateTTSClient(&snapshot.TTSConfig, snapshot.Agent.Voice, ttsQueueCap)
+	if err != nil {
+		RejectUpgrade(w, r, h.logger, err)
+		return
+	}
+
+	// 5. 活跃会话并发准入控制（满载或停服时拒绝升级并返回 503）
 	release, ok := h.registry.Acquire()
 	if !ok {
 		h.logger.Warn("websocket upgrade rejected: max concurrent sessions reached or shutting down",
-			"serial_number", logger.TruncateString(sn),
+			"serial_number", logger.TruncateString(tok.SerialNumber),
 			"active_sessions", h.registry.Limiter().ActiveCount(),
 			"max_sessions", h.registry.Limiter().MaxSessions(),
 		)
@@ -140,7 +149,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. 执行 WebSocket 协议升级，显式禁用压缩
+	// 6. 执行 WebSocket 协议升级，显式禁用压缩
 	opts := &websocket.AcceptOptions{
 		CompressionMode:    websocket.CompressionDisabled,
 		InsecureSkipVerify: true,
@@ -150,25 +159,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		release()
 		h.logger.Error("websocket upgrade failed",
 			"error", err,
-			"serial_number", logger.TruncateString(sn),
+			"serial_number", logger.TruncateString(tok.SerialNumber),
 		)
 		return
 	}
 	defer conn.Close(websocket.StatusInternalError, "session closed")
 
 	h.logger.Info("websocket session connected",
-		"serial_number", logger.TruncateString(sn),
+		"serial_number", logger.TruncateString(tok.SerialNumber),
+		"device_type", tok.DeviceType,
+		"agent_id", snapshot.Agent.Id,
 		"active_sessions", h.registry.Limiter().ActiveCount(),
 	)
 
-	// 5. 构造会话并注册到会话注册表，统一注销与名额释放顺序
+	// 7. 构造专属 Session 并注册到会话注册表，统一注销与名额释放顺序
 	sess := NewSession(r.Context(), Options{
 		Conn:         conn,
-		SerialNumber: sn,
+		SerialNumber: tok.SerialNumber,
+		SystemPrompt: snapshot.Agent.SystemPrompt,
 		Config:       h.cfg,
-		ASRClient:    h.asrClient,
-		LLMClient:    h.llmClient,
-		TTSClient:    h.ttsClient,
+		ASRClient:    asrClient,
+		LLMClient:    llmClient,
+		TTSClient:    ttsClient,
 		Logger:       h.logger,
 	})
 	unregister, registered := h.registry.Register(sess, release)
@@ -179,10 +191,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer unregister()
 
-	// 6. 移交会话监督流程处理状态机生命周期，直至客户端断开或上下文取消
+	// 8. 移交会话监督流程处理状态机生命周期，直至客户端断开或上下文取消
 	_ = sess.Run()
 
 	h.logger.Info("websocket session closed",
-		"serial_number", logger.TruncateString(sn),
+		"serial_number", logger.TruncateString(tok.SerialNumber),
 	)
 }

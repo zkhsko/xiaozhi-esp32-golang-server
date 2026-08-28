@@ -328,3 +328,147 @@ func TestDeviceTypeValidation(t *testing.T) {
 		t.Errorf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
 }
+
+func TestResolveAgentRuntimeSnapshotByDeviceType(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	// 1. Nil DB 检查
+	var nilDB *Database
+	_, err := nilDB.ResolveAgentRuntimeSnapshotByDeviceType(ctx, "robot")
+	if !errors.Is(err, ErrDatabaseInstanceRequired) {
+		t.Errorf("expected ErrDatabaseInstanceRequired, got %v", err)
+	}
+
+	// 2. 空 deviceType 检查
+	_, err = db.ResolveAgentRuntimeSnapshotByDeviceType(ctx, "   ")
+	if !errors.Is(err, ErrEmptyDeviceType) {
+		t.Errorf("expected ErrEmptyDeviceType, got %v", err)
+	}
+
+	// 3. 设备类型未找到 Fail Fast
+	_, err = db.ResolveAgentRuntimeSnapshotByDeviceType(ctx, "non-existent-device")
+	if !errors.Is(err, ErrDeviceTypeNotFound) {
+		t.Errorf("expected ErrDeviceTypeNotFound, got %v", err)
+	}
+
+	// 4. 正常链路测试
+	asr := &ASRConfig{
+		Name:             "ASR-Snap",
+		Provider:         "bailian",
+		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+		Model:            "qwen-asr",
+		ConnectTimeoutMS: 5000,
+		Enabled:          true,
+	}
+	if err := db.CreateASRConfig(ctx, asr); err != nil {
+		t.Fatalf("create asr: %v", err)
+	}
+
+	llm := &LLMConfig{
+		Name:                "LLM-Snap",
+		Provider:            "bailian",
+		Endpoint:            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		Model:               "qwen-plus",
+		FirstTokenTimeoutMS: 5000,
+		OverallTimeoutMS:    30000,
+		Enabled:             true,
+	}
+	if err := db.CreateLLMConfig(ctx, llm); err != nil {
+		t.Fatalf("create llm: %v", err)
+	}
+
+	tts := &TTSConfig{
+		Name:                "TTS-Snap",
+		Provider:            "bailian",
+		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
+		Model:               "cosyvoice-v1",
+		Voices:              `["voice1"]`,
+		ConnectTimeoutMS:    5000,
+		FirstAudioTimeoutMS: 5000,
+		SentenceTimeoutMS:   10000,
+		Enabled:             true,
+	}
+	if err := db.CreateTTSConfig(ctx, tts); err != nil {
+		t.Fatalf("create tts: %v", err)
+	}
+
+	agent := &AgentConfig{
+		Name:         "Agent-Snap",
+		ASRConfigId:  asr.Id,
+		LLMConfigId:  llm.Id,
+		TTSConfigId:  tts.Id,
+		SystemPrompt: "你是专用管家",
+		Voice:        "voice1",
+		Enabled:      false, // 验证即使 enabled=false 只要关联正确也能根据 device_type 加载
+	}
+	if err := db.CreateAgentConfig(ctx, agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	dt := &DeviceType{
+		DeviceType:    "my-robot",
+		AgentConfigId: agent.Id,
+	}
+	if err := db.CreateDeviceType(ctx, dt); err != nil {
+		t.Fatalf("create device type: %v", err)
+	}
+
+	snapshot, err := db.ResolveAgentRuntimeSnapshotByDeviceType(ctx, "my-robot")
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntimeSnapshotByDeviceType failed: %v", err)
+	}
+	if snapshot.Agent.Id != agent.Id || snapshot.Agent.SystemPrompt != "你是专用管家" || snapshot.Agent.Voice != "voice1" {
+		t.Errorf("snapshot agent mismatch: %+v", snapshot.Agent)
+	}
+	if snapshot.ASRConfig.Id != asr.Id || snapshot.LLMConfig.Id != llm.Id || snapshot.TTSConfig.Id != tts.Id {
+		t.Errorf("snapshot component IDs mismatch: ASR=%d, LLM=%d, TTS=%d",
+			snapshot.ASRConfig.Id, snapshot.LLMConfig.Id, snapshot.TTSConfig.Id)
+	}
+
+	// 5. ASR 被禁用 Fail Fast
+	asr.Enabled = false
+	if err := db.UpdateASRConfigById(ctx, asr); err != nil {
+		t.Fatalf("disable asr: %v", err)
+	}
+	_, err = db.ResolveAgentRuntimeSnapshotByDeviceType(ctx, "my-robot")
+	if !errors.Is(err, ErrReferencedASRDisabled) {
+		t.Errorf("expected ErrReferencedASRDisabled, got %v", err)
+	}
+	asr.Enabled = true
+	_ = db.UpdateASRConfigById(ctx, asr)
+
+	// 6. LLM 被禁用 Fail Fast
+	llm.Enabled = false
+	if err := db.UpdateLLMConfigById(ctx, llm); err != nil {
+		t.Fatalf("disable llm: %v", err)
+	}
+	_, err = db.ResolveAgentRuntimeSnapshotByDeviceType(ctx, "my-robot")
+	if !errors.Is(err, ErrReferencedLLMDisabled) {
+		t.Errorf("expected ErrReferencedLLMDisabled, got %v", err)
+	}
+	llm.Enabled = true
+	_ = db.UpdateLLMConfigById(ctx, llm)
+
+	// 7. TTS 被禁用 Fail Fast
+	tts.Enabled = false
+	if err := db.UpdateTTSConfigById(ctx, tts); err != nil {
+		t.Fatalf("disable tts: %v", err)
+	}
+	_, err = db.ResolveAgentRuntimeSnapshotByDeviceType(ctx, "my-robot")
+	if !errors.Is(err, ErrReferencedTTSDisabled) {
+		t.Errorf("expected ErrReferencedTTSDisabled, got %v", err)
+	}
+	tts.Enabled = true
+	_ = db.UpdateTTSConfigById(ctx, tts)
+
+	// 8. 智能体被删除后点查 Fail Fast
+	if err := db.DeleteAgentConfig(ctx, agent.Id); err != nil {
+		t.Fatalf("delete agent: %v", err)
+	}
+	_, err = db.ResolveAgentRuntimeSnapshotByDeviceType(ctx, "my-robot")
+	if !errors.Is(err, ErrAgentConfigNotFound) {
+		t.Errorf("expected ErrAgentConfigNotFound, got %v", err)
+	}
+}
+

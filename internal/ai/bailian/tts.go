@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,7 +16,7 @@ import (
 	"github.com/coder/websocket"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
-	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/database"
 )
 
 // maxTTSReadMessageBytes 定义百炼 TTS WebSocket 单帧最大读取字节数（4 MiB），满足 24 kHz PCM 块下发需求。
@@ -34,47 +35,47 @@ type TTSClient struct {
 	httpClient        *http.Client
 }
 
-// NewTTSClient 基于服务端配置构造百炼 TTS 客户端实例。
-func NewTTSClient(cfg *config.Config) (*TTSClient, error) {
+// NewTTSClient 基于数据库 TTS 配置实体与 Agent 指定音色构造百炼 TTS 客户端实例。
+func NewTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (*TTSClient, error) {
 	if cfg == nil {
-		return nil, errors.New("config cannot be nil")
+		return nil, errors.New("tts config cannot be nil")
 	}
-	if cfg.DashScopeAPIKey == "" {
+	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, errors.New("dashscope api key is required")
 	}
-	if cfg.AI.Bailian.WSEndpoint == "" {
+	if strings.TrimSpace(cfg.Endpoint) == "" {
 		return nil, errors.New("bailian ws endpoint is required")
 	}
-	if cfg.AI.Bailian.TTSModel == "" {
+	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, errors.New("bailian tts model is required")
 	}
-	if cfg.AI.Bailian.TTSVoice == "" {
-		return nil, errors.New("bailian tts voice is required")
+	trimmedVoice := strings.TrimSpace(voice)
+	if trimmedVoice == "" {
+		return nil, errors.New("voice cannot be empty")
 	}
 
-	timeout := cfg.AI.Bailian.TTSConnectTimeout
+	timeout := time.Duration(cfg.ConnectTimeoutMS) * time.Millisecond
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
 
-	firstAudioTimeout := cfg.AI.Bailian.TTSFirstAudioTimeout
+	firstAudioTimeout := time.Duration(cfg.FirstAudioTimeoutMS) * time.Millisecond
 	if firstAudioTimeout <= 0 {
 		firstAudioTimeout = 5 * time.Second
 	}
 
-	sentenceTimeout := cfg.AI.Bailian.TTSSentenceTimeout
+	sentenceTimeout := time.Duration(cfg.SentenceTimeoutMS) * time.Millisecond
 	if sentenceTimeout <= 0 {
 		sentenceTimeout = 20 * time.Second
 	}
 
-	queueCap := cfg.Session.TTSPCMQueueCapacity
 	if queueCap <= 0 {
 		queueCap = 100
 	}
 
 	var httpClient *http.Client
-	if cfg.Proxy.Enabled && cfg.Proxy.URL != "" {
-		proxyURL, err := url.Parse(cfg.Proxy.URL)
+	if strings.TrimSpace(cfg.ProxyURL) != "" {
+		proxyURL, err := url.Parse(strings.TrimSpace(cfg.ProxyURL))
 		if err != nil {
 			return nil, fmt.Errorf("parse proxy url: %w", err)
 		}
@@ -86,10 +87,10 @@ func NewTTSClient(cfg *config.Config) (*TTSClient, error) {
 	}
 
 	return &TTSClient{
-		endpoint:          cfg.AI.Bailian.WSEndpoint,
-		apiKey:            cfg.DashScopeAPIKey,
-		model:             cfg.AI.Bailian.TTSModel,
-		voice:             cfg.AI.Bailian.TTSVoice,
+		endpoint:          strings.TrimSpace(cfg.Endpoint),
+		apiKey:            strings.TrimSpace(cfg.APIKey),
+		model:             strings.TrimSpace(cfg.Model),
+		voice:             trimmedVoice,
 		connectTimeout:    timeout,
 		firstAudioTimeout: firstAudioTimeout,
 		sentenceTimeout:   sentenceTimeout,

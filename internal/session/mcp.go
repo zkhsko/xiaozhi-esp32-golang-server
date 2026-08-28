@@ -389,10 +389,7 @@ func FormatDeviceToolsPrompt(tools []ai.Tool) string {
 // buildSystemPromptLocked 在持有锁的前提下计算当前会话实际生效的系统提示词。
 // 将控制提示词与工具列表（设备 MCP 工具在前，服务端工具拼接在后）整理为段落追加到基础系统提示词最后。
 func (s *Session) buildSystemPromptLocked() string {
-	var basePrompt string
-	if s.cfg != nil {
-		basePrompt = s.cfg.Session.SystemPrompt
-	}
+	basePrompt := s.systemPrompt
 
 	serverTools := DefaultServerTools()
 	deviceTools := s.mcpTools

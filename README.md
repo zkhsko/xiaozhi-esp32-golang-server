@@ -50,8 +50,6 @@ server:
 
 在终端设置环境变量（敏感凭据不写入配置文件）：
 ```bash
-export DASHSCOPE_API_KEY="sk-your-dashscope-api-key"
-
 # 数据库连接串（支持 sqlite / mysql / postgres）：
 # SQLite:
 export DATABASE_DSN="file:xiaozhi-dev.db?_journal_mode=WAL&_busy_timeout=5000"
@@ -101,10 +99,10 @@ curl http://127.0.0.1:8080/xiaozhi/ota/
 | `server.websocket_url` | 下发给设备的 WebSocket 地址 | `ws://<局域网IP>:8080/xiaozhi/v1/` |
 | `server.max_concurrent_sessions` | 最大并发会话上限 | `10`（超限返回 503） |
 | `session.max_history_turns` | 上下文保留轮数 | `6`（FIFO 滚动淘汰） |
-| `session.system_prompt` | 系统提示词 | 简明语音助手设定 |
-| `ai.bailian.*` | 百炼 ASR / LLM / TTS 模型 | `qwen-audio-3.0-asr-flash-streaming` / `qwen3.7-flash` / `qwen-audio-3.0-tts-flash` |
-| `proxy.enabled` | 出站代理开关 | `false` |
+| `session.listen_prompt_enabled` | 自动模式提示音开关 | `true` |
 | `database.driver` | 数据库驱动类型（`sqlite` / `mysql` / `postgres`） | `sqlite` |
+
+> **提示：** AI 模型（ASR/LLM/TTS）、音色、提示词及代理配置均已完全纯数据库化，由管理后台或数据表动态驱动，无需在配置文件中配置。
 
 ---
 
@@ -112,7 +110,7 @@ curl http://127.0.0.1:8080/xiaozhi/ota/
 
 - **设备连不上**：检查防火墙是否放行 `8080` 端口；确认 `websocket_url` 是实际局域网 IP（不能是 `127.0.0.1`）；
 - **报 401 错误**：检查设备是否已完成用户绑定并获取到有效 Access Token；数据库中 Token 是否已过期或被撤销；
-- **无声音或超时**：检查 `DASHSCOPE_API_KEY` 是否有效且有余额；
+- **无声音或超时**：检查数据库中配置的 AI 模型 API Key 是否有效且有余额；组件是否处于启用（`enabled=true`）状态；
 - **编译报 opus 缺失**：macOS 运行 `export PKG_CONFIG_PATH="/opt/homebrew/lib/pkgconfig:$PKG_CONFIG_PATH"`。
 
 ---

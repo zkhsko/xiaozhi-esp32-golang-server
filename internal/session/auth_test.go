@@ -3,39 +3,54 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
-type mockTokenFinder struct {
-	tokens map[string]*database.DeviceAccessToken
+type mockDeviceAgentResolver struct {
+	tokens    map[string]*database.DeviceAccessToken
+	snapshots map[string]*database.AgentRuntimeSnapshot
+	snapErr   error
 }
 
-func (m *mockTokenFinder) FindDeviceAccessTokenByAccessToken(ctx context.Context, token string) (*database.DeviceAccessToken, error) {
+func (m *mockDeviceAgentResolver) FindDeviceAccessTokenByAccessToken(ctx context.Context, token string) (*database.DeviceAccessToken, error) {
 	if tok, ok := m.tokens[token]; ok {
 		return tok, nil
 	}
 	return nil, database.ErrAccessTokenNotFound
 }
 
+func (m *mockDeviceAgentResolver) ResolveAgentRuntimeSnapshotByDeviceType(ctx context.Context, deviceType string) (*database.AgentRuntimeSnapshot, error) {
+	if m.snapErr != nil {
+		return nil, m.snapErr
+	}
+	if snap, ok := m.snapshots[deviceType]; ok {
+		return snap, nil
+	}
+	return nil, fmt.Errorf("device type %q: %w", deviceType, database.ErrDeviceTypeNotFound)
+}
+
 func TestAuthenticateUpgrade_Success_TableDataIsAuthority(t *testing.T) {
 	tokenStr := "valid-bearer-token-12345678901234567890"
-	finder := &mockTokenFinder{
+	resolver := &mockDeviceAgentResolver{
 		tokens: map[string]*database.DeviceAccessToken{
 			tokenStr: {
 				SerialNumber: "sn-real-from-table-001",
 				AccessToken:  tokenStr,
+				DeviceType:   "test-device",
 				IssuedAt:     time.Now(),
 			},
 		},
 	}
 
-	// 请求头传入相互冲突的 fake 标识，也不影响最终以表里的 SN 为准
+	// 请求头传入相互冲突的 fake 标识，也不影响最终以表里的 SN 与 DeviceType 为准
 	req := httptest.NewRequest(http.MethodGet, "/xiaozhi/v1/", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenStr)
 	req.Header.Set("Protocol-Version", "1")
@@ -44,24 +59,30 @@ func TestAuthenticateUpgrade_Success_TableDataIsAuthority(t *testing.T) {
 	req.Header.Set("Client-Id", "fake-header-client-id")
 	req.Header.Set("User-Agent", "ESP32-Client/1.0")
 
-	sn, err := AuthenticateUpgrade(req, finder, 0)
+	tok, err := AuthenticateUpgrade(req, resolver, 0)
 	if err != nil {
 		t.Fatalf("expected authentication to succeed, got error: %v", err)
 	}
 
-	// 必须直接返回数据库表中的 SerialNumber (SN)
-	if sn != "sn-real-from-table-001" {
-		t.Errorf("expected SerialNumber %q from table, got %q", "sn-real-from-table-001", sn)
+	if tok == nil {
+		t.Fatal("expected non-nil token entity")
+	}
+	if tok.SerialNumber != "sn-real-from-table-001" {
+		t.Errorf("expected SerialNumber %q from table, got %q", "sn-real-from-table-001", tok.SerialNumber)
+	}
+	if tok.DeviceType != "test-device" {
+		t.Errorf("expected DeviceType %q, got %q", "test-device", tok.DeviceType)
 	}
 }
 
 func TestAuthenticateUpgrade_Success_NoDeviceHeaders(t *testing.T) {
 	tokenStr := "token-without-headers-001"
-	finder := &mockTokenFinder{
+	resolver := &mockDeviceAgentResolver{
 		tokens: map[string]*database.DeviceAccessToken{
 			tokenStr: {
 				SerialNumber: "sn-no-header-001",
 				AccessToken:  tokenStr,
+				DeviceType:   "default",
 				IssuedAt:     time.Now(),
 			},
 		},
@@ -71,20 +92,20 @@ func TestAuthenticateUpgrade_Success_NoDeviceHeaders(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+tokenStr)
 	req.Header.Set("Protocol-Version", "1")
 
-	sn, err := AuthenticateUpgrade(req, finder, 0)
+	tok, err := AuthenticateUpgrade(req, resolver, 0)
 	if err != nil {
 		t.Fatalf("expected auth success without device headers, got: %v", err)
 	}
 
-	if sn != "sn-no-header-001" {
-		t.Errorf("expected SerialNumber %q, got %q", "sn-no-header-001", sn)
+	if tok.SerialNumber != "sn-no-header-001" {
+		t.Errorf("expected SerialNumber %q, got %q", "sn-no-header-001", tok.SerialNumber)
 	}
 }
 
 func TestAuthenticateUpgrade_ValidationAndAuthFailures(t *testing.T) {
 	validToken := "valid-test-token"
 	revokedAt := time.Now().Add(-1 * time.Hour)
-	finder := &mockTokenFinder{
+	resolver := &mockDeviceAgentResolver{
 		tokens: map[string]*database.DeviceAccessToken{
 			validToken: {
 				SerialNumber: "sn-valid",
@@ -205,9 +226,9 @@ func TestAuthenticateUpgrade_ValidationAndAuthFailures(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			r := tc.req()
-			sn, err := AuthenticateUpgrade(r, finder, 0)
+			tok, err := AuthenticateUpgrade(r, resolver, 0)
 			if err == nil {
-				t.Fatalf("expected error, got sn=%q", sn)
+				t.Fatalf("expected error, got tok=%v", tok)
 			}
 			if HTTPStatus(err) != tc.wantStatus {
 				t.Errorf("expected HTTP status %d, got %d", tc.wantStatus, HTTPStatus(err))
@@ -216,6 +237,74 @@ func TestAuthenticateUpgrade_ValidationAndAuthFailures(t *testing.T) {
 				t.Errorf("expected error wrapping %v, got %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestHandler_DynamicLoading_FailFast(t *testing.T) {
+	tokenStr := "valid-token-for-handler"
+	resolver := &mockDeviceAgentResolver{
+		tokens: map[string]*database.DeviceAccessToken{
+			tokenStr: {
+				SerialNumber: "sn-handler-001",
+				AccessToken:  tokenStr,
+				DeviceType:   "unconfigured-device",
+				IssuedAt:     time.Now(),
+			},
+		},
+	}
+
+	h := NewHandler(HandlerOptions{
+		Config: &config.Config{
+			Server: config.ServerConfig{
+				ListenAddr:            ":8080",
+				WebSocketURL:          "ws://localhost:8080/xiaozhi/v1/",
+				MaxConcurrentSessions: 10,
+			},
+		},
+		DB: resolver,
+	})
+
+	// 1. 设备类型不存在 -> HTTP 400
+	req := httptest.NewRequest(http.MethodGet, "/xiaozhi/v1/", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	req.Header.Set("Protocol-Version", "1")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected HTTP 400 for unconfigured device type, got %d", w.Code)
+	}
+
+	// 2. 智能体不存在 -> HTTP 500
+	resolver.snapErr = database.ErrAgentConfigNotFound
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected HTTP 500 for missing agent config, got %d", w.Code)
+	}
+
+	// 3. ASR 被禁用 -> HTTP 500
+	resolver.snapErr = database.ErrReferencedASRDisabled
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected HTTP 500 for disabled asr, got %d", w.Code)
+	}
+
+	// 4. LLM 被禁用 -> HTTP 500
+	resolver.snapErr = database.ErrReferencedLLMDisabled
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected HTTP 500 for disabled llm, got %d", w.Code)
+	}
+
+	// 5. TTS 被禁用 -> HTTP 500
+	resolver.snapErr = database.ErrReferencedTTSDisabled
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected HTTP 500 for disabled tts, got %d", w.Code)
 	}
 }
 

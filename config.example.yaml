@@ -18,27 +18,7 @@ session:
   tts_pcm_queue_capacity: 100
   downlink_opus_queue_capacity: 100
   max_history_turns: 6
-  system_prompt: "你是小智，一个智能语音助手。请用简明、友好的中文回答，回答适合直接语音朗读。"
   listen_prompt_enabled: true
-
-ai:
-  bailian:
-    ws_endpoint: "wss://llm-hi9nns9y8jekpmpt.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
-    llm_endpoint: "https://llm-hi9nns9y8jekpmpt.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-    asr_model: "qwen-audio-3.0-asr-flash-streaming"
-    llm_model: "qwen3.7-flash"
-    tts_model: "qwen-audio-3.0-tts-flash"
-    tts_voice: "longanlingxi"
-    asr_connect_timeout: 10s
-    tts_connect_timeout: 10s
-    llm_first_token_timeout: 15s
-    llm_overall_timeout: 60s
-    tts_first_audio_timeout: 10s
-    tts_sentence_timeout: 15s
-
-proxy:
-  enabled: false
-  url: ""
 
 database:
   driver: "sqlite"

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,7 +19,7 @@ import (
 	"github.com/openai/openai-go/shared"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
-	"xiaozhi-esp32-golang-server/internal/config"
+	"xiaozhi-esp32-golang-server/internal/database"
 )
 
 // LLMClient 实现基于百炼 OpenAI 兼容流式协议的大语言模型客户端。
@@ -31,27 +32,27 @@ type LLMClient struct {
 	client            openai.Client
 }
 
-// NewLLMClient 基于服务端配置构造百炼 LLM 客户端实例。
-func NewLLMClient(cfg *config.Config, opts ...option.RequestOption) (*LLMClient, error) {
+// NewLLMClient 基于数据库 LLM 配置实体构造百炼 LLM 客户端实例。
+func NewLLMClient(cfg *database.LLMConfig, opts ...option.RequestOption) (*LLMClient, error) {
 	if cfg == nil {
-		return nil, errors.New("config cannot be nil")
+		return nil, errors.New("llm config cannot be nil")
 	}
-	if cfg.DashScopeAPIKey == "" {
+	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, errors.New("dashscope api key is required")
 	}
-	if cfg.AI.Bailian.LLMEndpoint == "" {
+	if strings.TrimSpace(cfg.Endpoint) == "" {
 		return nil, errors.New("bailian llm endpoint is required")
 	}
-	if cfg.AI.Bailian.LLMModel == "" {
+	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, errors.New("bailian llm model is required")
 	}
 
-	firstTokenTimeout := cfg.AI.Bailian.LLMFirstTokenTimeout
+	firstTokenTimeout := time.Duration(cfg.FirstTokenTimeoutMS) * time.Millisecond
 	if firstTokenTimeout <= 0 {
 		firstTokenTimeout = 15 * time.Second
 	}
 
-	overallTimeout := cfg.AI.Bailian.LLMOverallTimeout
+	overallTimeout := time.Duration(cfg.OverallTimeoutMS) * time.Millisecond
 	if overallTimeout <= 0 {
 		overallTimeout = 60 * time.Second
 	}
@@ -61,8 +62,8 @@ func NewLLMClient(cfg *config.Config, opts ...option.RequestOption) (*LLMClient,
 	}
 
 	var httpClient *http.Client
-	if cfg.Proxy.Enabled && cfg.Proxy.URL != "" {
-		proxyURL, err := url.Parse(cfg.Proxy.URL)
+	if strings.TrimSpace(cfg.ProxyURL) != "" {
+		proxyURL, err := url.Parse(strings.TrimSpace(cfg.ProxyURL))
 		if err != nil {
 			return nil, fmt.Errorf("parse proxy url: %w", err)
 		}
@@ -74,8 +75,8 @@ func NewLLMClient(cfg *config.Config, opts ...option.RequestOption) (*LLMClient,
 	}
 
 	clientOpts := []option.RequestOption{
-		option.WithBaseURL(cfg.AI.Bailian.LLMEndpoint),
-		option.WithAPIKey(cfg.DashScopeAPIKey),
+		option.WithBaseURL(strings.TrimSpace(cfg.Endpoint)),
+		option.WithAPIKey(strings.TrimSpace(cfg.APIKey)),
 		option.WithMaxRetries(0),
 	}
 	if httpClient != nil {
@@ -86,9 +87,9 @@ func NewLLMClient(cfg *config.Config, opts ...option.RequestOption) (*LLMClient,
 	client := openai.NewClient(clientOpts...)
 
 	return &LLMClient{
-		endpoint:          cfg.AI.Bailian.LLMEndpoint,
-		apiKey:            cfg.DashScopeAPIKey,
-		model:             cfg.AI.Bailian.LLMModel,
+		endpoint:          strings.TrimSpace(cfg.Endpoint),
+		apiKey:            strings.TrimSpace(cfg.APIKey),
+		model:             strings.TrimSpace(cfg.Model),
 		firstTokenTimeout: firstTokenTimeout,
 		overallTimeout:    overallTimeout,
 		client:            client,

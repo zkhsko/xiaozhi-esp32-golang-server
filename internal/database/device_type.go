@@ -401,3 +401,84 @@ func (d *Database) DeleteDeviceTypeByDeviceType(ctx context.Context, deviceType 
 	}
 	return nil
 }
+
+// ResolveAgentRuntimeSnapshotByDeviceType 按 device_type 执行单表分步点查并组装快照。
+// 严格无 JOIN、严格无 Fallback、任何步骤缺失立即 Fail Fast。
+func (d *Database) ResolveAgentRuntimeSnapshotByDeviceType(ctx context.Context, deviceType string) (*AgentRuntimeSnapshot, error) {
+	if d == nil || d.gormDB == nil {
+		return nil, ErrDatabaseInstanceRequired
+	}
+	trimmedType := strings.TrimSpace(deviceType)
+	if trimmedType == "" {
+		return nil, ErrEmptyDeviceType
+	}
+
+	// 1. UK 点查 device_type
+	var dt DeviceType
+	if err := d.gormDB.WithContext(ctx).Where("device_type = ?", trimmedType).Take(&dt).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("device type %q: %w", trimmedType, ErrDeviceTypeNotFound)
+		}
+		return nil, fmt.Errorf("query device type: %w", err)
+	}
+
+	// 2. PK 点查 agent_config
+	var agent AgentConfig
+	if err := d.gormDB.WithContext(ctx).Where("id = ?", dt.AgentConfigId).Take(&agent).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("agent config id %d: %w", dt.AgentConfigId, ErrAgentConfigNotFound)
+		}
+		return nil, fmt.Errorf("query agent config: %w", err)
+	}
+
+	// 3. PK 点查 asr_config
+	var asr ASRConfig
+	if err := d.gormDB.WithContext(ctx).Where("id = ?", agent.ASRConfigId).Take(&asr).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("asr config id %d: %w", agent.ASRConfigId, ErrReferencedASRNotFound)
+		}
+		return nil, fmt.Errorf("query asr config: %w", err)
+	}
+	if !asr.Enabled {
+		return nil, fmt.Errorf("asr config id %d: %w", asr.Id, ErrReferencedASRDisabled)
+	}
+
+	// 4. PK 点查 llm_config
+	var llm LLMConfig
+	if err := d.gormDB.WithContext(ctx).Where("id = ?", agent.LLMConfigId).Take(&llm).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("llm config id %d: %w", agent.LLMConfigId, ErrReferencedLLMNotFound)
+		}
+		return nil, fmt.Errorf("query llm config: %w", err)
+	}
+	if !llm.Enabled {
+		return nil, fmt.Errorf("llm config id %d: %w", llm.Id, ErrReferencedLLMDisabled)
+	}
+
+	// 5. PK 点查 tts_config
+	var tts TTSConfig
+	if err := d.gormDB.WithContext(ctx).Where("id = ?", agent.TTSConfigId).Take(&tts).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("tts config id %d: %w", agent.TTSConfigId, ErrReferencedTTSNotFound)
+		}
+		return nil, fmt.Errorf("query tts config: %w", err)
+	}
+	if !tts.Enabled {
+		return nil, fmt.Errorf("tts config id %d: %w", tts.Id, ErrReferencedTTSDisabled)
+	}
+
+	// 内存组装 Snapshot
+	return &AgentRuntimeSnapshot{
+		Agent: AgentSnapshot{
+			Id:           agent.Id,
+			Name:         agent.Name,
+			SystemPrompt: agent.SystemPrompt,
+			Voice:        agent.Voice,
+			Enabled:      agent.Enabled,
+		},
+		ASRConfig: asr,
+		LLMConfig: llm,
+		TTSConfig: tts,
+	}, nil
+}
+

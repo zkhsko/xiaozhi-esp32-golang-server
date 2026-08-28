@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"xiaozhi-esp32-golang-server/internal/ai/bailian"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/database"
 	"xiaozhi-esp32-golang-server/internal/logger"
@@ -38,10 +37,6 @@ func main() {
 		"listen_addr", cfg.Server.ListenAddr,
 		"websocket_url", cfg.Server.WebSocketURL,
 		"max_concurrent_sessions", cfg.Server.MaxConcurrentSessions,
-		"asr_model", cfg.AI.Bailian.ASRModel,
-		"llm_model", cfg.AI.Bailian.LLMModel,
-		"tts_model", cfg.AI.Bailian.TTSModel,
-		"proxy_enabled", cfg.Proxy.Enabled,
 		"database_driver", cfg.Database.Driver,
 	)
 
@@ -60,33 +55,12 @@ func main() {
 	}()
 	slog.Info("database initialized successfully", "driver", cfg.Database.Driver)
 
-	asrClient, err := bailian.NewASRClient(cfg)
-	if err != nil {
-		slog.Error("failed to initialize bailian asr client", "error", err)
-		os.Exit(1)
-	}
-
-	llmClient, err := bailian.NewLLMClient(cfg)
-	if err != nil {
-		slog.Error("failed to initialize bailian llm client", "error", err)
-		os.Exit(1)
-	}
-
-	ttsClient, err := bailian.NewTTSClient(cfg)
-	if err != nil {
-		slog.Error("failed to initialize bailian tts client", "error", err)
-		os.Exit(1)
-	}
-
 	sessionLimiter := session.NewSessionLimiter(cfg.Server.MaxConcurrentSessions)
 	websocketSessionHandler := session.NewHandler(session.HandlerOptions{
-		Config:    cfg,
-		DB:        db,
-		Limiter:   sessionLimiter,
-		ASRClient: asrClient,
-		LLMClient: llmClient,
-		TTSClient: ttsClient,
-		Logger:    slog.Default(),
+		Config:  cfg,
+		DB:      db,
+		Limiter: sessionLimiter,
+		Logger:  slog.Default(),
 	})
 
 	adminHandler := router.NewAdminHandler(cfg, db, slog.Default())

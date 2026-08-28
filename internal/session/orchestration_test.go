@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
-	"xiaozhi-esp32-golang-server/internal/config"
 )
 
 type mockTTSStream struct {
@@ -599,13 +598,8 @@ func TestOrchestrateLLMAndTTS_ContextCanceled(t *testing.T) {
 
 func TestSession_SystemPrompt_ToolsOrderingAndFormatting(t *testing.T) {
 	t.Run("only server tools when no device tools", func(t *testing.T) {
-		cfg := &config.Config{
-			Session: config.SessionConfig{
-				SystemPrompt: "你是小智助手。",
-			},
-		}
 		sess := &Session{
-			cfg: cfg,
+			systemPrompt: "你是小智助手。",
 		}
 
 		prompt := sess.SystemPrompt()
@@ -621,13 +615,8 @@ func TestSession_SystemPrompt_ToolsOrderingAndFormatting(t *testing.T) {
 	})
 
 	t.Run("device tools first followed by server tools in single json", func(t *testing.T) {
-		cfg := &config.Config{
-			Session: config.SessionConfig{
-				SystemPrompt: "你是小智助手。",
-			},
-		}
 		sess := &Session{
-			cfg: cfg,
+			systemPrompt: "你是小智助手。",
 			mcpTools: []ai.Tool{
 				{
 					Name:        "self.lamp.turn_on",

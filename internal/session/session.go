@@ -74,6 +74,7 @@ type event struct {
 type Session struct {
 	conn         *websocket.Conn
 	serialNumber string
+	systemPrompt string
 	cfg          *config.Config
 	asrClient   ai.ASRClient
 	llmClient   ai.LLMClient
@@ -125,6 +126,7 @@ type Options struct {
 	Conn          *websocket.Conn
 	Writer        *Writer
 	SerialNumber  string
+	SystemPrompt  string
 	Config        *config.Config
 	ASRClient     ai.ASRClient
 	LLMClient     ai.LLMClient
@@ -170,6 +172,7 @@ func NewSession(ctx context.Context, opts Options) *Session {
 	return &Session{
 		conn:          opts.Conn,
 		serialNumber:  opts.SerialNumber,
+		systemPrompt:  opts.SystemPrompt,
 		cfg:           opts.Config,
 		asrClient:     opts.ASRClient,
 		llmClient:     opts.LLMClient,
