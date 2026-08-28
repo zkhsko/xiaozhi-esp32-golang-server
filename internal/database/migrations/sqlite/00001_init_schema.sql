@@ -70,8 +70,8 @@ CREATE TABLE IF NOT EXISTS device_access_token (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- device_agent_ref: 设备类型与 Agent 配置关联表
-CREATE TABLE IF NOT EXISTS device_agent_ref (
+-- device_type: 设备类型与 Agent 配置关联表
+CREATE TABLE IF NOT EXISTS device_type (
     id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- 关联记录自增主键
     device_type VARCHAR(32) NOT NULL,                               -- 设备类型（全局业务唯一）
     agent_config_id INTEGER NOT NULL,                               -- 关联的 Agent 配置 ID
@@ -82,8 +82,8 @@ CREATE TABLE IF NOT EXISTS device_agent_ref (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_device_agent_ref_agent_config_id: Agent 配置 ID 普通索引
-CREATE INDEX IF NOT EXISTS idx_device_agent_ref_agent_config_id ON device_agent_ref(agent_config_id);
+-- idx_agent_config_id: Agent 配置 ID 普通索引
+CREATE INDEX IF NOT EXISTS idx_agent_config_id ON device_type(agent_config_id);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -189,7 +189,7 @@ DROP TABLE IF EXISTS llm_config;
 DROP TABLE IF EXISTS asr_config;
 -- +goose StatementEnd
 -- +goose StatementBegin
-DROP TABLE IF EXISTS device_agent_ref;
+DROP TABLE IF EXISTS device_type;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
