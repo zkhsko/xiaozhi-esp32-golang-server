@@ -54,15 +54,15 @@ var (
 // AgentConfig 映射 agent_config AI Agent 配置表。
 //
 // 业务用途：
-// 通过外键自由组合一条 ASR、一条 LLM 和一条 TTS 配置，独立保存系统提示词和音色。
+// 自由组合一条 ASR、一条 LLM 和一条 TTS 配置，独立保存系统提示词和音色。
 // 全局通过 enabled = true 标记当前生效的 Agent。
 //
 // 字段约束与索引规范：
 // - id: 主键自增。
 // - name: 展示名称，非唯一（允许重复），最大 128 字节。
-// - asr_config_id: 引用 asr_config.id，非空，普通索引 idx_agent_config_asr_config_id，外键 RESTRICT。
-// - llm_config_id: 引用 llm_config.id，非空，普通索引 idx_agent_config_llm_config_id，外键 RESTRICT。
-// - tts_config_id: 引用 tts_config.id，非空，普通索引 idx_agent_config_tts_config_id，外键 RESTRICT。
+// - asr_config_id: 引用 asr_config.id，非空，普通索引 idx_agent_config_asr_config_id。
+// - llm_config_id: 引用 llm_config.id，非空，普通索引 idx_agent_config_llm_config_id。
+// - tts_config_id: 引用 tts_config.id，非空，普通索引 idx_agent_config_tts_config_id。
 // - system_prompt: Agent 系统提示词，最大 16384 字节。
 // - voice: Agent 使用的 TTS 音色，最大 128 字节。
 // - enabled: 是否为当前 Agent（true 表示当前 Agent），普通索引 idx_agent_config_enabled。

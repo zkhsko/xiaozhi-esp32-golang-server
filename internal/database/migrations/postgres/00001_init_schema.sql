@@ -169,10 +169,7 @@ CREATE TABLE IF NOT EXISTS agent_config (
     voice VARCHAR(128) NOT NULL,                                    -- Agent 使用的 TTS 音色
     enabled BOOLEAN NOT NULL DEFAULT FALSE,                         -- 是否为当前 Agent
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,      -- 创建时间
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,      -- 最近更新时间
-    CONSTRAINT fk_agent_config_asr_config_id FOREIGN KEY (asr_config_id) REFERENCES asr_config(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_agent_config_llm_config_id FOREIGN KEY (llm_config_id) REFERENCES llm_config(id) ON DELETE RESTRICT,
-    CONSTRAINT fk_agent_config_tts_config_id FOREIGN KEY (tts_config_id) REFERENCES tts_config(id) ON DELETE RESTRICT
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP       -- 最近更新时间
 );
 -- +goose StatementEnd
 

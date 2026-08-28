@@ -149,10 +149,7 @@ CREATE TABLE IF NOT EXISTS `agent_config` (
     KEY `idx_agent_config_asr_config_id` (`asr_config_id`),
     KEY `idx_agent_config_llm_config_id` (`llm_config_id`),
     KEY `idx_agent_config_tts_config_id` (`tts_config_id`),
-    KEY `idx_agent_config_enabled` (`enabled`),
-    CONSTRAINT `fk_agent_config_asr_config_id` FOREIGN KEY (`asr_config_id`) REFERENCES `asr_config` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
-    CONSTRAINT `fk_agent_config_llm_config_id` FOREIGN KEY (`llm_config_id`) REFERENCES `llm_config` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
-    CONSTRAINT `fk_agent_config_tts_config_id` FOREIGN KEY (`tts_config_id`) REFERENCES `tts_config` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+    KEY `idx_agent_config_enabled` (`enabled`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI Agent 配置表';
 -- +goose StatementEnd
 

@@ -11,7 +11,7 @@
 把当前 YAML 中的 ASR、LLM、TTS、系统提示词和音色迁移到数据库管理，并满足以下能力：
 
 1. ASR、LLM、TTS 各自可以保存多条配置。
-2. `agent_config` 通过三个外键自由组合一条 ASR、一条 LLM 和一条 TTS 配置。
+2. `agent_config` 自由组合一条 ASR、一条 LLM 和一条 TTS 配置。
 3. Agent 独立保存系统提示词和音色。
 4. 相同组件配置可以被多个 Agent 复用。
 5. 全局使用唯一一条 `enabled = true` 的 Agent 作为当前 Agent。
@@ -184,22 +184,21 @@ overall_timeout_ms > first_token_timeout_ms
 | --- | --- | --- | --- |
 | `id` | BIGINT | 主键、自增 | Agent 身份 |
 | `name` | VARCHAR(128) | NOT NULL，非唯一 | 展示名称 |
-| `asr_config_id` | BIGINT | NOT NULL、外键 | 引用 `asr_config.id` |
-| `llm_config_id` | BIGINT | NOT NULL、外键 | 引用 `llm_config.id` |
-| `tts_config_id` | BIGINT | NOT NULL、外键 | 引用 `tts_config.id` |
+| `asr_config_id` | BIGINT | NOT NULL | 引用 `asr_config.id` |
+| `llm_config_id` | BIGINT | NOT NULL | 引用 `llm_config.id` |
+| `tts_config_id` | BIGINT | NOT NULL | 引用 `tts_config.id` |
 | `system_prompt` | TEXT | NOT NULL | Agent 系统提示词 |
 | `voice` | VARCHAR(128) | NOT NULL | Agent 使用的 TTS 音色 |
 | `enabled` | BOOLEAN | NOT NULL DEFAULT FALSE | TRUE 表示当前 Agent |
 | `created_at` | 时间类型 | NOT NULL | 创建时间 |
 | `updated_at` | 时间类型 | NOT NULL | 更新时间 |
 
-索引与外键：
+索引：
 
 - `idx_agent_config_asr_config_id`
 - `idx_agent_config_llm_config_id`
 - `idx_agent_config_tts_config_id`
 - `idx_agent_config_enabled`
-- 三个外键删除策略均为 RESTRICT
 
 不建立：
 
@@ -696,7 +695,7 @@ Agent 的 enabled 同时表示“当前 Agent”，不作为普通保存字段�
 - 原设备数据保持不变；
 - 重名记录创建成功；
 - 按 ID 查询和覆盖；
-- Agent 外键和组件复用；
+- Agent 引用和组件复用；
 - 明文 Key、提示词和音色持久化；
 - 激活事务结束后恰好一个 enabled Agent；
 - 并发激活最后一次成功提交生效且不会留下多个 enabled Agent。

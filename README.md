@@ -54,7 +54,7 @@ export DASHSCOPE_API_KEY="sk-your-dashscope-api-key"
 
 # 数据库连接串（支持 sqlite / mysql / postgres）：
 # SQLite:
-export DATABASE_DSN="file:xiaozhi-dev.db?_foreign_keys=on&_journal_mode=WAL&_busy_timeout=5000"
+export DATABASE_DSN="file:xiaozhi-dev.db?_journal_mode=WAL&_busy_timeout=5000"
 # MySQL 8:
 # export DATABASE_DSN="user:password@tcp(127.0.0.1:3306)/xiaozhi?charset=utf8mb4&parseTime=True&loc=Local"
 # PostgreSQL:
