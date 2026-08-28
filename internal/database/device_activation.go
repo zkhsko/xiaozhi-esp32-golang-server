@@ -181,8 +181,8 @@ func (d *Database) FindDeviceActivationBySerialNumber(ctx context.Context, seria
 // 业务流程（在单一事务中执行）：
 //  1. 激活或更新 device_activation 记录（status=active, device_id, client_id）；
 //  2. 插入或更新 device_user_ref 绑定关系（user_id=userID）；
-//  3. 若 device_hmac_credential 凭证状态为 enabled，更新为 activated；
-//  4. 插入或更新 device_access_token（access_token=accessToken, has_exposed=false, issued_at=now, expires_at=nil, revoked_at=nil）。
+//  3. 从 device_hmac_credential 生产表获取 device_type（若凭证状态为 enabled 则更新为 activated）；
+//  4. 插入或更新 device_access_token（access_token=accessToken, device_type=生产表device_type, has_exposed=false, issued_at=now, expires_at=nil, revoked_at=nil）。
 // 若事务中任一步骤失败，整笔事务全部回滚，保证不出现部分提交。
 func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceID, clientID, accessToken string, userID uint64) (*DeviceActivation, error) {
 	if d == nil || d.gormDB == nil {
@@ -268,14 +268,24 @@ func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceID,
 			}
 		}
 
-		// 3. 更新 device_hmac_credential 凭证状态（若当前为 enabled 则更新为 activated）
-		if err := tx.Model(&DeviceHmacCredential{}).
-			Where("serial_number = ? AND credential_status = ?", trimmedSN, CredentialStatusEnabled).
-			Update("credential_status", CredentialStatusActivated).Error; err != nil {
-			return fmt.Errorf("update device hmac credential status: %w", err)
+		// 3. 从 device_hmac_credential 生产表获取 device_type 并更新凭证状态（若当前为 enabled 则更新为 activated）
+		deviceType := "default"
+		var cred DeviceHmacCredential
+		findCredErr := tx.Where("serial_number = ?", trimmedSN).Take(&cred).Error
+		if findCredErr == nil {
+			if strings.TrimSpace(cred.DeviceType) != "" {
+				deviceType = strings.TrimSpace(cred.DeviceType)
+			}
+			if cred.CredentialStatus == CredentialStatusEnabled {
+				if err := tx.Model(&cred).Update("credential_status", CredentialStatusActivated).Error; err != nil {
+					return fmt.Errorf("update device hmac credential status: %w", err)
+				}
+			}
+		} else if !errors.Is(findCredErr, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("query device hmac credential on bind: %w", findCredErr)
 		}
 
-		// 4. 插入或更新 device_access_token
+		// 4. 插入或更新 device_access_token（冗余生产表的 device_type）
 		var existingToken DeviceAccessToken
 		findTokenErr := tx.Where("serial_number = ?", trimmedSN).Take(&existingToken).Error
 		if findTokenErr != nil && !errors.Is(findTokenErr, gorm.ErrRecordNotFound) {
@@ -286,6 +296,7 @@ func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceID,
 			newToken := DeviceAccessToken{
 				SerialNumber: trimmedSN,
 				AccessToken:  trimmedToken,
+				DeviceType:   deviceType,
 				HasExposed:   false,
 				IssuedAt:     now,
 			}
@@ -295,6 +306,7 @@ func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceID,
 		} else {
 			tokenUpdates := map[string]any{
 				"access_token": trimmedToken,
+				"device_type":  deviceType,
 				"has_exposed":  false,
 				"issued_at":    now,
 				"expires_at":   nil,

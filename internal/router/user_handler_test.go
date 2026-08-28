@@ -66,6 +66,7 @@ func TestBindDeviceWithSN_Success_AndWebSocketAuth(t *testing.T) {
 		{
 			SerialNumber:      testSN,
 			AuthMethod:        database.AuthMethodEfuseHMAC,
+			DeviceType:        "custom-speaker",
 			HMACKeyCiphertext: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			CredentialStatus:  database.CredentialStatusEnabled,
 		},
@@ -149,6 +150,9 @@ func TestBindDeviceWithSN_Success_AndWebSocketAuth(t *testing.T) {
 	}
 	if tok.AccessToken == "" || tok.HasExposed {
 		t.Errorf("unexpected token record: %+v", tok)
+	}
+	if tok.DeviceType != "custom-speaker" {
+		t.Errorf("expected token device_type %q, got %q", "custom-speaker", tok.DeviceType)
 	}
 
 	// 4. Verify cache is cleaned
@@ -398,6 +402,7 @@ func TestBindDeviceWithoutSN_Success_AndWebSocketAuth(t *testing.T) {
 		{
 			SerialNumber:      testSN,
 			AuthMethod:        database.AuthMethodEfuseHMAC,
+			DeviceType:        "display-lcd",
 			HMACKeyCiphertext: testHexKey,
 			CredentialStatus:  database.CredentialStatusEnabled,
 		},
@@ -483,6 +488,9 @@ func TestBindDeviceWithoutSN_Success_AndWebSocketAuth(t *testing.T) {
 	}
 	if tok.AccessToken == "" || tok.HasExposed {
 		t.Errorf("unexpected token record: %+v", tok)
+	}
+	if tok.DeviceType != "display-lcd" {
+		t.Errorf("expected token device_type %q, got %q", "display-lcd", tok.DeviceType)
 	}
 
 	// 4. Verify cache is cleaned

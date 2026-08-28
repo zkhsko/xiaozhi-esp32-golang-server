@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"xiaozhi-esp32-golang-server/internal/admin"
 	"xiaozhi-esp32-golang-server/internal/session"
 )
 
@@ -41,6 +42,9 @@ func NewRouter(opts Options) http.Handler {
 	if opts.Admin != nil {
 		r.Mount("/admin-api", opts.Admin.Routes())
 	}
+
+	// 挂载管理端单页前端静态资源
+	r.Mount("/admin", http.StripPrefix("/admin", admin.Handler()))
 
 	return r
 }

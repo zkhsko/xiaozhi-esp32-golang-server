@@ -188,12 +188,14 @@ func TestBindDeviceWithSN_InitialSuccess(t *testing.T) {
 	testClientID := "client-bind-001"
 	testToken := "token-bind-11112222333344445555666677778888"
 	testUserID := uint64(101)
+	testDeviceType := "esp32-s3-robot"
 
-	// Preset credential as enabled
+	// Preset credential as enabled with specific device_type
 	err := db.BatchCreateDeviceHmacCredentials(ctx, []*DeviceHmacCredential{
 		{
 			SerialNumber:      testSN,
 			AuthMethod:        AuthMethodEfuseHMAC,
+			DeviceType:        testDeviceType,
 			HMACKeyCiphertext: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			CredentialStatus:  CredentialStatusEnabled,
 		},
@@ -233,13 +235,16 @@ func TestBindDeviceWithSN_InitialSuccess(t *testing.T) {
 		t.Errorf("expected credential status %q, got %q", CredentialStatusActivated, cred.CredentialStatus)
 	}
 
-	// 4. Verify access token record
+	// 4. Verify access token record and redundant device_type from production table
 	tok, err := db.FindDeviceAccessTokenByAccessToken(ctx, testToken)
 	if err != nil {
 		t.Fatalf("FindDeviceAccessTokenByAccessToken failed: %v", err)
 	}
 	if tok.SerialNumber != testSN || tok.HasExposed {
 		t.Errorf("unexpected access token record: %+v", tok)
+	}
+	if tok.DeviceType != testDeviceType {
+		t.Errorf("expected token DeviceType %q, got %q", testDeviceType, tok.DeviceType)
 	}
 }
 
@@ -375,5 +380,41 @@ func TestBindDeviceWithSN_ValidationErrors(t *testing.T) {
 	_, err = db.BindDeviceWithSN(ctx, "sn", "dev", "cli", "tok", 0)
 	if !errors.Is(err, ErrEmptyUserID) {
 		t.Errorf("expected ErrEmptyUserID, got: %v", err)
+	}
+}
+
+func TestBindDeviceWithSN_RedundantDeviceTypeFromCredential(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	testSN := "sn-device-type-001"
+	expectedType := "mixgo-nova"
+
+	// 1. Preset credential with custom device type
+	err := db.BatchCreateDeviceHmacCredentials(ctx, []*DeviceHmacCredential{
+		{
+			SerialNumber:      testSN,
+			DeviceType:        expectedType,
+			HMACKeyCiphertext: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		},
+	})
+	if err != nil {
+		t.Fatalf("BatchCreateDeviceHmacCredentials failed: %v", err)
+	}
+
+	// 2. Bind and activate device
+	testToken := "token-custom-dev-type-123456789012"
+	_, err = db.BindDeviceWithSN(ctx, testSN, "dev-01", "cli-01", testToken, 1)
+	if err != nil {
+		t.Fatalf("BindDeviceWithSN failed: %v", err)
+	}
+
+	// 3. Verify token has the redundant device_type from device_hmac_credential
+	tok, err := db.FindDeviceAccessTokenByAccessToken(ctx, testToken)
+	if err != nil {
+		t.Fatalf("FindDeviceAccessTokenByAccessToken failed: %v", err)
+	}
+	if tok.DeviceType != expectedType {
+		t.Errorf("expected token device_type %q, got %q", expectedType, tok.DeviceType)
 	}
 }

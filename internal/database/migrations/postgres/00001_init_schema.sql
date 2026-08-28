@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS device_hmac_credential (
     id BIGSERIAL PRIMARY KEY,                                       -- 凭证内部自增主键
     serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
     auth_method VARCHAR(32) NOT NULL DEFAULT 'efuse_hmac',         -- 认证方式：efuse_hmac / activation_code / manual_code_hmac
+    device_type VARCHAR(32) NOT NULL DEFAULT 'default',             -- 设备类型（用于关联 agent）
     hmac_key_ciphertext VARCHAR(64) NOT NULL,                      -- HMAC Key（统一字段名 hmac_key_ciphertext，64位十六进制字符，可直接写入 hmac_0）
     credential_status VARCHAR(16) NOT NULL DEFAULT 'enabled',      -- 凭证状态：enabled / activated / blocked / revoked
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,     -- 凭证创建时间
@@ -65,6 +66,7 @@ CREATE TABLE IF NOT EXISTS device_access_token (
     id BIGSERIAL PRIMARY KEY,                                       -- Token 凭证内部自增主键
     serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
     access_token VARCHAR(128) NOT NULL,                                   -- 设备 Access Token 明文
+    device_type VARCHAR(32) NOT NULL DEFAULT 'default',             -- 设备类型（冗余自生产表，用于关联 agent）
     has_exposed BOOLEAN NOT NULL DEFAULT FALSE,                     -- 是否已在 OTA 接口展示下发过（FALSE: 待展示下发, TRUE: 已展示下发）
     issued_at TIMESTAMPTZ NOT NULL,                                 -- Token 签发时间
     expires_at TIMESTAMPTZ DEFAULT NULL,                           -- Token 过期时间（为空表示无固定过期时间）

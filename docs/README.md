@@ -8,7 +8,16 @@
 - `agents/`：面向实现、审查和验证的详细文档。
 - 除本 README 外，文档必须放入对应目录。
 
-## 文档索引(略，不维护)
+## 文档索引
+
+### Agents 详细文档
+
+- [架构与需求详细事实基线](agents/requirements-and-architecture.md)
+- [ASR、LLM、TTS 与 Agent 数据库配置改造方案](agents/ai-agent-config-database-design.md)
+
+### 人类文档
+
+- [项目概览](humans/project-overview.md)
 
 
 ## 人类文档约定

@@ -30,6 +30,7 @@ var (
 // - id: 自增主键。
 // - serial_number: 设备序列号，全局业务唯一，唯一索引 uk_serial_number。
 // - access_token: 设备 Access Token 明文，非空且全局唯一，唯一索引 uk_access_token。
+// - device_type: 设备类型（冗余自生产表，默认 default，用于关联 agent）。
 // - has_exposed: 是否已在 OTA 接口展示下发过（false: 待展示下发, true: 已展示下发）。
 // - issued_at: Token 签发时间。
 // - expires_at: Token 过期时间，可为空（为空表示无固定过期时间）。
@@ -40,6 +41,7 @@ type DeviceAccessToken struct {
 	ID           uint64     `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	SerialNumber string     `gorm:"uniqueIndex:uk_serial_number;column:serial_number;size:64;not null" json:"serial_number"`
 	AccessToken  string     `gorm:"uniqueIndex:uk_access_token;column:access_token;size:128;not null" json:"access_token"`
+	DeviceType   string     `gorm:"column:device_type;size:32;not null;default:'default'" json:"device_type"` // 设备类型（冗余自生产表，用于关联 agent）
 	HasExposed   bool       `gorm:"column:has_exposed;not null;default:false" json:"has_exposed"`
 	IssuedAt     time.Time  `gorm:"column:issued_at;not null" json:"issued_at"`
 	ExpiresAt    *time.Time `gorm:"column:expires_at" json:"expires_at,omitempty"`
@@ -138,6 +140,11 @@ func (d *Database) UpsertDeviceAccessToken(ctx context.Context, token *DeviceAcc
 		return ErrEmptyAccessToken
 	}
 
+	token.DeviceType = strings.TrimSpace(token.DeviceType)
+	if token.DeviceType == "" {
+		token.DeviceType = "default"
+	}
+
 	if token.IssuedAt.IsZero() {
 		token.IssuedAt = time.Now()
 	}
@@ -162,6 +169,7 @@ func (d *Database) UpsertDeviceAccessToken(ctx context.Context, token *DeviceAcc
 
 	updates := map[string]any{
 		"access_token": trimmedToken,
+		"device_type":  token.DeviceType,
 		"has_exposed":  token.HasExposed,
 		"issued_at":    token.IssuedAt,
 		"expires_at":   token.ExpiresAt,

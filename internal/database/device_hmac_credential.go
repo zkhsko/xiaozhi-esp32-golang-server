@@ -48,12 +48,14 @@ var (
 // - id: 自增主键。
 // - serial_number: 设备序列号，不可为空且全局唯一，唯一索引 uk_serial_number。
 // - auth_method: 认证激活方式（efuse_hmac）。
+// - device_type: 设备类型（默认 default，用于关联 agent）。
 // - hmac_key_ciphertext: HMAC Key（统一字段名 hmac_key_ciphertext，64位十六进制字符串，可直接写入 hmac_0），不可为空。
 // - credential_status: 凭证状态（enabled / activated），无索引。
 type DeviceHmacCredential struct {
 	ID                uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 	SerialNumber      string    `gorm:"uniqueIndex:uk_serial_number;column:serial_number;size:64;not null" json:"serial_number"`
 	AuthMethod        string    `gorm:"column:auth_method;size:32;not null;default:'efuse_hmac'" json:"auth_method"`
+	DeviceType        string    `gorm:"column:device_type;size:32;not null;default:'default'" json:"device_type"` // 设备类型，用于关联 agent
 	HMACKeyCiphertext string    `gorm:"column:hmac_key_ciphertext;size:64;not null" json:"-"`
 	CredentialStatus  string    `gorm:"column:credential_status;size:16;not null;default:'enabled'" json:"credential_status"`
 	CreatedAt         time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
@@ -123,6 +125,10 @@ func (d *Database) BatchCreateDeviceHmacCredentials(ctx context.Context, creds [
 		}
 		if cred.AuthMethod == "" {
 			cred.AuthMethod = AuthMethodEfuseHMAC
+		}
+		cred.DeviceType = strings.TrimSpace(cred.DeviceType)
+		if cred.DeviceType == "" {
+			cred.DeviceType = "default"
 		}
 		if cred.CredentialStatus == "" {
 			cred.CredentialStatus = CredentialStatusEnabled

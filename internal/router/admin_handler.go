@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -26,7 +27,8 @@ const (
 
 // GenerateCredentialRequest 映射 POST /admin-api/device-hmac-credential/generate 提交的请求体与参数。
 type GenerateCredentialRequest struct {
-	Count int `json:"count"` // 生成数量（默认 1，最大 1000）
+	Count      int    `json:"count"`       // 生成数量（默认 1，最大 1000）
+	DeviceType string `json:"device_type"` // 设备类型（默认 default，用于关联 agent）
 }
 
 // CredentialItem 表示单条生成的设备 HMAC 凭证 DTO。
@@ -35,6 +37,7 @@ type CredentialItem struct {
 	SerialNumber     string    `json:"serial_number"`
 	HMACKey          string    `json:"hmac_key"` // 16 进制 hex 编码密钥
 	AuthMethod       string    `json:"auth_method"`
+	DeviceType       string    `json:"device_type"` // 设备类型（用于关联 agent）
 	CredentialStatus string    `json:"credential_status"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
@@ -103,6 +106,11 @@ func (h *AdminHandler) handleGenerateCredential(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	deviceType := strings.TrimSpace(req.DeviceType)
+	if deviceType == "" {
+		deviceType = "default"
+	}
+
 	records := make([]*database.DeviceHmacCredential, 0, count)
 	items := make([]CredentialItem, 0, count)
 
@@ -125,6 +133,7 @@ func (h *AdminHandler) handleGenerateCredential(w http.ResponseWriter, r *http.R
 		rec := &database.DeviceHmacCredential{
 			SerialNumber:      curSN,
 			AuthMethod:        database.AuthMethodEfuseHMAC,
+			DeviceType:        deviceType,
 			HMACKeyCiphertext: keyHex,
 			CredentialStatus:  database.CredentialStatusEnabled,
 		}
@@ -133,6 +142,7 @@ func (h *AdminHandler) handleGenerateCredential(w http.ResponseWriter, r *http.R
 			SerialNumber:     curSN,
 			HMACKey:          keyHex,
 			AuthMethod:       database.AuthMethodEfuseHMAC,
+			DeviceType:        deviceType,
 			CredentialStatus: database.CredentialStatusEnabled,
 		})
 	}
@@ -214,6 +224,9 @@ func (h *AdminHandler) readAndValidateGenerateRequest(w http.ResponseWriter, r *
 				req.Count = c
 			}
 		}
+	}
+	if req.DeviceType == "" {
+		req.DeviceType = r.URL.Query().Get("device_type")
 	}
 
 	return req, true

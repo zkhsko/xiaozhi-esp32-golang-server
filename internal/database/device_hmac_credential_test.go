@@ -39,11 +39,13 @@ func TestDeviceHmacCredentialCRUD(t *testing.T) {
 
 	testSN := "test-sn-001"
 	testHexKey := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	testDeviceType := "robot-dog"
 
 	creds := []*DeviceHmacCredential{
 		{
 			SerialNumber:      testSN,
 			AuthMethod:        AuthMethodEfuseHMAC,
+			DeviceType:        testDeviceType,
 			HMACKeyCiphertext: testHexKey,
 			CredentialStatus:  CredentialStatusEnabled,
 		},
@@ -60,6 +62,9 @@ func TestDeviceHmacCredentialCRUD(t *testing.T) {
 	if found.SerialNumber != testSN {
 		t.Errorf("expected SN %q, got %q", testSN, found.SerialNumber)
 	}
+	if found.DeviceType != testDeviceType {
+		t.Errorf("expected DeviceType %q, got %q", testDeviceType, found.DeviceType)
+	}
 	if found.HMACKeyCiphertext != testHexKey {
 		t.Errorf("expected hex key %q, got %q", testHexKey, found.HMACKeyCiphertext)
 	}
@@ -75,6 +80,7 @@ func TestBatchCreateDeviceHmacCredentials(t *testing.T) {
 	creds := []*DeviceHmacCredential{
 		{
 			SerialNumber:      "batch-sn-1",
+			DeviceType:        "custom-box",
 			HMACKeyCiphertext: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		},
 		{
@@ -91,10 +97,16 @@ func TestBatchCreateDeviceHmacCredentials(t *testing.T) {
 	if err != nil || c1.HMACKeyCiphertext != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("batch item 1 verification failed: %v, item: %+v", err, c1)
 	}
+	if c1.DeviceType != "custom-box" {
+		t.Errorf("expected DeviceType %q, got %q", "custom-box", c1.DeviceType)
+	}
 
 	c2, err := db.FindDeviceHmacCredentialBySerialNumber(ctx, "batch-sn-2")
 	if err != nil || c2.HMACKeyCiphertext != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
 		t.Fatalf("batch item 2 verification failed: %v, item: %+v", err, c2)
+	}
+	if c2.DeviceType != "default" {
+		t.Errorf("expected default DeviceType %q, got %q", "default", c2.DeviceType)
 	}
 }
 

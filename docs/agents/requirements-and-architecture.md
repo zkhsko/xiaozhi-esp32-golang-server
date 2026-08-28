@@ -66,6 +66,7 @@ HTTP / WebSocket 入口 (internal/router)
    - `id`: 主键自增。
    - `serial_number`: VARCHAR(64) UNIQUE NOT NULL，设备序列号。
    - `auth_method`: VARCHAR(32) NOT NULL DEFAULT 'efuse_hmac'（可选 `efuse_hmac` / `activation_code` / `manual_code_hmac`）。
+   - `device_type`: VARCHAR(32) NOT NULL DEFAULT 'default'，设备类型（用于关联 agent）。
    - `hmac_key_ciphertext`: VARCHAR(64) NOT NULL，64 位十六进制 HMAC 密钥。
    - `credential_status`: VARCHAR(16) NOT NULL DEFAULT 'enabled'（`enabled` / `activated` / `blocked` / `revoked`）。
    - `created_at`, `updated_at`: DATETIME NOT NULL。
@@ -88,6 +89,7 @@ HTTP / WebSocket 入口 (internal/router)
    - `id`: 主键自增。
    - `serial_number`: VARCHAR(64) UNIQUE NOT NULL。
    - `access_token`: VARCHAR(128) UNIQUE NOT NULL，明文 Access Token。
+   - `device_type`: VARCHAR(32) NOT NULL DEFAULT 'default'，设备类型（冗余自生产表，用于关联 agent，每次设备激活时更新）。
    - `has_exposed`: INTEGER NOT NULL DEFAULT 0（0: 待下发, 1: 已下发）。
    - `issued_at`: DATETIME NOT NULL。
    - `expires_at`: DATETIME DEFAULT NULL（NULL 表示不过期）。
