@@ -107,7 +107,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_device_agent_ref_device_type ON device_agen
 CREATE INDEX IF NOT EXISTS idx_device_agent_ref_agent_config_id ON device_agent_ref(agent_config_id);
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+-- asr_config: 语音识别 ASR 配置表
+CREATE TABLE IF NOT EXISTS asr_config (
+    id BIGSERIAL PRIMARY KEY,                                       -- 配置内部自增主键
+    name VARCHAR(128) NOT NULL,                                    -- 配置展示名称（非唯一）
+    endpoint VARCHAR(1024) NOT NULL,                               -- ASR WebSocket Endpoint
+    api_key VARCHAR(1024) NOT NULL DEFAULT '',                     -- 明文 API Key（迁移默认记录初始为空）
+    model VARCHAR(255) NOT NULL,                                   -- ASR 模型
+    hotwords TEXT NOT NULL DEFAULT '',                             -- 热词配置，支持大量文本
+    connect_timeout_ms BIGINT NOT NULL DEFAULT 5000,               -- 连接超时，毫秒
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,                         -- 是否允许 Agent 引用
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,     -- 创建时间
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP      -- 最近更新时间
+);
+-- +goose StatementEnd
+
 -- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS asr_config;
+-- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE IF EXISTS device_agent_ref;
 -- +goose StatementEnd

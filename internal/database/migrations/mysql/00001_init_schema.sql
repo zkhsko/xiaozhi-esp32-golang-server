@@ -79,7 +79,27 @@ CREATE TABLE IF NOT EXISTS `device_agent_ref` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='设备类型与 Agent 配置关联表';
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+-- asr_config: 语音识别 ASR 配置表
+CREATE TABLE IF NOT EXISTS `asr_config` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '配置自增主键',
+    `name` VARCHAR(128) NOT NULL COMMENT '配置展示名称（非唯一）',
+    `endpoint` VARCHAR(1024) NOT NULL COMMENT 'ASR WebSocket Endpoint',
+    `api_key` VARCHAR(1024) NOT NULL DEFAULT '' COMMENT '明文 API Key',
+    `model` VARCHAR(255) NOT NULL COMMENT 'ASR 模型',
+    `hotwords` TEXT NOT NULL COMMENT '热词配置，支持大量文本',
+    `connect_timeout_ms` BIGINT NOT NULL DEFAULT 5000 COMMENT '连接超时毫秒',
+    `enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否允许 Agent 引用',
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='语音识别 ASR 配置表';
+-- +goose StatementEnd
+
 -- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS `asr_config`;
+-- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE IF EXISTS `device_agent_ref`;
 -- +goose StatementEnd

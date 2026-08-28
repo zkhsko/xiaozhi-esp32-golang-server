@@ -132,6 +132,7 @@ TTS #3 ──> Agent #1（voice = longanlingxi）
 | `endpoint` | VARCHAR(1024) | NOT NULL | ASR WebSocket Endpoint |
 | `api_key` | VARCHAR(1024) | NOT NULL | 明文 API Key；迁移默认记录初始为空 |
 | `model` | VARCHAR(255) | NOT NULL | ASR 模型 |
+| `hotwords` | TEXT | NOT NULL DEFAULT '' | 热词配置，支持保存大量文本 |
 | `connect_timeout_ms` | BIGINT | NOT NULL | 连接超时，毫秒 |
 | `enabled` | BOOLEAN | NOT NULL DEFAULT TRUE | 是否允许 Agent 引用 |
 | `created_at` | 时间类型 | NOT NULL | 创建时间 |
