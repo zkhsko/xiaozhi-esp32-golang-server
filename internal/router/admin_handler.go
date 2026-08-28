@@ -168,6 +168,53 @@ type BatchDeleteASRConfigRequest struct {
 	IDs []uint64 `json:"ids"`
 }
 
+// LLMConfigItem 表示单条 LLM 配置 DTO（api_key 脱敏为 has_api_key）。
+type LLMConfigItem struct {
+	ID                  uint64    `json:"id"`
+	Name                string    `json:"name"`
+	Provider            string    `json:"provider"`
+	Endpoint            string    `json:"endpoint"`
+	HasAPIKey           bool      `json:"has_api_key"`
+	Model               string    `json:"model"`
+	FirstTokenTimeoutMS int64     `json:"first_token_timeout_ms"`
+	OverallTimeoutMS    int64     `json:"overall_timeout_ms"`
+	Enabled             bool      `json:"enabled"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+// LLMConfigListData LLM 配置列表响应数据。
+type LLMConfigListData struct {
+	Items    []LLMConfigItem `json:"items"`
+	Total    int64           `json:"total"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"page_size"`
+}
+
+// SaveLLMConfigRequest 保存或更新 LLM 配置请求体。
+type SaveLLMConfigRequest struct {
+	ID                  uint64 `json:"id"`
+	Name                string `json:"name"`
+	Provider            string `json:"provider"`
+	Endpoint            string `json:"endpoint"`
+	APIKey              string `json:"api_key"` // write-only；更新时留空表示保留原 Key
+	Model               string `json:"model"`
+	FirstTokenTimeoutMS int64  `json:"first_token_timeout_ms"`
+	OverallTimeoutMS    int64  `json:"overall_timeout_ms"`
+	Enabled             *bool  `json:"enabled"`
+}
+
+// DeleteLLMConfigRequest 删除单条 LLM 配置请求体。
+type DeleteLLMConfigRequest struct {
+	ID uint64 `json:"id"`
+}
+
+// BatchDeleteLLMConfigRequest 批量删除 LLM 配置请求体。
+type BatchDeleteLLMConfigRequest struct {
+	IDs []uint64 `json:"ids"`
+}
+
+
 // AdminHandler 处理 /admin-api/ 管理接口。
 type AdminHandler struct {
 	cfg    *config.Config
@@ -213,6 +260,15 @@ func (h *AdminHandler) Routes() http.Handler {
 	r.Post("/asr-config/update", h.handleSaveASRConfig)
 	r.Post("/asr-config/delete", h.handleDeleteASRConfig)
 	r.Post("/asr-config/batch-delete", h.handleBatchDeleteASRConfigs)
+
+	// LLM Config 接口
+	r.Get("/llm-config", h.handleListLLMConfigs)
+	r.Get("/llm-config/list", h.handleListLLMConfigs)
+	r.Post("/llm-config/save", h.handleSaveLLMConfig)
+	r.Post("/llm-config/update", h.handleSaveLLMConfig)
+	r.Post("/llm-config/delete", h.handleDeleteLLMConfig)
+	r.Post("/llm-config/batch-delete", h.handleBatchDeleteLLMConfigs)
+
 
 	return r
 }
@@ -1008,5 +1064,268 @@ func (h *AdminHandler) handleBatchDeleteASRConfigs(w http.ResponseWriter, r *htt
 		Message: fmt.Sprintf("成功批量删除 %d 条 ASR 配置", len(req.IDs)),
 	})
 }
+
+// handleListLLMConfigs 分页获取 LLM 大语言模型配置列表。
+func (h *AdminHandler) handleListLLMConfigs(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	query := r.URL.Query()
+	page, _ := strconv.Atoi(query.Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(query.Get("page_size"))
+	if pageSize <= 0 {
+		pageSize = 10
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
+
+	filter := database.LLMConfigFilter{
+		Name:     query.Get("name"),
+		Provider: query.Get("provider"),
+		Page:     page,
+		PageSize: pageSize,
+	}
+
+	if enabledStr := query.Get("enabled"); enabledStr != "" {
+		if enabledVal, err := strconv.ParseBool(enabledStr); err == nil {
+			filter.Enabled = &enabledVal
+		}
+	}
+
+	configs, total, err := h.db.ListLLMConfigs(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("failed to list llm configs", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	items := make([]LLMConfigItem, 0, len(configs))
+	for _, cfg := range configs {
+		items = append(items, LLMConfigItem{
+			ID:                  cfg.ID,
+			Name:                cfg.Name,
+			Provider:            cfg.Provider,
+			Endpoint:            cfg.Endpoint,
+			HasAPIKey:           len(strings.TrimSpace(cfg.APIKey)) > 0,
+			Model:               cfg.Model,
+			FirstTokenTimeoutMS: cfg.FirstTokenTimeoutMS,
+			OverallTimeoutMS:    cfg.OverallTimeoutMS,
+			Enabled:             cfg.Enabled,
+			CreatedAt:           cfg.CreatedAt,
+			UpdatedAt:           cfg.UpdatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Data: LLMConfigListData{
+			Items:    items,
+			Total:    total,
+			Page:     page,
+			PageSize: pageSize,
+		},
+	})
+}
+
+// handleSaveLLMConfig 创建或更新 LLM 大语言模型配置（ID 为 0 时创建，ID > 0 时按 ID 覆盖）。
+func (h *AdminHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req SaveLLMConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	firstTokenTimeout := req.FirstTokenTimeoutMS
+	if firstTokenTimeout == 0 {
+		firstTokenTimeout = 5000
+	}
+
+	overallTimeout := req.OverallTimeoutMS
+	if overallTimeout == 0 {
+		overallTimeout = 30000
+	}
+
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+
+	provider := strings.TrimSpace(req.Provider)
+
+	if req.ID == 0 {
+		// 创建新配置
+		cfg := &database.LLMConfig{
+			Name:                strings.TrimSpace(req.Name),
+			Provider:            provider,
+			Endpoint:            strings.TrimSpace(req.Endpoint),
+			APIKey:              strings.TrimSpace(req.APIKey),
+			Model:               strings.TrimSpace(req.Model),
+			FirstTokenTimeoutMS: firstTokenTimeout,
+			OverallTimeoutMS:    overallTimeout,
+			Enabled:             enabled,
+		}
+
+		if err := h.db.CreateLLMConfig(r.Context(), cfg); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, AdminResponse{
+			Success: true,
+			Message: "LLM 配置创建成功",
+			Data: LLMConfigItem{
+				ID:                  cfg.ID,
+				Name:                cfg.Name,
+				Provider:            cfg.Provider,
+				Endpoint:            cfg.Endpoint,
+				HasAPIKey:           len(cfg.APIKey) > 0,
+				Model:               cfg.Model,
+				FirstTokenTimeoutMS: cfg.FirstTokenTimeoutMS,
+				OverallTimeoutMS:    cfg.OverallTimeoutMS,
+				Enabled:             cfg.Enabled,
+				CreatedAt:           cfg.CreatedAt,
+				UpdatedAt:           cfg.UpdatedAt,
+			},
+		})
+		return
+	}
+
+	// 覆盖更新已有配置
+	existing, err := h.db.FindLLMConfigByID(r.Context(), req.ID)
+	if err != nil {
+		if errors.Is(err, database.ErrLLMConfigNotFound) {
+			http.Error(w, "llm config not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	apiKey := existing.APIKey
+	if strings.TrimSpace(req.APIKey) != "" {
+		apiKey = strings.TrimSpace(req.APIKey)
+	}
+
+	if strings.TrimSpace(req.Provider) == "" {
+		provider = existing.Provider
+	}
+
+	if req.Enabled == nil {
+		enabled = existing.Enabled
+	}
+
+	updatedCfg := &database.LLMConfig{
+		ID:                  req.ID,
+		Name:                strings.TrimSpace(req.Name),
+		Provider:            provider,
+		Endpoint:            strings.TrimSpace(req.Endpoint),
+		APIKey:              apiKey,
+		Model:               strings.TrimSpace(req.Model),
+		FirstTokenTimeoutMS: firstTokenTimeout,
+		OverallTimeoutMS:    overallTimeout,
+		Enabled:             enabled,
+	}
+
+	if err := h.db.UpdateLLMConfigByID(r.Context(), updatedCfg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "LLM 配置更新成功",
+		Data: LLMConfigItem{
+			ID:                  updatedCfg.ID,
+			Name:                updatedCfg.Name,
+			Provider:            updatedCfg.Provider,
+			Endpoint:            updatedCfg.Endpoint,
+			HasAPIKey:           len(apiKey) > 0,
+			Model:               updatedCfg.Model,
+			FirstTokenTimeoutMS: updatedCfg.FirstTokenTimeoutMS,
+			OverallTimeoutMS:    updatedCfg.OverallTimeoutMS,
+			Enabled:             updatedCfg.Enabled,
+			UpdatedAt:           time.Now(),
+		},
+	})
+}
+
+// handleDeleteLLMConfig 删除指定 ID 的 LLM 配置记录。
+func (h *AdminHandler) handleDeleteLLMConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req DeleteLLMConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == 0 {
+		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeleteLLMConfig(r.Context(), req.ID); err != nil {
+		if errors.Is(err, database.ErrLLMConfigNotFound) {
+			http.Error(w, "llm config not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to delete llm config", "id", req.ID, "error", err)
+		http.Error(w, "failed to delete llm config", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "LLM 配置删除成功",
+	})
+}
+
+// handleBatchDeleteLLMConfigs 批量删除 LLM 配置记录。
+func (h *AdminHandler) handleBatchDeleteLLMConfigs(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req BatchDeleteLLMConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.BatchDeleteLLMConfigs(r.Context(), req.IDs); err != nil {
+		h.logger.Error("failed to batch delete llm configs", "error", err)
+		http.Error(w, "failed to batch delete llm configs", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: fmt.Sprintf("成功批量删除 %d 条 LLM 配置", len(req.IDs)),
+	})
+}
+
 
 

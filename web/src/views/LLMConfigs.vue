@@ -1,5 +1,5 @@
 <template>
-  <div class="asr-configs-container">
+  <div class="llm-configs-container">
     <!-- 头部卡片：筛选与搜索 -->
     <el-card class="filter-card" shadow="never">
       <el-form :inline="true" :model="searchForm" class="search-form" @keyup.enter="handleSearch">
@@ -19,8 +19,10 @@
           >
             <el-option label="全部平台" value="" />
             <el-option label="阿里百炼" value="bailian" />
-            <el-option label="火山引擎" value="volcengine" />
             <el-option label="OpenAI" value="openai" />
+            <el-option label="DeepSeek" value="deepseek" />
+            <el-option label="火山引擎" value="volcengine" />
+            <el-option label="Ollama" value="ollama" />
           </el-select>
         </el-form-item>
         <el-form-item label="启用状态">
@@ -47,7 +49,7 @@
       <div class="table-toolbar">
         <div class="toolbar-left">
           <el-button type="primary" :icon="Plus" @click="openCreateDialog">
-            新建 ASR 配置
+            新建 LLM 配置
           </el-button>
           <el-button
             type="danger"
@@ -81,7 +83,7 @@
         <el-table-column prop="name" label="配置名称" min-width="160">
           <template #default="{ row }">
             <div class="name-cell">
-              <el-icon class="name-icon"><Microphone /></el-icon>
+              <el-icon class="name-icon"><ChatDotRound /></el-icon>
               <span class="name-text">{{ row.name }}</span>
             </div>
           </template>
@@ -90,7 +92,7 @@
         <el-table-column prop="provider" label="服务平台" width="130" align="center">
           <template #default="{ row }">
             <el-tag
-              :type="row.provider === 'bailian' ? 'primary' : row.provider === 'volcengine' ? 'warning' : 'info'"
+              :type="getProviderTagType(row.provider)"
               effect="plain"
               size="small"
             >
@@ -141,26 +143,15 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="connect_timeout_ms" label="连接超时" width="110" align="center">
+        <el-table-column prop="first_token_timeout_ms" label="首 Token 超时" width="130" align="center">
           <template #default="{ row }">
-            <span>{{ row.connect_timeout_ms }} ms</span>
+            <span>{{ row.first_token_timeout_ms }} ms</span>
           </template>
         </el-table-column>
 
-        <el-table-column prop="hotwords" label="热词配置" min-width="160">
+        <el-table-column prop="overall_timeout_ms" label="总超时时间" width="120" align="center">
           <template #default="{ row }">
-            <div class="hotwords-cell" v-if="row.hotwords && row.hotwords.trim()">
-              <span class="hotwords-preview">{{ getHotwordsPreview(row.hotwords) }}</span>
-              <el-button
-                link
-                type="primary"
-                size="small"
-                @click="openHotwordsDialog(row)"
-              >
-                查看全部 ({{ row.hotwords.length }}字)
-              </el-button>
-            </div>
-            <span v-else class="text-muted">未配置热词</span>
+            <span>{{ row.overall_timeout_ms }} ms</span>
           </template>
         </el-table-column>
 
@@ -198,7 +189,7 @@
                 编辑
               </el-button>
               <el-popconfirm
-                title="确定要删除该 ASR 配置吗？"
+                title="确定要删除该 LLM 配置吗？"
                 confirm-button-text="确定删除"
                 cancel-button-text="取消"
                 confirm-button-type="danger"
@@ -229,10 +220,10 @@
       </div>
     </el-card>
 
-    <!-- 弹窗1：新建 / 编辑 ASR 配置 -->
+    <!-- 弹窗：新建 / 编辑 LLM 配置 -->
     <el-dialog
       v-model="configDialog.visible"
-      :title="configDialog.isEdit ? '编辑 ASR 语音识别配置' : '新建 ASR 语音识别配置'"
+      :title="configDialog.isEdit ? '编辑 LLM 大语言模型配置' : '新建 LLM 大语言模型配置'"
       width="600px"
       :close-on-click-modal="false"
       destroy-on-close
@@ -241,7 +232,7 @@
         ref="configFormRef"
         :model="configDialog.form"
         :rules="configRules"
-        label-width="120px"
+        label-width="130px"
         label-position="right"
       >
         <el-form-item label="配置名称" prop="name">
@@ -251,7 +242,7 @@
             show-word-limit
             clearable
           />
-          <span class="form-item-tip">用于在 Agent 配置中展示与标识此 ASR 配置</span>
+          <span class="form-item-tip">用于在 Agent 配置中展示与标识此 LLM 配置</span>
         </el-form-item>
 
         <el-form-item label="服务平台" prop="provider">
@@ -263,8 +254,10 @@
             style="width: 100%;"
           >
             <el-option label="阿里百炼" value="bailian" />
-            <el-option label="火山引擎" value="volcengine" />
             <el-option label="OpenAI" value="openai" />
+            <el-option label="DeepSeek" value="deepseek" />
+            <el-option label="火山引擎" value="volcengine" />
+            <el-option label="Ollama" value="ollama" />
           </el-select>
         </el-form-item>
 
@@ -273,7 +266,7 @@
             v-model="configDialog.form.endpoint"
             clearable
           />
-          <span class="form-item-tip">ASR WebSocket 协议地址，必须以 ws:// 或 wss:// 开头</span>
+          <span class="form-item-tip">LLM HTTP 协议端点地址，必须以 http:// 或 https:// 开头</span>
         </el-form-item>
 
         <el-form-item label="模型标识" prop="model">
@@ -282,7 +275,7 @@
             maxlength="255"
             clearable
           />
-          <span class="form-item-tip">语音识别模型标识（如 qwen-audio-3.0-asr-flash-streaming / whisper-1）</span>
+          <span class="form-item-tip">大语言模型标识（如 qwen-max / gpt-4o / deepseek-chat）</span>
         </el-form-item>
 
         <el-form-item label="API Key" prop="api_key">
@@ -293,29 +286,32 @@
             clearable
           />
           <span class="form-item-tip">
-            {{ configDialog.isEdit ? '编辑时留空将保留已有 Key，如需修改请输入新 Key' : '用于访问 ASR 服务的 API Key 或鉴权凭据' }}
+            {{ configDialog.isEdit ? '编辑时留空将保留已有 Key，如需修改请输入新 Key' : '用于访问 LLM 服务的 API Key 或鉴权凭据' }}
           </span>
         </el-form-item>
 
-        <el-form-item label="连接超时" prop="connect_timeout_ms">
+        <el-form-item label="首 Token 超时" prop="first_token_timeout_ms">
           <el-input-number
-            v-model="configDialog.form.connect_timeout_ms"
+            v-model="configDialog.form.first_token_timeout_ms"
             :min="3000"
             :max="30000"
             :step="500"
             style="width: 200px;"
           />
           <span style="margin-left: 8px; color: #909399;">毫秒 (ms)</span>
-          <div class="form-item-tip">WebSocket 建立连接的最大超时时间（3000 ~ 30000 毫秒）</div>
+          <div class="form-item-tip">等待模型输出第一个 Token 的最大超时时间（3000 ~ 30000 毫秒）</div>
         </el-form-item>
 
-        <el-form-item label="热词配置" prop="hotwords">
-          <el-input
-            v-model="configDialog.form.hotwords"
-            type="textarea"
-            :rows="5"
+        <el-form-item label="总超时时间" prop="overall_timeout_ms">
+          <el-input-number
+            v-model="configDialog.form.overall_timeout_ms"
+            :min="10000"
+            :max="180000"
+            :step="1000"
+            style="width: 200px;"
           />
-          <span class="form-item-tip">热词必须为合法 JSON 格式（如字符串数组 ["热词1", "热词2"] 或自定义权重对象数组）</span>
+          <span style="margin-left: 8px; color: #909399;">毫秒 (ms)</span>
+          <div class="form-item-tip">大模型完整回复流式生成的最大超时时间（10000 ~ 180000 毫秒，且需大于首 Token 超时）</div>
         </el-form-item>
 
         <el-form-item label="启用状态" prop="enabled">
@@ -334,33 +330,6 @@
         </el-button>
       </template>
     </el-dialog>
-
-    <!-- 弹窗2：查看完整热词配置 -->
-    <el-dialog
-      v-model="hotwordsDialog.visible"
-      title="ASR 识别热词详情"
-      width="560px"
-    >
-      <div class="hotwords-viewer">
-        <div class="viewer-header">
-          <span class="viewer-title">所属配置：{{ hotwordsDialog.configName }}</span>
-          <span class="viewer-stat">共 {{ hotwordsDialog.content.length }} 个字符</span>
-        </div>
-        <el-input
-          v-model="hotwordsDialog.content"
-          type="textarea"
-          :rows="12"
-          readonly
-          class="hotwords-textarea"
-        />
-      </div>
-      <template #footer>
-        <el-button :icon="CopyDocument" @click="copyText(hotwordsDialog.content, '热词配置')">
-          复制热词
-        </el-button>
-        <el-button type="primary" @click="hotwordsDialog.visible = false">关闭</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -374,17 +343,17 @@ import {
   Refresh,
   CopyDocument,
   Edit,
-  Microphone,
+  ChatDotRound,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import {
-  fetchASRConfigs,
-  saveASRConfig,
-  deleteASRConfig,
-  batchDeleteASRConfigs,
-  type ASRConfigItem,
-} from '../api/asrConfig'
+  fetchLLMConfigs,
+  saveLLMConfig,
+  deleteLLMConfig,
+  batchDeleteLLMConfigs,
+  type LLMConfigItem,
+} from '../api/llmConfig'
 
 // 搜索表单
 const searchForm = reactive({
@@ -395,8 +364,8 @@ const searchForm = reactive({
 
 // 表格数据与状态
 const loading = ref(false)
-const tableData = ref<(ASRConfigItem & { _switchLoading?: boolean })[]>([])
-const selectedRows = ref<ASRConfigItem[]>([])
+const tableData = ref<(LLMConfigItem & { _switchLoading?: boolean })[]>([])
+const selectedRows = ref<LLMConfigItem[]>([])
 
 const pagination = reactive({
   page: 1,
@@ -417,8 +386,8 @@ const configDialog = reactive({
     endpoint: '',
     model: '',
     api_key: '',
-    connect_timeout_ms: 5000,
-    hotwords: '',
+    first_token_timeout_ms: 5000,
+    overall_timeout_ms: 30000,
     enabled: true,
   },
 })
@@ -429,23 +398,23 @@ const validateEndpoint = (_rule: any, value: string, callback: any) => {
     return callback(new Error('请输入服务端点 Endpoint'))
   }
   const trimmed = value.trim()
-  if (!trimmed.startsWith('ws://') && !trimmed.startsWith('wss://')) {
-    return callback(new Error('服务端点必须以 ws:// 或 wss:// 开头'))
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return callback(new Error('服务端点必须以 http:// 或 https:// 开头'))
   }
   callback()
 }
 
-// 校验热词 JSON 格式
-const validateHotwordsJSON = (_rule: any, value: string, callback: any) => {
-  if (!value || !value.trim()) {
-    return callback()
+const validateOverallTimeout = (_rule: any, value: number, callback: any) => {
+  if (!value) {
+    return callback(new Error('请输入总超时时间'))
   }
-  try {
-    JSON.parse(value.trim())
-    callback()
-  } catch {
-    callback(new Error('热词配置必须为合法的 JSON 格式（如 ["热词1", "热词2"]）'))
+  if (value < 10000 || value > 180000) {
+    return callback(new Error('总超时时间必须在 10000 ~ 180000 毫秒之间'))
   }
+  if (value <= configDialog.form.first_token_timeout_ms) {
+    return callback(new Error('总超时时间必须大于首 Token 超时时间'))
+  }
+  callback()
 }
 
 const configRules: FormRules = {
@@ -464,26 +433,35 @@ const configRules: FormRules = {
     { required: true, message: '请输入模型标识', trigger: 'blur' },
     { max: 255, message: '模型标识不能超过 255 字符', trigger: 'blur' },
   ],
-  connect_timeout_ms: [
-    { required: true, message: '请输入连接超时时间', trigger: 'blur' },
+  first_token_timeout_ms: [
+    { required: true, message: '请输入首 Token 超时时间', trigger: 'blur' },
   ],
-  hotwords: [
-    { validator: validateHotwordsJSON, trigger: 'blur' },
+  overall_timeout_ms: [
+    { required: true, validator: validateOverallTimeout, trigger: 'blur' },
   ],
 }
 
-// 热词查看弹窗
-const hotwordsDialog = reactive({
-  visible: false,
-  configName: '',
-  content: '',
-})
+// 平台标签颜色映射
+function getProviderTagType(provider: string): '' | 'primary' | 'success' | 'warning' | 'info' | 'danger' {
+  switch (provider) {
+    case 'bailian':
+      return 'primary'
+    case 'openai':
+      return 'success'
+    case 'deepseek':
+      return 'warning'
+    case 'volcengine':
+      return 'info'
+    default:
+      return 'info'
+  }
+}
 
 // 加载列表数据
 async function loadData() {
   loading.value = true
   try {
-    const res = await fetchASRConfigs({
+    const res = await fetchLLMConfigs({
       page: pagination.page,
       page_size: pagination.pageSize,
       name: searchForm.name.trim() || undefined,
@@ -533,7 +511,7 @@ function handleSizeChange(newSize: number) {
 }
 
 // 多选表格
-function handleSelectionChange(rows: ASRConfigItem[]) {
+function handleSelectionChange(rows: LLMConfigItem[]) {
   selectedRows.value = rows
 }
 
@@ -547,24 +525,16 @@ function openCreateDialog() {
     endpoint: '',
     model: '',
     api_key: '',
-    connect_timeout_ms: 5000,
-    hotwords: '',
+    first_token_timeout_ms: 5000,
+    overall_timeout_ms: 30000,
     enabled: true,
   }
   configDialog.visible = true
 }
 
 // 打开编辑弹窗
-function openEditDialog(row: ASRConfigItem) {
+function openEditDialog(row: LLMConfigItem) {
   configDialog.isEdit = true
-  let formattedHotwords = row.hotwords || ''
-  if (formattedHotwords.trim()) {
-    try {
-      formattedHotwords = JSON.stringify(JSON.parse(formattedHotwords), null, 2)
-    } catch {
-      // 保持原样
-    }
-  }
   configDialog.form = {
     id: row.id,
     name: row.name,
@@ -572,26 +542,11 @@ function openEditDialog(row: ASRConfigItem) {
     endpoint: row.endpoint,
     model: row.model,
     api_key: '', // 编辑时默认留空
-    connect_timeout_ms: row.connect_timeout_ms || 5000,
-    hotwords: formattedHotwords,
+    first_token_timeout_ms: row.first_token_timeout_ms || 5000,
+    overall_timeout_ms: row.overall_timeout_ms || 30000,
     enabled: row.enabled,
   }
   configDialog.visible = true
-}
-
-// 打开热词详情弹窗
-function openHotwordsDialog(row: ASRConfigItem) {
-  hotwordsDialog.configName = row.name
-  let content = row.hotwords || ''
-  if (content.trim()) {
-    try {
-      content = JSON.stringify(JSON.parse(content), null, 2)
-    } catch {
-      // 保持原样
-    }
-  }
-  hotwordsDialog.content = content
-  hotwordsDialog.visible = true
 }
 
 // 提交新建/编辑
@@ -608,13 +563,13 @@ async function submitConfig() {
         endpoint: configDialog.form.endpoint.trim(),
         model: configDialog.form.model.trim(),
         api_key: configDialog.form.api_key.trim() || undefined,
-        connect_timeout_ms: configDialog.form.connect_timeout_ms,
-        hotwords: configDialog.form.hotwords,
+        first_token_timeout_ms: configDialog.form.first_token_timeout_ms,
+        overall_timeout_ms: configDialog.form.overall_timeout_ms,
         enabled: configDialog.form.enabled,
       }
-      const res = await saveASRConfig(payload)
+      const res = await saveLLMConfig(payload)
       if (res.success) {
-        ElMessage.success(configDialog.isEdit ? 'ASR 配置更新成功' : 'ASR 配置创建成功')
+        ElMessage.success(configDialog.isEdit ? 'LLM 配置更新成功' : 'LLM 配置创建成功')
         configDialog.visible = false
         loadData()
       } else {
@@ -629,17 +584,17 @@ async function submitConfig() {
 }
 
 // 快速切换启用状态
-async function handleToggleEnabled(row: ASRConfigItem & { _switchLoading?: boolean }, targetVal: boolean) {
+async function handleToggleEnabled(row: LLMConfigItem & { _switchLoading?: boolean }, targetVal: boolean) {
   row._switchLoading = true
   try {
-    const res = await saveASRConfig({
+    const res = await saveLLMConfig({
       id: row.id,
       name: row.name,
       provider: row.provider,
       endpoint: row.endpoint,
       model: row.model,
-      connect_timeout_ms: row.connect_timeout_ms,
-      hotwords: row.hotwords,
+      first_token_timeout_ms: row.first_token_timeout_ms,
+      overall_timeout_ms: row.overall_timeout_ms,
       enabled: targetVal,
     })
     if (res.success) {
@@ -656,11 +611,11 @@ async function handleToggleEnabled(row: ASRConfigItem & { _switchLoading?: boole
 }
 
 // 单条删除
-async function handleDelete(row: ASRConfigItem) {
+async function handleDelete(row: LLMConfigItem) {
   try {
-    const res = await deleteASRConfig(row.id)
+    const res = await deleteLLMConfig(row.id)
     if (res.success) {
-      ElMessage.success('ASR 配置删除成功')
+      ElMessage.success('LLM 配置删除成功')
       loadData()
     } else {
       ElMessage.error(res.message || '删除失败')
@@ -675,7 +630,7 @@ async function handleBatchDelete() {
   if (selectedRows.value.length === 0) return
   try {
     await ElMessageBox.confirm(
-      `确定要批量删除选中的 ${selectedRows.value.length} 条 ASR 配置吗？`,
+      `确定要批量删除选中的 ${selectedRows.value.length} 条 LLM 配置吗？`,
       '批量删除确认',
       {
         confirmButtonText: '确定删除',
@@ -685,7 +640,7 @@ async function handleBatchDelete() {
     )
 
     const ids = selectedRows.value.map((r) => r.id)
-    const res = await batchDeleteASRConfigs(ids)
+    const res = await batchDeleteLLMConfigs(ids)
     if (res.success) {
       ElMessage.success('批量删除成功')
       loadData()
@@ -697,25 +652,6 @@ async function handleBatchDelete() {
       ElMessage.error(`批量删除失败: ${err.message || err}`)
     }
   }
-}
-
-// 热词预览截断
-function getHotwordsPreview(hotwords: string): string {
-  if (!hotwords || !hotwords.trim()) return ''
-  try {
-    const parsed = JSON.parse(hotwords.trim())
-    if (Array.isArray(parsed)) {
-      const preview = parsed.slice(0, 3).map((w: any) => typeof w === 'string' ? w : JSON.stringify(w)).join(', ')
-      return `[${parsed.length}项] ` + preview + (parsed.length > 3 ? '...' : '')
-    }
-  } catch {
-    // 非 JSON 数组时回退普通截断
-  }
-  const singleLine = hotwords.replace(/[\r\n]+/g, ' ').trim()
-  if (singleLine.length > 30) {
-    return singleLine.slice(0, 30) + '...'
-  }
-  return singleLine
 }
 
 // 复制文本
@@ -762,7 +698,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.asr-configs-container {
+.llm-configs-container {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -841,26 +777,6 @@ onMounted(() => {
   opacity: 1;
 }
 
-.hotwords-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.hotwords-preview {
-  font-size: 12px;
-  color: #606266;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 180px;
-}
-
-.text-muted {
-  font-size: 12px;
-  color: #909399;
-}
-
 .action-buttons {
   display: flex;
   align-items: center;
@@ -880,35 +796,5 @@ onMounted(() => {
   color: #909399;
   line-height: 1.4;
   margin-top: 4px;
-}
-
-.hotwords-viewer {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.viewer-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 13px;
-  color: #606266;
-}
-
-.viewer-title {
-  font-weight: 600;
-  color: #303133;
-}
-
-.viewer-stat {
-  color: #909399;
-}
-
-.hotwords-textarea :deep(textarea) {
-  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
-  font-size: 13px;
-  line-height: 1.5;
-  background-color: #fafafa;
 }
 </style>

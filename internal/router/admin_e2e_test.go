@@ -252,5 +252,71 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	if wSPA3.Code != http.StatusOK {
 		t.Fatalf("SPA route for asr-configs failed, code=%d", wSPA3.Code)
 	}
+
+	// 17. LLM 配置 E2E 创建
+	createLLMBody, _ := json.Marshal(SaveLLMConfigRequest{
+		Name:                "E2E 百炼 LLM",
+		Provider:            "bailian",
+		Endpoint:            "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
+		APIKey:              "sk-e2e-llm-key",
+		Model:               "qwen-max",
+		FirstTokenTimeoutMS: 5000,
+		OverallTimeoutMS:    30000,
+	})
+	reqLLMCreate := httptest.NewRequest(http.MethodPost, "/admin-api/llm-config/save", bytes.NewReader(createLLMBody))
+	reqLLMCreate.Header.Set("Content-Type", "application/json")
+	wLLMCreate := httptest.NewRecorder()
+	r.ServeHTTP(wLLMCreate, reqLLMCreate)
+
+	if wLLMCreate.Code != http.StatusOK {
+		t.Fatalf("create llm config failed: %s", wLLMCreate.Body.String())
+	}
+	var llmCreateResp struct {
+		Success bool          `json:"success"`
+		Data    LLMConfigItem `json:"data"`
+	}
+	_ = json.Unmarshal(wLLMCreate.Body.Bytes(), &llmCreateResp)
+	if !llmCreateResp.Success || llmCreateResp.Data.ID == 0 || !llmCreateResp.Data.HasAPIKey || llmCreateResp.Data.Provider != "bailian" {
+		t.Fatalf("unexpected llm create resp: %+v", llmCreateResp)
+	}
+	createdLLMID := llmCreateResp.Data.ID
+
+	// 18. LLM 配置列表查询
+	reqLLMList := httptest.NewRequest(http.MethodGet, "/admin-api/llm-config?name=E2E", nil)
+	wLLMList := httptest.NewRecorder()
+	r.ServeHTTP(wLLMList, reqLLMList)
+
+	if wLLMList.Code != http.StatusOK {
+		t.Fatalf("list llm config failed: %s", wLLMList.Body.String())
+	}
+	var llmListResp struct {
+		Success bool              `json:"success"`
+		Data    LLMConfigListData `json:"data"`
+	}
+	_ = json.Unmarshal(wLLMList.Body.Bytes(), &llmListResp)
+	if llmListResp.Data.Total != 1 || len(llmListResp.Data.Items) != 1 || llmListResp.Data.Items[0].Provider != "bailian" {
+		t.Fatalf("expected 1 LLM config item with provider bailian, got %v", llmListResp.Data.Items)
+	}
+
+	// 19. LLM 配置单条删除
+	delLLMBody, _ := json.Marshal(DeleteLLMConfigRequest{ID: createdLLMID})
+	reqDelLLM := httptest.NewRequest(http.MethodPost, "/admin-api/llm-config/delete", bytes.NewReader(delLLMBody))
+	reqDelLLM.Header.Set("Content-Type", "application/json")
+	wDelLLM := httptest.NewRecorder()
+	r.ServeHTTP(wDelLLM, reqDelLLM)
+
+	if wDelLLM.Code != http.StatusOK {
+		t.Fatalf("delete llm config failed: %s", wDelLLM.Body.String())
+	}
+
+	// 20. 访问 /admin/llm-configs 确保静态 SPA 路由可 fallback 到 index.html
+	reqSPA4 := httptest.NewRequest(http.MethodGet, "/admin/llm-configs", nil)
+	wSPA4 := httptest.NewRecorder()
+	r.ServeHTTP(wSPA4, reqSPA4)
+
+	if wSPA4.Code != http.StatusOK {
+		t.Fatalf("SPA route for llm-configs failed, code=%d", wSPA4.Code)
+	}
 }
+
 

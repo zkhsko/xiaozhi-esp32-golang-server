@@ -1,0 +1,108 @@
+export interface LLMConfigItem {
+  id: number
+  name: string
+  provider: string
+  endpoint: string
+  has_api_key: boolean
+  model: string
+  first_token_timeout_ms: number
+  overall_timeout_ms: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ListQueryParams {
+  page: number
+  page_size: number
+  name?: string
+  provider?: string
+  enabled?: boolean | string
+}
+
+export interface ListResponseData {
+  items: LLMConfigItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface ApiResponse<T = any> {
+  success: boolean
+  message?: string
+  data?: T
+}
+
+export interface SaveLLMConfigParams {
+  id?: number
+  name: string
+  provider?: string
+  endpoint: string
+  api_key?: string
+  model: string
+  first_token_timeout_ms?: number
+  overall_timeout_ms?: number
+  enabled?: boolean
+}
+
+const BASE_URL = '/admin-api'
+
+export async function fetchLLMConfigs(params: ListQueryParams): Promise<ApiResponse<ListResponseData>> {
+  const query = new URLSearchParams()
+  query.set('page', String(params.page))
+  query.set('page_size', String(params.page_size))
+  if (params.name) query.set('name', params.name)
+  if (params.provider) query.set('provider', params.provider)
+  if (params.enabled !== undefined && params.enabled !== '') {
+    query.set('enabled', String(params.enabled))
+  }
+
+  const res = await fetch(`${BASE_URL}/llm-config?${query.toString()}`, { credentials: 'same-origin' })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function saveLLMConfig(params: SaveLLMConfigParams): Promise<ApiResponse<LLMConfigItem>> {
+  const res = await fetch(`${BASE_URL}/llm-config/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+    credentials: 'same-origin',
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function deleteLLMConfig(id: number): Promise<ApiResponse> {
+  const res = await fetch(`${BASE_URL}/llm-config/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+    credentials: 'same-origin',
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function batchDeleteLLMConfigs(ids: number[]): Promise<ApiResponse> {
+  const res = await fetch(`${BASE_URL}/llm-config/batch-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+    credentials: 'same-origin',
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}

@@ -283,3 +283,48 @@ func (d *Database) ListLLMConfigs(ctx context.Context, filter LLMConfigFilter) (
 
 	return configs, total, nil
 }
+
+// DeleteLLMConfig 删除指定 ID 的 LLM 配置记录。
+func (d *Database) DeleteLLMConfig(ctx context.Context, id uint64) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if id == 0 {
+		return ErrInvalidLLMConfigID
+	}
+
+	res := d.gormDB.WithContext(ctx).Where("id = ?", id).Delete(&LLMConfig{})
+	if res.Error != nil {
+		return fmt.Errorf("delete llm config: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return ErrLLMConfigNotFound
+	}
+	return nil
+}
+
+// BatchDeleteLLMConfigs 批量删除指定 ID 列表的 LLM 配置记录。
+func (d *Database) BatchDeleteLLMConfigs(ctx context.Context, ids []uint64) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	validIDs := make([]uint64, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			validIDs = append(validIDs, id)
+		}
+	}
+	if len(validIDs) == 0 {
+		return nil
+	}
+
+	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIDs).Delete(&LLMConfig{}).Error; err != nil {
+		return fmt.Errorf("batch delete llm configs: %w", err)
+	}
+	return nil
+}
+

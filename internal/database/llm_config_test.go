@@ -470,4 +470,76 @@ func TestLLMConfig_NilDB(t *testing.T) {
 	if _, _, err := nilDB.ListLLMConfigs(ctx, LLMConfigFilter{}); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
+	if err := nilDB.DeleteLLMConfig(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
+		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
+	}
+	if err := nilDB.BatchDeleteLLMConfigs(ctx, []uint64{1}); !errors.Is(err, ErrDatabaseInstanceRequired) {
+		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
+	}
 }
+
+func TestLLMConfig_Delete(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	// 1. Delete invalid ID
+	if err := db.DeleteLLMConfig(ctx, 0); !errors.Is(err, ErrInvalidLLMConfigID) {
+		t.Fatalf("expected ErrInvalidLLMConfigID, got %v", err)
+	}
+
+	// 2. Delete non-existent ID
+	if err := db.DeleteLLMConfig(ctx, 99999); !errors.Is(err, ErrLLMConfigNotFound) {
+		t.Fatalf("expected ErrLLMConfigNotFound, got %v", err)
+	}
+
+	// 3. Create and delete
+	cfg := &LLMConfig{
+		Name:                "待删除LLM",
+		Endpoint:            "https://example.com/llm",
+		Model:               "test-model",
+		FirstTokenTimeoutMS: 5000,
+		OverallTimeoutMS:    30000,
+		Enabled:             true,
+	}
+	if err := db.CreateLLMConfig(ctx, cfg); err != nil {
+		t.Fatalf("CreateLLMConfig failed: %v", err)
+	}
+
+	if err := db.DeleteLLMConfig(ctx, cfg.ID); err != nil {
+		t.Fatalf("DeleteLLMConfig failed: %v", err)
+	}
+
+	// 4. Verify deleted
+	_, err := db.FindLLMConfigByID(ctx, cfg.ID)
+	if !errors.Is(err, ErrLLMConfigNotFound) {
+		t.Fatalf("expected ErrLLMConfigNotFound after delete, got %v", err)
+	}
+
+	// 5. Batch Delete
+	cfgA := &LLMConfig{Name: "LLM-A", Endpoint: "https://example.com/a", Model: "m1", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
+	cfgB := &LLMConfig{Name: "LLM-B", Endpoint: "https://example.com/b", Model: "m2", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
+	_ = db.CreateLLMConfig(ctx, cfgA)
+	_ = db.CreateLLMConfig(ctx, cfgB)
+
+	// empty IDs should be no-op
+	if err := db.BatchDeleteLLMConfigs(ctx, []uint64{}); err != nil {
+		t.Fatalf("BatchDelete with empty list failed: %v", err)
+	}
+	if err := db.BatchDeleteLLMConfigs(ctx, []uint64{0}); err != nil {
+		t.Fatalf("BatchDelete with zero ID failed: %v", err)
+	}
+
+	if err := db.BatchDeleteLLMConfigs(ctx, []uint64{cfgA.ID, cfgB.ID}); err != nil {
+		t.Fatalf("BatchDeleteLLMConfigs failed: %v", err)
+	}
+
+	_, err = db.FindLLMConfigByID(ctx, cfgA.ID)
+	if !errors.Is(err, ErrLLMConfigNotFound) {
+		t.Fatalf("expected ErrLLMConfigNotFound for cfgA, got %v", err)
+	}
+	_, err = db.FindLLMConfigByID(ctx, cfgB.ID)
+	if !errors.Is(err, ErrLLMConfigNotFound) {
+		t.Fatalf("expected ErrLLMConfigNotFound for cfgB, got %v", err)
+	}
+}
+

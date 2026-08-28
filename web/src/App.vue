@@ -22,6 +22,10 @@
           <el-icon><Microphone /></el-icon>
           <span>ASR 配置表</span>
         </el-menu-item>
+        <el-menu-item index="/llm-configs">
+          <el-icon><ChatDotRound /></el-icon>
+          <span>LLM 配置表</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -45,7 +49,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Cpu, Key, Connection, Microphone } from '@element-plus/icons-vue'
+import { Cpu, Key, Connection, Microphone, ChatDotRound } from '@element-plus/icons-vue'
 
 const route = useRoute()
 
