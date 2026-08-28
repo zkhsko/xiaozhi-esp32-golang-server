@@ -399,36 +399,15 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 }
 
 // consumeTTSPCM 持续消费百炼 TTS 生成的 24 kHz PCM 数据块，通过分帧编码器组装为 60 ms 帧、进行 Opus 编码并送入节奏调度器。
-func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSStream, args ...any) {
-	var pacer *DownlinkPacer
-	var doneCh chan struct{}
-	var errCh chan error
-
-	for _, arg := range args {
-		switch v := arg.(type) {
-		case *DownlinkPacer:
-			pacer = v
-		case chan struct{}:
-			doneCh = v
-		case chan error:
-			errCh = v
-		}
-	}
-	if pacer == nil {
-		pacer = s.Pacer()
-	}
-
+func (s *Session) consumeTTSPCM(ctx context.Context, gen uint64, stream ai.TTSStream, pacer *DownlinkPacer, done chan<- error) {
 	var consumeErr error
 	defer func() {
-		if doneCh != nil {
-			close(doneCh)
-		}
-		if errCh != nil {
+		if done != nil {
 			select {
-			case errCh <- consumeErr:
+			case done <- consumeErr:
 			default:
 			}
-			close(errCh)
+			close(done)
 		}
 	}()
 

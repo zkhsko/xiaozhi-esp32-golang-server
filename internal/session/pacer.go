@@ -150,15 +150,11 @@ func (p *DownlinkPacer) Enqueue(packet []byte) error {
 }
 
 // FinishInput 标记上游 TTS PCM 输入与分帧编码已全部完成。
-// 可选传入本轮对话的用户文本与完整助手回复。
-func (p *DownlinkPacer) FinishInput(turnTexts ...string) {
+// userText 与 assistantText 为本轮对话的用户文本与助手回复；若无（如提示音）可传空字符串。
+func (p *DownlinkPacer) FinishInput(userText, assistantText string) {
 	p.mu.Lock()
-	if len(turnTexts) > 0 {
-		p.userText = turnTexts[0]
-	}
-	if len(turnTexts) > 1 {
-		p.assistantText = turnTexts[1]
-	}
+	p.userText = userText
+	p.assistantText = assistantText
 	p.mu.Unlock()
 
 	p.finishOnce.Do(func() {

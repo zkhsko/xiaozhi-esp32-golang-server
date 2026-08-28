@@ -402,15 +402,8 @@ func (s *Session) PostTTSStarted(generation uint64) bool {
 }
 
 // PostTurnFinished 投递指定代次的问答轮次结束事件。
-// 可选传入本轮正常完成的用户输入文本与完整助手回复。
-func (s *Session) PostTurnFinished(generation uint64, turnTexts ...string) bool {
-	var userText, assistantText string
-	if len(turnTexts) > 0 {
-		userText = turnTexts[0]
-	}
-	if len(turnTexts) > 1 {
-		assistantText = turnTexts[1]
-	}
+// userText 与 assistantText 为本轮完成的用户输入文本与完整助手回复；若无（如提示音）可传空字符串。
+func (s *Session) PostTurnFinished(generation uint64, userText, assistantText string) bool {
 	return s.postEvent(event{
 		kind:          eventKindTurnFinished,
 		generation:    generation,
@@ -1453,7 +1446,7 @@ func (s *Session) playListenPrompt(gen uint64) {
 				return
 			}
 		}
-		pacer.FinishInput()
+		pacer.FinishInput("", "")
 	}()
 }
 
