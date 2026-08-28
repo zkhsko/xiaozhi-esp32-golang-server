@@ -123,32 +123,15 @@ func (h *UserHandler) handleBindDevice(w http.ResponseWriter, r *http.Request) {
 // 业务背景：
 // 设备已在硬件 OTA 阶段携带 Serial-Number 并通过了 eFuse HMAC 挑战验证，在激活表中已记录合法身份。
 // 此处无需用户再次提供 sn 与 hmac，直接将该设备绑定至当前用户。
+// 事务与缓存边界规范：
+// 1. 在数据库事务前生成安全的 64 位十六进制 Access Token；
+// 2. 将设备激活记录、用户绑定关系与 Access Token 写入收敛在单一数据库事务中完成；
+// 3. 仅在数据库事务完全成功后，删除 PendingActivation 缓存；
+// 4. 若事务失败，数据库完整回滚且保留缓存，保证不发生部分提交并支持重试。
 func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, code string, pending PendingActivation, userID uint64) {
 	sn := pending.SerialNumber
 
-	// 1. 确保设备激活记录存在并与当前实例匹配
-	act, err := h.db.ActivateDeviceBySerialNumber(r.Context(), sn, pending.DeviceID, pending.ClientID)
-	if err != nil {
-		h.logger.Error("failed to update device activation during binding",
-			"serial_number", logger.TruncateString(sn),
-			"error", err,
-		)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// 2. 直接插入或更新绑定关系
-	if _, err := h.db.UpsertDeviceUserRef(r.Context(), sn, userID); err != nil {
-		h.logger.Error("failed to bind device to user",
-			"serial_number", logger.TruncateString(sn),
-			"user_id", userID,
-			"error", err,
-		)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	// 3. 用户绑定结束后，插入或更新设备对应的 device_access_token，同时重置 has_exposed 标记为 false
+	// 1. 事务前生成 Access Token
 	tokenStr, err := GenerateDeviceAccessToken()
 	if err != nil {
 		h.logger.Error("failed to generate device access token",
@@ -159,22 +142,19 @@ func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, c
 		return
 	}
 
-	accessTokenRecord := &database.DeviceAccessToken{
-		SerialNumber: sn,
-		AccessToken:  tokenStr,
-		HasExposed:   false,
-		IssuedAt:     time.Now(),
-	}
-	if err := h.db.UpsertDeviceAccessToken(r.Context(), accessTokenRecord); err != nil {
-		h.logger.Error("failed to upsert device access token during binding",
+	// 2. 在单一数据库事务中原子执行激活、用户绑定及 Access Token 写入
+	act, err := h.db.BindDeviceWithSN(r.Context(), sn, pending.DeviceID, pending.ClientID, tokenStr, userID)
+	if err != nil {
+		h.logger.Error("failed to bind device with sn in transaction",
 			"serial_number", logger.TruncateString(sn),
+			"user_id", userID,
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// 4. 清理一次性激活码缓存
+	// 3. 数据库事务成功后，清理一次性激活码缓存
 	h.otaHandler.DeletePendingActivation(code, pending.Challenge)
 
 	h.logger.Info("device bound successfully with existing sn in code",
