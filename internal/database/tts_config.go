@@ -307,3 +307,48 @@ func (d *Database) ListTTSConfigs(ctx context.Context, filter TTSConfigFilter) (
 
 	return configs, total, nil
 }
+
+// DeleteTTSConfig 删除指定 ID 的 TTS 配置记录。
+func (d *Database) DeleteTTSConfig(ctx context.Context, id uint64) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if id == 0 {
+		return ErrInvalidTTSConfigID
+	}
+
+	res := d.gormDB.WithContext(ctx).Where("id = ?", id).Delete(&TTSConfig{})
+	if res.Error != nil {
+		return fmt.Errorf("delete tts config: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return ErrTTSConfigNotFound
+	}
+	return nil
+}
+
+// BatchDeleteTTSConfigs 批量删除指定 ID 列表的 TTS 配置记录。
+func (d *Database) BatchDeleteTTSConfigs(ctx context.Context, ids []uint64) error {
+	if d == nil || d.gormDB == nil {
+		return ErrDatabaseInstanceRequired
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	validIDs := make([]uint64, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			validIDs = append(validIDs, id)
+		}
+	}
+	if len(validIDs) == 0 {
+		return nil
+	}
+
+	if err := d.gormDB.WithContext(ctx).Where("id IN ?", validIDs).Delete(&TTSConfig{}).Error; err != nil {
+		return fmt.Errorf("batch delete tts configs: %w", err)
+	}
+	return nil
+}
+

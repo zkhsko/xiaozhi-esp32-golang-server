@@ -145,7 +145,74 @@ func TestTTSConfig_CRUD(t *testing.T) {
 	if !errors.Is(err, ErrTTSConfigNotFound) {
 		t.Fatalf("expected ErrTTSConfigNotFound, got %v", err)
 	}
+
+	// 7. Delete TTSConfig
+	err = db.DeleteTTSConfig(ctx, cfg.ID)
+	if err != nil {
+		t.Fatalf("DeleteTTSConfig failed: %v", err)
+	}
+
+	// 8. Verify Deleted
+	_, err = db.FindTTSConfigByID(ctx, cfg.ID)
+	if !errors.Is(err, ErrTTSConfigNotFound) {
+		t.Fatalf("expected ErrTTSConfigNotFound after delete, got %v", err)
+	}
+
+	// 9. Delete non-existent ID
+	err = db.DeleteTTSConfig(ctx, 999999)
+	if !errors.Is(err, ErrTTSConfigNotFound) {
+		t.Fatalf("expected ErrTTSConfigNotFound for non-existent delete, got %v", err)
+	}
 }
+
+func TestTTSConfig_BatchDelete(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	cfg1 := &TTSConfig{
+		Name:                "TTS-Batch-1",
+		Endpoint:            "wss://example.com/tts1",
+		Model:               "m1",
+		Voices:              "[]",
+		ConnectTimeoutMS:    5000,
+		FirstAudioTimeoutMS: 5000,
+		SentenceTimeoutMS:   10000,
+		Enabled:             true,
+	}
+	cfg2 := &TTSConfig{
+		Name:                "TTS-Batch-2",
+		Endpoint:            "wss://example.com/tts2",
+		Model:               "m2",
+		Voices:              "[]",
+		ConnectTimeoutMS:    5000,
+		FirstAudioTimeoutMS: 5000,
+		SentenceTimeoutMS:   10000,
+		Enabled:             true,
+	}
+
+	if err := db.CreateTTSConfig(ctx, cfg1); err != nil {
+		t.Fatalf("failed to create cfg1: %v", err)
+	}
+	if err := db.CreateTTSConfig(ctx, cfg2); err != nil {
+		t.Fatalf("failed to create cfg2: %v", err)
+	}
+
+	list, total, _ := db.ListTTSConfigs(ctx, TTSConfigFilter{})
+	if total != 2 || len(list) != 2 {
+		t.Fatalf("expected 2 configs before batch delete, got total %d", total)
+	}
+
+	err := db.BatchDeleteTTSConfigs(ctx, []uint64{cfg1.ID, cfg2.ID})
+	if err != nil {
+		t.Fatalf("BatchDeleteTTSConfigs failed: %v", err)
+	}
+
+	listAfter, totalAfter, _ := db.ListTTSConfigs(ctx, TTSConfigFilter{})
+	if totalAfter != 0 || len(listAfter) != 0 {
+		t.Fatalf("expected 0 configs after batch delete, got total %d", totalAfter)
+	}
+}
+
 
 func TestTTSConfig_LargeVoices(t *testing.T) {
 	db := setupTestDB(t)

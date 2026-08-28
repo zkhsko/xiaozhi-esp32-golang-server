@@ -214,6 +214,57 @@ type BatchDeleteLLMConfigRequest struct {
 	IDs []uint64 `json:"ids"`
 }
 
+// TTSConfigItem 表示单条 TTS 配置 DTO（api_key 脱敏为 has_api_key）。
+type TTSConfigItem struct {
+	ID                  uint64    `json:"id"`
+	Name                string    `json:"name"`
+	Provider            string    `json:"provider"`
+	Endpoint            string    `json:"endpoint"`
+	HasAPIKey           bool      `json:"has_api_key"`
+	Model               string    `json:"model"`
+	Voices              string    `json:"voices"`
+	ConnectTimeoutMS    int64     `json:"connect_timeout_ms"`
+	FirstAudioTimeoutMS int64     `json:"first_audio_timeout_ms"`
+	SentenceTimeoutMS   int64     `json:"sentence_timeout_ms"`
+	Enabled             bool      `json:"enabled"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+// TTSConfigListData TTS 配置列表响应数据。
+type TTSConfigListData struct {
+	Items    []TTSConfigItem `json:"items"`
+	Total    int64           `json:"total"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"page_size"`
+}
+
+// SaveTTSConfigRequest 保存或更新 TTS 配置请求体。
+type SaveTTSConfigRequest struct {
+	ID                  uint64 `json:"id"`
+	Name                string `json:"name"`
+	Provider            string `json:"provider"`
+	Endpoint            string `json:"endpoint"`
+	APIKey              string `json:"api_key"` // write-only；更新时留空表示保留原 Key
+	Model               string `json:"model"`
+	Voices              string `json:"voices"`
+	ConnectTimeoutMS    int64  `json:"connect_timeout_ms"`
+	FirstAudioTimeoutMS int64  `json:"first_audio_timeout_ms"`
+	SentenceTimeoutMS   int64  `json:"sentence_timeout_ms"`
+	Enabled             *bool  `json:"enabled"`
+}
+
+// DeleteTTSConfigRequest 删除单条 TTS 配置请求体。
+type DeleteTTSConfigRequest struct {
+	ID uint64 `json:"id"`
+}
+
+// BatchDeleteTTSConfigRequest 批量删除 TTS 配置请求体。
+type BatchDeleteTTSConfigRequest struct {
+	IDs []uint64 `json:"ids"`
+}
+
+
 
 // AdminHandler 处理 /admin-api/ 管理接口。
 type AdminHandler struct {
@@ -269,6 +320,13 @@ func (h *AdminHandler) Routes() http.Handler {
 	r.Post("/llm-config/delete", h.handleDeleteLLMConfig)
 	r.Post("/llm-config/batch-delete", h.handleBatchDeleteLLMConfigs)
 
+	// TTS Config 接口
+	r.Get("/tts-config", h.handleListTTSConfigs)
+	r.Get("/tts-config/list", h.handleListTTSConfigs)
+	r.Post("/tts-config/save", h.handleSaveTTSConfig)
+	r.Post("/tts-config/update", h.handleSaveTTSConfig)
+	r.Post("/tts-config/delete", h.handleDeleteTTSConfig)
+	r.Post("/tts-config/batch-delete", h.handleBatchDeleteTTSConfigs)
 
 	return r
 }
@@ -1326,6 +1384,293 @@ func (h *AdminHandler) handleBatchDeleteLLMConfigs(w http.ResponseWriter, r *htt
 		Message: fmt.Sprintf("成功批量删除 %d 条 LLM 配置", len(req.IDs)),
 	})
 }
+
+// handleListTTSConfigs 分页获取 TTS 语音合成配置列表。
+func (h *AdminHandler) handleListTTSConfigs(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	query := r.URL.Query()
+	page, _ := strconv.Atoi(query.Get("page"))
+	if page <= 0 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(query.Get("page_size"))
+	if pageSize <= 0 {
+		pageSize = 10
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
+
+	filter := database.TTSConfigFilter{
+		Name:     query.Get("name"),
+		Provider: query.Get("provider"),
+		Page:     page,
+		PageSize: pageSize,
+	}
+
+	if enabledStr := query.Get("enabled"); enabledStr != "" {
+		if enabledVal, err := strconv.ParseBool(enabledStr); err == nil {
+			filter.Enabled = &enabledVal
+		}
+	}
+
+	configs, total, err := h.db.ListTTSConfigs(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("failed to list tts configs", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	items := make([]TTSConfigItem, 0, len(configs))
+	for _, cfg := range configs {
+		items = append(items, TTSConfigItem{
+			ID:                  cfg.ID,
+			Name:                cfg.Name,
+			Provider:            cfg.Provider,
+			Endpoint:            cfg.Endpoint,
+			HasAPIKey:           len(strings.TrimSpace(cfg.APIKey)) > 0,
+			Model:               cfg.Model,
+			Voices:              cfg.Voices,
+			ConnectTimeoutMS:    cfg.ConnectTimeoutMS,
+			FirstAudioTimeoutMS: cfg.FirstAudioTimeoutMS,
+			SentenceTimeoutMS:   cfg.SentenceTimeoutMS,
+			Enabled:             cfg.Enabled,
+			CreatedAt:           cfg.CreatedAt,
+			UpdatedAt:           cfg.UpdatedAt,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Data: TTSConfigListData{
+			Items:    items,
+			Total:    total,
+			Page:     page,
+			PageSize: pageSize,
+		},
+	})
+}
+
+// handleSaveTTSConfig 创建或更新 TTS 语音合成配置（ID 为 0 时创建，ID > 0 时按 ID 覆盖）。
+func (h *AdminHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req SaveTTSConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	connectTimeout := req.ConnectTimeoutMS
+	if connectTimeout == 0 {
+		connectTimeout = 5000
+	}
+
+	firstAudioTimeout := req.FirstAudioTimeoutMS
+	if firstAudioTimeout == 0 {
+		firstAudioTimeout = 5000
+	}
+
+	sentenceTimeout := req.SentenceTimeoutMS
+	if sentenceTimeout == 0 {
+		sentenceTimeout = 10000
+	}
+
+	enabled := true
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+
+	provider := strings.TrimSpace(req.Provider)
+
+	voices := strings.TrimSpace(req.Voices)
+	if voices == "" {
+		voices = "[]"
+	}
+
+	if req.ID == 0 {
+		// 创建新配置
+		cfg := &database.TTSConfig{
+			Name:                strings.TrimSpace(req.Name),
+			Provider:            provider,
+			Endpoint:            strings.TrimSpace(req.Endpoint),
+			APIKey:              strings.TrimSpace(req.APIKey),
+			Model:               strings.TrimSpace(req.Model),
+			Voices:              voices,
+			ConnectTimeoutMS:    connectTimeout,
+			FirstAudioTimeoutMS: firstAudioTimeout,
+			SentenceTimeoutMS:   sentenceTimeout,
+			Enabled:             enabled,
+		}
+
+		if err := h.db.CreateTTSConfig(r.Context(), cfg); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, AdminResponse{
+			Success: true,
+			Message: "TTS 配置创建成功",
+			Data: TTSConfigItem{
+				ID:                  cfg.ID,
+				Name:                cfg.Name,
+				Provider:            cfg.Provider,
+				Endpoint:            cfg.Endpoint,
+				HasAPIKey:           len(cfg.APIKey) > 0,
+				Model:               cfg.Model,
+				Voices:              cfg.Voices,
+				ConnectTimeoutMS:    cfg.ConnectTimeoutMS,
+				FirstAudioTimeoutMS: cfg.FirstAudioTimeoutMS,
+				SentenceTimeoutMS:   cfg.SentenceTimeoutMS,
+				Enabled:             cfg.Enabled,
+				CreatedAt:           cfg.CreatedAt,
+				UpdatedAt:           cfg.UpdatedAt,
+			},
+		})
+		return
+	}
+
+	// 覆盖更新已有配置
+	existing, err := h.db.FindTTSConfigByID(r.Context(), req.ID)
+	if err != nil {
+		if errors.Is(err, database.ErrTTSConfigNotFound) {
+			http.Error(w, "tts config not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	apiKey := existing.APIKey
+	if strings.TrimSpace(req.APIKey) != "" {
+		apiKey = strings.TrimSpace(req.APIKey)
+	}
+
+	if strings.TrimSpace(req.Provider) == "" {
+		provider = existing.Provider
+	}
+
+	if req.Enabled == nil {
+		enabled = existing.Enabled
+	}
+
+	if strings.TrimSpace(req.Voices) == "" {
+		voices = existing.Voices
+	}
+
+	updatedCfg := &database.TTSConfig{
+		ID:                  req.ID,
+		Name:                strings.TrimSpace(req.Name),
+		Provider:            provider,
+		Endpoint:            strings.TrimSpace(req.Endpoint),
+		APIKey:              apiKey,
+		Model:               strings.TrimSpace(req.Model),
+		Voices:              voices,
+		ConnectTimeoutMS:    connectTimeout,
+		FirstAudioTimeoutMS: firstAudioTimeout,
+		SentenceTimeoutMS:   sentenceTimeout,
+		Enabled:             enabled,
+	}
+
+	if err := h.db.UpdateTTSConfigByID(r.Context(), updatedCfg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "TTS 配置更新成功",
+		Data: TTSConfigItem{
+			ID:                  updatedCfg.ID,
+			Name:                updatedCfg.Name,
+			Provider:            updatedCfg.Provider,
+			Endpoint:            updatedCfg.Endpoint,
+			HasAPIKey:           len(apiKey) > 0,
+			Model:               updatedCfg.Model,
+			Voices:              updatedCfg.Voices,
+			ConnectTimeoutMS:    updatedCfg.ConnectTimeoutMS,
+			FirstAudioTimeoutMS: updatedCfg.FirstAudioTimeoutMS,
+			SentenceTimeoutMS:   updatedCfg.SentenceTimeoutMS,
+			Enabled:             updatedCfg.Enabled,
+			UpdatedAt:           time.Now(),
+		},
+	})
+}
+
+// handleDeleteTTSConfig 删除指定 ID 的 TTS 配置记录。
+func (h *AdminHandler) handleDeleteTTSConfig(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req DeleteTTSConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if req.ID == 0 {
+		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeleteTTSConfig(r.Context(), req.ID); err != nil {
+		if errors.Is(err, database.ErrTTSConfigNotFound) {
+			http.Error(w, "tts config not found", http.StatusNotFound)
+			return
+		}
+		h.logger.Error("failed to delete tts config", "id", req.ID, "error", err)
+		http.Error(w, "failed to delete tts config", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: "TTS 配置删除成功",
+	})
+}
+
+// handleBatchDeleteTTSConfigs 批量删除 TTS 配置记录。
+func (h *AdminHandler) handleBatchDeleteTTSConfigs(w http.ResponseWriter, r *http.Request) {
+	if h.db == nil {
+		h.logger.Error("database dependency not properly initialized")
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	var req BatchDeleteTTSConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IDs) == 0 {
+		http.Error(w, "ids array cannot be empty", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.BatchDeleteTTSConfigs(r.Context(), req.IDs); err != nil {
+		h.logger.Error("failed to batch delete tts configs", "error", err)
+		http.Error(w, "failed to batch delete tts configs", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, AdminResponse{
+		Success: true,
+		Message: fmt.Sprintf("成功批量删除 %d 条 TTS 配置", len(req.IDs)),
+	})
+}
+
 
 
 

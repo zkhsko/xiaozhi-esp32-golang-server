@@ -3,6 +3,7 @@ import DeviceCredentials from '../views/DeviceCredentials.vue'
 import DeviceActivations from '../views/DeviceActivations.vue'
 import ASRConfigs from '../views/ASRConfigs.vue'
 import LLMConfigs from '../views/LLMConfigs.vue'
+import TTSConfigs from '../views/TTSConfigs.vue'
 
 const routes = [
   {
@@ -39,6 +40,14 @@ const routes = [
     component: LLMConfigs,
     meta: {
       title: 'LLM 语言模型配置',
+    },
+  },
+  {
+    path: '/tts-configs',
+    name: 'TTSConfigs',
+    component: TTSConfigs,
+    meta: {
+      title: 'TTS 语音合成配置',
     },
   },
 ]

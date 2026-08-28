@@ -317,6 +317,74 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	if wSPA4.Code != http.StatusOK {
 		t.Fatalf("SPA route for llm-configs failed, code=%d", wSPA4.Code)
 	}
+
+	// 21. TTS 配置 E2E 创建
+	createTTSBody, _ := json.Marshal(SaveTTSConfigRequest{
+		Name:                "E2E 百炼 TTS",
+		Provider:            "bailian",
+		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
+		APIKey:              "sk-e2e-tts-key",
+		Model:               "cosyvoice-v1",
+		Voices:              `["longanlingxi", "longxiaochun"]`,
+		ConnectTimeoutMS:    5000,
+		FirstAudioTimeoutMS: 5000,
+		SentenceTimeoutMS:   10000,
+	})
+	reqTTSCreate := httptest.NewRequest(http.MethodPost, "/admin-api/tts-config/save", bytes.NewReader(createTTSBody))
+	reqTTSCreate.Header.Set("Content-Type", "application/json")
+	wTTSCreate := httptest.NewRecorder()
+	r.ServeHTTP(wTTSCreate, reqTTSCreate)
+
+	if wTTSCreate.Code != http.StatusOK {
+		t.Fatalf("create tts config failed: %s", wTTSCreate.Body.String())
+	}
+	var ttsCreateResp struct {
+		Success bool          `json:"success"`
+		Data    TTSConfigItem `json:"data"`
+	}
+	_ = json.Unmarshal(wTTSCreate.Body.Bytes(), &ttsCreateResp)
+	if !ttsCreateResp.Success || ttsCreateResp.Data.ID == 0 || !ttsCreateResp.Data.HasAPIKey || ttsCreateResp.Data.Provider != "bailian" {
+		t.Fatalf("unexpected tts create resp: %+v", ttsCreateResp)
+	}
+	createdTTSID := ttsCreateResp.Data.ID
+
+	// 22. TTS 配置列表查询
+	reqTTSList := httptest.NewRequest(http.MethodGet, "/admin-api/tts-config?name=E2E", nil)
+	wTTSList := httptest.NewRecorder()
+	r.ServeHTTP(wTTSList, reqTTSList)
+
+	if wTTSList.Code != http.StatusOK {
+		t.Fatalf("list tts config failed: %s", wTTSList.Body.String())
+	}
+	var ttsListResp struct {
+		Success bool              `json:"success"`
+		Data    TTSConfigListData `json:"data"`
+	}
+	_ = json.Unmarshal(wTTSList.Body.Bytes(), &ttsListResp)
+	if ttsListResp.Data.Total != 1 || len(ttsListResp.Data.Items) != 1 || ttsListResp.Data.Items[0].Provider != "bailian" {
+		t.Fatalf("expected 1 TTS config item with provider bailian, got %v", ttsListResp.Data.Items)
+	}
+
+	// 23. TTS 配置单条删除
+	delTTSBody, _ := json.Marshal(DeleteTTSConfigRequest{ID: createdTTSID})
+	reqDelTTS := httptest.NewRequest(http.MethodPost, "/admin-api/tts-config/delete", bytes.NewReader(delTTSBody))
+	reqDelTTS.Header.Set("Content-Type", "application/json")
+	wDelTTS := httptest.NewRecorder()
+	r.ServeHTTP(wDelTTS, reqDelTTS)
+
+	if wDelTTS.Code != http.StatusOK {
+		t.Fatalf("delete tts config failed: %s", wDelTTS.Body.String())
+	}
+
+	// 24. 访问 /admin/tts-configs 确保静态 SPA 路由可 fallback 到 index.html
+	reqSPA5 := httptest.NewRequest(http.MethodGet, "/admin/tts-configs", nil)
+	wSPA5 := httptest.NewRecorder()
+	r.ServeHTTP(wSPA5, reqSPA5)
+
+	if wSPA5.Code != http.StatusOK {
+		t.Fatalf("SPA route for tts-configs failed, code=%d", wSPA5.Code)
+	}
 }
+
 
 

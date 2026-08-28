@@ -26,6 +26,10 @@
           <el-icon><ChatDotRound /></el-icon>
           <span>LLM 配置表</span>
         </el-menu-item>
+        <el-menu-item index="/tts-configs">
+          <el-icon><Headset /></el-icon>
+          <span>TTS 配置表</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -49,7 +53,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Cpu, Key, Connection, Microphone, ChatDotRound } from '@element-plus/icons-vue'
+import { Cpu, Key, Connection, Microphone, ChatDotRound, Headset } from '@element-plus/icons-vue'
 
 const route = useRoute()
 

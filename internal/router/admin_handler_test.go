@@ -628,4 +628,146 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	}
 }
 
+func TestAdminTTSConfigEndpoints(t *testing.T) {
+	db := setupTestRouterDB(t)
+	cfg := &config.Config{}
+	adminHandler := NewAdminHandler(cfg, db, nil)
+	routes := adminHandler.Routes()
+
+	// 1. Create TTS Config via /tts-config/save
+	createBody := []byte(`{
+		"name": "百炼语音合成",
+		"provider": "bailian",
+		"endpoint": "wss://dashscope.aliyuncs.com/api-v1/ws",
+		"api_key": "sk-secret-tts-key-123456",
+		"model": "cosyvoice-v1",
+		"voices": "[\"longanlingxi\", \"longxiaochun\"]",
+		"connect_timeout_ms": 6000,
+		"first_audio_timeout_ms": 6000,
+		"sentence_timeout_ms": 12000,
+		"enabled": true
+	}`)
+	reqCreate := httptest.NewRequest(http.MethodPost, "/tts-config/save", bytes.NewReader(createBody))
+	reqCreate.Header.Set("Content-Type", "application/json")
+	wCreate := httptest.NewRecorder()
+	routes.ServeHTTP(wCreate, reqCreate)
+
+	if wCreate.Code != http.StatusOK {
+		t.Fatalf("create tts config failed, code=%d, body=%s", wCreate.Code, wCreate.Body.String())
+	}
+
+	var createResp struct {
+		Success bool          `json:"success"`
+		Data    TTSConfigItem `json:"data"`
+	}
+	if err := json.Unmarshal(wCreate.Body.Bytes(), &createResp); err != nil {
+		t.Fatalf("unmarshal createResp failed: %v", err)
+	}
+	if !createResp.Success || createResp.Data.ID == 0 {
+		t.Fatalf("unexpected create response: %+v", createResp)
+	}
+	if !createResp.Data.HasAPIKey {
+		t.Fatalf("expected has_api_key true")
+	}
+	if createResp.Data.Provider != "bailian" {
+		t.Fatalf("expected provider bailian, got %q", createResp.Data.Provider)
+	}
+	ttsID := createResp.Data.ID
+
+	// 2. List TTS Configs
+	reqList := httptest.NewRequest(http.MethodGet, "/tts-config/list?page=1&page_size=10&name=百炼", nil)
+	wList := httptest.NewRecorder()
+	routes.ServeHTTP(wList, reqList)
+
+	if wList.Code != http.StatusOK {
+		t.Fatalf("list tts configs failed, code=%d, body=%s", wList.Code, wList.Body.String())
+	}
+	var listResp struct {
+		Success bool              `json:"success"`
+		Data    TTSConfigListData `json:"data"`
+	}
+	if err := json.Unmarshal(wList.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal listResp failed: %v", err)
+	}
+	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
+		t.Fatalf("unexpected list count: total=%d, items=%d", listResp.Data.Total, len(listResp.Data.Items))
+	}
+	if listResp.Data.Items[0].Name != "百炼语音合成" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "bailian" {
+		t.Fatalf("unexpected item content: %+v", listResp.Data.Items[0])
+	}
+
+	// 3. Update TTS Config without changing API Key (empty api_key should preserve existing key)
+	updateBody := []byte(fmt.Sprintf(`{
+		"id": %d,
+		"name": "百炼语音合成-修改版",
+		"provider": "volcengine",
+		"endpoint": "wss://dashscope.aliyuncs.com/api-v1/ws",
+		"api_key": "",
+		"model": "cosyvoice-v2",
+		"voices": "[\"longanlingxi\", \"longxiaochun\", \"new_voice\"]",
+		"connect_timeout_ms": 8000,
+		"first_audio_timeout_ms": 7000,
+		"sentence_timeout_ms": 15000,
+		"enabled": false
+	}`, ttsID))
+	reqUpdate := httptest.NewRequest(http.MethodPost, "/tts-config/update", bytes.NewReader(updateBody))
+	reqUpdate.Header.Set("Content-Type", "application/json")
+	wUpdate := httptest.NewRecorder()
+	routes.ServeHTTP(wUpdate, reqUpdate)
+
+	if wUpdate.Code != http.StatusOK {
+		t.Fatalf("update tts config failed, code=%d, body=%s", wUpdate.Code, wUpdate.Body.String())
+	}
+
+	// Verify in DB that original api_key is preserved and fields updated
+	found, err := db.FindTTSConfigByID(context.Background(), ttsID)
+	if err != nil {
+		t.Fatalf("find tts config in db failed: %v", err)
+	}
+	if found.APIKey != "sk-secret-tts-key-123456" {
+		t.Errorf("expected preserved api_key 'sk-secret-tts-key-123456', got %q", found.APIKey)
+	}
+	if found.Name != "百炼语音合成-修改版" || found.Model != "cosyvoice-v2" || found.Enabled != false || found.Provider != "volcengine" {
+		t.Errorf("unexpected updated fields in DB: %+v", found)
+	}
+
+	// 4. Single Delete
+	delBody := []byte(fmt.Sprintf(`{"id": %d}`, ttsID))
+	reqDel := httptest.NewRequest(http.MethodPost, "/tts-config/delete", bytes.NewReader(delBody))
+	reqDel.Header.Set("Content-Type", "application/json")
+	wDel := httptest.NewRecorder()
+	routes.ServeHTTP(wDel, reqDel)
+
+	if wDel.Code != http.StatusOK {
+		t.Fatalf("delete tts config failed, code=%d, body=%s", wDel.Code, wDel.Body.String())
+	}
+
+	_, err = db.FindTTSConfigByID(context.Background(), ttsID)
+	if !errors.Is(err, database.ErrTTSConfigNotFound) {
+		t.Fatalf("expected ErrTTSConfigNotFound after delete, got %v", err)
+	}
+
+	// 5. Batch Delete
+	cfgA := &database.TTSConfig{Name: "A", Endpoint: "ws://localhost/a", Model: "m1", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	cfgB := &database.TTSConfig{Name: "B", Endpoint: "ws://localhost/b", Model: "m2", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	_ = db.CreateTTSConfig(context.Background(), cfgA)
+	_ = db.CreateTTSConfig(context.Background(), cfgB)
+
+	batchDelBody := []byte(fmt.Sprintf(`{"ids": [%d, %d]}`, cfgA.ID, cfgB.ID))
+	reqBatchDel := httptest.NewRequest(http.MethodPost, "/tts-config/batch-delete", bytes.NewReader(batchDelBody))
+	reqBatchDel.Header.Set("Content-Type", "application/json")
+	wBatchDel := httptest.NewRecorder()
+	routes.ServeHTTP(wBatchDel, reqBatchDel)
+
+	if wBatchDel.Code != http.StatusOK {
+		t.Fatalf("batch delete tts config failed, code=%d, body=%s", wBatchDel.Code, wBatchDel.Body.String())
+	}
+
+	_, finalCount, _ := db.ListTTSConfigs(context.Background(), database.TTSConfigFilter{})
+	if finalCount != 0 {
+		t.Fatalf("expected 0 configs after batch delete, got %d", finalCount)
+	}
+}
+
+
 
