@@ -132,7 +132,34 @@ CREATE TABLE IF NOT EXISTS `tts_config` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='语音合成 TTS 配置表';
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+-- agent_config: AI Agent 配置表
+CREATE TABLE IF NOT EXISTS `agent_config` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Agent 身份自增主键',
+    `name` VARCHAR(128) NOT NULL COMMENT '展示名称（非唯一）',
+    `asr_config_id` BIGINT UNSIGNED NOT NULL COMMENT '引用 asr_config.id',
+    `llm_config_id` BIGINT UNSIGNED NOT NULL COMMENT '引用 llm_config.id',
+    `tts_config_id` BIGINT UNSIGNED NOT NULL COMMENT '引用 tts_config.id',
+    `system_prompt` TEXT NOT NULL COMMENT 'Agent 系统提示词',
+    `voice` VARCHAR(128) NOT NULL COMMENT 'Agent 使用的 TTS 音色',
+    `enabled` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否为当前 Agent（1: 是, 0: 否）',
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    KEY `idx_agent_config_asr_config_id` (`asr_config_id`),
+    KEY `idx_agent_config_llm_config_id` (`llm_config_id`),
+    KEY `idx_agent_config_tts_config_id` (`tts_config_id`),
+    KEY `idx_agent_config_enabled` (`enabled`),
+    CONSTRAINT `fk_agent_config_asr_config_id` FOREIGN KEY (`asr_config_id`) REFERENCES `asr_config` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `fk_agent_config_llm_config_id` FOREIGN KEY (`llm_config_id`) REFERENCES `llm_config` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT `fk_agent_config_tts_config_id` FOREIGN KEY (`tts_config_id`) REFERENCES `tts_config` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI Agent 配置表';
+-- +goose StatementEnd
+
 -- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS `agent_config`;
+-- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE IF EXISTS `tts_config`;
 -- +goose StatementEnd

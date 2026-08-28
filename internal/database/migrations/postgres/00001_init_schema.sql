@@ -157,7 +157,49 @@ CREATE TABLE IF NOT EXISTS tts_config (
 );
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+-- agent_config: AI Agent 配置表
+CREATE TABLE IF NOT EXISTS agent_config (
+    id BIGSERIAL PRIMARY KEY,                                       -- Agent 身份自增主键
+    name VARCHAR(128) NOT NULL,                                    -- 展示名称（非唯一）
+    asr_config_id BIGINT NOT NULL,                                  -- 引用 asr_config.id
+    llm_config_id BIGINT NOT NULL,                                  -- 引用 llm_config.id
+    tts_config_id BIGINT NOT NULL,                                  -- 引用 tts_config.id
+    system_prompt TEXT NOT NULL,                                    -- Agent 系统提示词
+    voice VARCHAR(128) NOT NULL,                                    -- Agent 使用的 TTS 音色
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,                         -- 是否为当前 Agent
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,      -- 创建时间
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,      -- 最近更新时间
+    CONSTRAINT fk_agent_config_asr_config_id FOREIGN KEY (asr_config_id) REFERENCES asr_config(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_agent_config_llm_config_id FOREIGN KEY (llm_config_id) REFERENCES llm_config(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_agent_config_tts_config_id FOREIGN KEY (tts_config_id) REFERENCES tts_config(id) ON DELETE RESTRICT
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- idx_agent_config_asr_config_id: ASR 配置 ID 普通索引
+CREATE INDEX IF NOT EXISTS idx_agent_config_asr_config_id ON agent_config(asr_config_id);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- idx_agent_config_llm_config_id: LLM 配置 ID 普通索引
+CREATE INDEX IF NOT EXISTS idx_agent_config_llm_config_id ON agent_config(llm_config_id);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- idx_agent_config_tts_config_id: TTS 配置 ID 普通索引
+CREATE INDEX IF NOT EXISTS idx_agent_config_tts_config_id ON agent_config(tts_config_id);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- idx_agent_config_enabled: 是否为当前 Agent 普通索引
+CREATE INDEX IF NOT EXISTS idx_agent_config_enabled ON agent_config(enabled);
+-- +goose StatementEnd
+
 -- +goose Down
+-- +goose StatementBegin
+DROP TABLE IF EXISTS agent_config;
+-- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE IF EXISTS tts_config;
 -- +goose StatementEnd
