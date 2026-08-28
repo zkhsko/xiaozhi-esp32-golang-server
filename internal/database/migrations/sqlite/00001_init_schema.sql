@@ -103,6 +103,22 @@ CREATE TABLE IF NOT EXISTS asr_config (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
+-- llm_config: 大语言模型 LLM 配置表
+CREATE TABLE IF NOT EXISTS llm_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- 配置内部自增主键
+    name VARCHAR(128) NOT NULL,                                    -- 配置展示名称（非唯一）
+    endpoint VARCHAR(1024) NOT NULL,                               -- LLM HTTP Endpoint
+    api_key VARCHAR(1024) NOT NULL DEFAULT '',                     -- 明文 API Key（迁移默认记录初始为空）
+    model VARCHAR(255) NOT NULL,                                   -- LLM 模型
+    first_token_timeout_ms INTEGER NOT NULL DEFAULT 5000,          -- 首 Token 超时，毫秒
+    overall_timeout_ms INTEGER NOT NULL DEFAULT 30000,             -- 总超时，毫秒
+    enabled INTEGER NOT NULL DEFAULT 1,                            -- 是否允许 Agent 引用（0: 禁用, 1: 启用）
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 创建时间
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 更新时间
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
 -- tts_config: 语音合成 TTS 配置表
 CREATE TABLE IF NOT EXISTS tts_config (
     id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- 配置内部自增主键
@@ -123,6 +139,9 @@ CREATE TABLE IF NOT EXISTS tts_config (
 -- +goose Down
 -- +goose StatementBegin
 DROP TABLE IF EXISTS tts_config;
+-- +goose StatementEnd
+-- +goose StatementBegin
+DROP TABLE IF EXISTS llm_config;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE IF EXISTS asr_config;

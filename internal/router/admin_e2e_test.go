@@ -194,7 +194,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:           "sk-e2e-asr-key",
 		Model:            "qwen-audio-3.0-asr-flash-streaming",
-		Hotwords:         "小智,测试热词",
+		Hotwords:         `["小智", "测试热词"]`,
 		ConnectTimeoutMS: 5000,
 	})
 	reqASRCreate := httptest.NewRequest(http.MethodPost, "/admin-api/asr-config/save", bytes.NewReader(createASRBody))

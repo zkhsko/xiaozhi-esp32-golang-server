@@ -17,7 +17,7 @@ func TestASRConfig_CRUD(t *testing.T) {
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:           "sk-test-asr-api-key-123456",
 		Model:            "qwen-audio-3.0-asr-flash-streaming",
-		Hotwords:         "小智,智能音箱,ESP32",
+		Hotwords:         `["小智","智能音箱","ESP32"]`,
 		ConnectTimeoutMS: 5000,
 		Enabled:          true,
 	}
@@ -47,8 +47,8 @@ func TestASRConfig_CRUD(t *testing.T) {
 	if found.Model != "qwen-audio-3.0-asr-flash-streaming" {
 		t.Errorf("expected model %q, got %q", "qwen-audio-3.0-asr-flash-streaming", found.Model)
 	}
-	if found.Hotwords != "小智,智能音箱,ESP32" {
-		t.Errorf("expected hotwords %q, got %q", "小智,智能音箱,ESP32", found.Hotwords)
+	if found.Hotwords != `["小智","智能音箱","ESP32"]` {
+		t.Errorf("expected hotwords %q, got %q", `["小智","智能音箱","ESP32"]`, found.Hotwords)
 	}
 	if found.ConnectTimeoutMS != 5000 {
 		t.Errorf("expected connect_timeout_ms 5000, got %d", found.ConnectTimeoutMS)
@@ -62,7 +62,7 @@ func TestASRConfig_CRUD(t *testing.T) {
 	found.Endpoint = "ws://localhost:9000/asr"
 	found.APIKey = "sk-new-key-654321"
 	found.Model = "qwen-audio-asr-v2"
-	found.Hotwords = "小智二代,新热词,ESP32-S3"
+	found.Hotwords = `["小智二代","新热词","ESP32-S3"]`
 	found.ConnectTimeoutMS = 10000
 	found.Enabled = false
 
@@ -88,8 +88,8 @@ func TestASRConfig_CRUD(t *testing.T) {
 	if updated.Model != "qwen-audio-asr-v2" {
 		t.Errorf("expected updated model %q, got %q", "qwen-audio-asr-v2", updated.Model)
 	}
-	if updated.Hotwords != "小智二代,新热词,ESP32-S3" {
-		t.Errorf("expected updated hotwords %q, got %q", "小智二代,新热词,ESP32-S3", updated.Hotwords)
+	if updated.Hotwords != `["小智二代","新热词","ESP32-S3"]` {
+		t.Errorf("expected updated hotwords %q, got %q", `["小智二代","新热词","ESP32-S3"]`, updated.Hotwords)
 	}
 	if updated.ConnectTimeoutMS != 10000 {
 		t.Errorf("expected updated connect_timeout_ms 10000, got %d", updated.ConnectTimeoutMS)
@@ -123,8 +123,12 @@ func TestASRConfig_LargeHotwords(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	// 构造 50KB 大文本热词
-	largeHotwords := strings.Repeat("自定义专业热词词汇项\n", 2500) // 约 75KB
+	// 构造 50KB+ 大文本 JSON 热词数组
+	elements := make([]string, 2500)
+	for i := 0; i < 2500; i++ {
+		elements[i] = `"自定义专业热词词汇项"`
+	}
+	largeHotwords := "[" + strings.Join(elements, ",") + "]" // 约 75KB+ JSON
 
 	cfg := &ASRConfig{
 		Name:             "大容量热词配置",
@@ -376,6 +380,28 @@ func TestASRConfig_Validation(t *testing.T) {
 				ConnectTimeoutMS: 30001,
 			},
 			expectedErr: ErrInvalidASRConnectTimeout,
+		},
+		{
+			name: "invalid hotwords json format",
+			cfg: &ASRConfig{
+				Name:             "valid-name",
+				Endpoint:         "wss://example.com/asr",
+				Model:            "model-1",
+				Hotwords:         "not-valid-json-string",
+				ConnectTimeoutMS: 5000,
+			},
+			expectedErr: ErrInvalidASRHotwordsJSON,
+		},
+		{
+			name: "valid hotwords json object format",
+			cfg: &ASRConfig{
+				Name:             "valid-name",
+				Endpoint:         "wss://example.com/asr",
+				Model:            "model-1",
+				Hotwords:         `{"words":["小智","智能音箱"],"weight":10}`,
+				ConnectTimeoutMS: 5000,
+			},
+			expectedErr: nil,
 		},
 		{
 			name: "hotwords exceeds 1MB",

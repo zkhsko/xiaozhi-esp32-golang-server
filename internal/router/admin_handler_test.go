@@ -366,7 +366,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 		"endpoint": "wss://dashscope.aliyuncs.com/api-v1/ws",
 		"api_key": "sk-secret-key-123456",
 		"model": "qwen-audio-3.0-asr-flash-streaming",
-		"hotwords": "小智,ESP32,智能音箱",
+		"hotwords": "[\"小智\", \"ESP32\", \"智能音箱\"]",
 		"connect_timeout_ms": 6000,
 		"enabled": true
 	}`)
@@ -423,7 +423,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 		"endpoint": "wss://dashscope.aliyuncs.com/api-v1/ws",
 		"api_key": "",
 		"model": "qwen-audio-asr-v2",
-		"hotwords": "小智,ESP32,智能音箱,修改热词",
+		"hotwords": "[\"小智\", \"ESP32\", \"智能音箱\", \"修改热词\"]",
 		"connect_timeout_ms": 8000,
 		"enabled": false
 	}`, asrID))

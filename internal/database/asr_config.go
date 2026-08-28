@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -37,6 +38,8 @@ var (
 	ErrInvalidASRModelLength = errors.New("asr model length exceeds 255 bytes")
 	// ErrInvalidASRHotwordsLength 表示 ASR 热词长度超过 1048576 字节（1MB）。
 	ErrInvalidASRHotwordsLength = errors.New("asr hotwords length exceeds 1048576 bytes")
+	// ErrInvalidASRHotwordsJSON 表示 ASR 热词格式非法（非空时必须为合法 JSON 格式）。
+	ErrInvalidASRHotwordsJSON = errors.New("asr hotwords must be valid json format")
 	// ErrInvalidASRConnectTimeout 表示 ASR 连接超时不在合法范围（3000 ~ 30000 毫秒）。
 	ErrInvalidASRConnectTimeout = errors.New("asr connect_timeout_ms must be between 3000 and 30000 ms")
 )
@@ -53,7 +56,7 @@ var (
 // - endpoint: ASR WebSocket Endpoint，必须以 ws:// 或 wss:// 开头，最大 1024 字节。
 // - api_key: 明文 API Key（脱敏时不输出，json:"-"），最大 1024 字节。
 // - model: ASR 模型名称，最大 255 字节。
-// - hotwords: 热词配置（支持大量文本），文本类型。
+// - hotwords: 热词配置（JSON 格式，如 ["小智", "智能音箱"] 或 [{"word": "小智", "weight": 10}]），文本类型。
 // - connect_timeout_ms: 连接超时时间（毫秒），合法范围 3000 ~ 30000。
 // - enabled: 是否允许 Agent 引用（布尔值，默认 true）。
 // - created_at: 创建时间。
@@ -116,6 +119,13 @@ func (c *ASRConfig) Validate() error {
 
 	if len(c.Hotwords) > 1024*1024 {
 		return ErrInvalidASRHotwordsLength
+	}
+
+	trimmedHotwords := strings.TrimSpace(c.Hotwords)
+	if trimmedHotwords != "" {
+		if !json.Valid([]byte(trimmedHotwords)) {
+			return ErrInvalidASRHotwordsJSON
+		}
 	}
 
 	if c.ConnectTimeoutMS < 3000 || c.ConnectTimeoutMS > 30000 {

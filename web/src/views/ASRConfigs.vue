@@ -223,7 +223,6 @@
         <el-form-item label="配置名称" prop="name">
           <el-input
             v-model="configDialog.form.name"
-            placeholder="如：百炼流式语音识别"
             maxlength="128"
             show-word-limit
             clearable
@@ -234,16 +233,14 @@
         <el-form-item label="服务端点" prop="endpoint">
           <el-input
             v-model="configDialog.form.endpoint"
-            placeholder="如：wss://dashscope.aliyuncs.com/api-v1/ws"
             clearable
           />
-          <span class="form-item-tip">ASR WebSocket 协议地址，必须以 ws:// 或 wss:// 开头</span>
+          <span class="form-item-tip">ASR WebSocket 协议地址，必须以 ws:// 或 wss:// 开头（如 wss://dashscope.aliyuncs.com/api-v1/ws）</span>
         </el-form-item>
 
         <el-form-item label="模型标识" prop="model">
           <el-input
             v-model="configDialog.form.model"
-            placeholder="如：qwen-audio-3.0-asr-flash-streaming"
             maxlength="255"
             clearable
           />
@@ -255,7 +252,6 @@
             v-model="configDialog.form.api_key"
             type="password"
             show-password
-            :placeholder="configDialog.isEdit ? '留空表示保留数据库原 API Key' : '请输入 DashScope / ASR API Key'"
             clearable
           />
           <span class="form-item-tip">
@@ -275,14 +271,26 @@
           <div class="form-item-tip">WebSocket 建立连接的最大超时时间（3000 ~ 30000 毫秒）</div>
         </el-form-item>
 
-        <el-form-item label="热词配置" prop="hotwords">
-          <el-input
-            v-model="configDialog.form.hotwords"
-            type="textarea"
-            :rows="4"
-            placeholder="支持配置自定义语音识别热词（如人名、地名、行业术语、唤醒词等），用逗号或换行分隔，支持大容量文本"
-          />
-          <span class="form-item-tip">提升特定专业词汇、专有名词在语音识别过程中的召回率</span>
+        <el-form-item label="热词配置 (JSON)" prop="hotwords">
+          <div class="hotwords-input-wrapper">
+            <el-input
+              v-model="configDialog.form.hotwords"
+              type="textarea"
+              :rows="5"
+            />
+            <div class="hotwords-toolbar">
+              <el-button
+                link
+                type="primary"
+                size="small"
+                :icon="DocumentChecked"
+                @click="formatJSONInDialog"
+              >
+                格式化 JSON
+              </el-button>
+            </div>
+          </div>
+          <span class="form-item-tip">热词必须为合法 JSON 格式（如字符串数组 ["小智", "智能音箱"] 或自定义权重对象数组）</span>
         </el-form-item>
 
         <el-form-item label="启用状态" prop="enabled">
@@ -343,6 +351,7 @@ import {
   CopyDocument,
   Edit,
   Microphone,
+  DocumentChecked,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -401,6 +410,18 @@ const validateEndpoint = (_rule: any, value: string, callback: any) => {
   callback()
 }
 
+const validateHotwordsJSON = (_rule: any, value: string, callback: any) => {
+  if (!value || !value.trim()) {
+    return callback()
+  }
+  try {
+    JSON.parse(value.trim())
+    callback()
+  } catch {
+    callback(new Error('热词配置必须为合法的 JSON 格式（如 ["小智", "智能音箱"]）'))
+  }
+}
+
 const configRules: FormRules = {
   name: [
     { required: true, message: '请输入配置名称', trigger: 'blur' },
@@ -415,6 +436,9 @@ const configRules: FormRules = {
   ],
   connect_timeout_ms: [
     { required: true, message: '请输入连接超时时间', trigger: 'blur' },
+  ],
+  hotwords: [
+    { validator: validateHotwordsJSON, trigger: 'blur' },
   ],
 }
 
@@ -500,6 +524,14 @@ function openCreateDialog() {
 // 打开编辑弹窗
 function openEditDialog(row: ASRConfigItem) {
   configDialog.isEdit = true
+  let formattedHotwords = row.hotwords || ''
+  if (formattedHotwords.trim()) {
+    try {
+      formattedHotwords = JSON.stringify(JSON.parse(formattedHotwords), null, 2)
+    } catch {
+      // 保持原样
+    }
+  }
   configDialog.form = {
     id: row.id,
     name: row.name,
@@ -507,16 +539,40 @@ function openEditDialog(row: ASRConfigItem) {
     model: row.model,
     api_key: '', // 编辑时默认留空
     connect_timeout_ms: row.connect_timeout_ms || 5000,
-    hotwords: row.hotwords || '',
+    hotwords: formattedHotwords,
     enabled: row.enabled,
   }
   configDialog.visible = true
 }
 
+// 格式化表单内 JSON
+function formatJSONInDialog() {
+  const raw = configDialog.form.hotwords.trim()
+  if (!raw) {
+    ElMessage.info('热词配置内容为空')
+    return
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    configDialog.form.hotwords = JSON.stringify(parsed, null, 2)
+    ElMessage.success('JSON 格式化成功')
+  } catch (err: any) {
+    ElMessage.error(`JSON 格式非法: ${err.message || err}`)
+  }
+}
+
 // 打开热词详情弹窗
 function openHotwordsDialog(row: ASRConfigItem) {
   hotwordsDialog.configName = row.name
-  hotwordsDialog.content = row.hotwords || ''
+  let content = row.hotwords || ''
+  if (content.trim()) {
+    try {
+      content = JSON.stringify(JSON.parse(content), null, 2)
+    } catch {
+      // 保持原样
+    }
+  }
+  hotwordsDialog.content = content
   hotwordsDialog.visible = true
 }
 
@@ -625,7 +681,16 @@ async function handleBatchDelete() {
 
 // 热词预览截断
 function getHotwordsPreview(hotwords: string): string {
-  if (!hotwords) return ''
+  if (!hotwords || !hotwords.trim()) return ''
+  try {
+    const parsed = JSON.parse(hotwords.trim())
+    if (Array.isArray(parsed)) {
+      const preview = parsed.slice(0, 3).map((w: any) => typeof w === 'string' ? w : JSON.stringify(w)).join(', ')
+      return `[${parsed.length}项] ` + preview + (parsed.length > 3 ? '...' : '')
+    }
+  } catch {
+    // 非 JSON 数组时回退普通截断
+  }
   const singleLine = hotwords.replace(/[\r\n]+/g, ' ').trim()
   if (singleLine.length > 30) {
     return singleLine.slice(0, 30) + '...'
@@ -787,6 +852,16 @@ onMounted(() => {
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
+}
+
+.hotwords-input-wrapper {
+  width: 100%;
+}
+
+.hotwords-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
 }
 
 .form-item-tip {
