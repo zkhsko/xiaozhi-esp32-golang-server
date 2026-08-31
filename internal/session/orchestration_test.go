@@ -504,13 +504,15 @@ func TestOrchestrateLLMAndTTS_SentenceSubtitleSync(t *testing.T) {
 		},
 	}
 
+	s1 := "你好世界，很高兴在这个美好的清晨与你相遇。"
+	s2 := "今天天气真好，微风徐徐让人心情格外舒畅愉快。"
 	mockLLM := &mockLLMClient{
 		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
 			if callback != nil {
-				_ = callback(ctx, ai.LLMChunk{Text: "你好世界。", Iteration: 0})
-				_ = callback(ctx, ai.LLMChunk{Text: "今天天气真好。", Iteration: 0})
+				_ = callback(ctx, ai.LLMChunk{Text: s1, Iteration: 0})
+				_ = callback(ctx, ai.LLMChunk{Text: s2, Iteration: 0})
 			}
-			return "你好世界。今天天气真好。", nil
+			return s1 + s2, nil
 		},
 	}
 
@@ -572,11 +574,11 @@ func TestOrchestrateLLMAndTTS_SentenceSubtitleSync(t *testing.T) {
 		t.Fatalf("expected 2 sentence_start messages, got %d: %v", len(sentenceStarts), sentenceStarts)
 	}
 
-	if sentenceStarts[0] != "你好世界。" {
-		t.Fatalf("expected first sentence '你好世界。', got %q", sentenceStarts[0])
+	if sentenceStarts[0] != s1 {
+		t.Fatalf("expected first sentence %q, got %q", s1, sentenceStarts[0])
 	}
-	if sentenceStarts[1] != "今天天气真好。" {
-		t.Fatalf("expected second sentence '今天天气真好。', got %q", sentenceStarts[1])
+	if sentenceStarts[1] != s2 {
+		t.Fatalf("expected second sentence %q, got %q", s2, sentenceStarts[1])
 	}
 
 	// 验证消息类型的精确时间序：
@@ -607,13 +609,13 @@ func TestOrchestrateLLMAndTTS_SentenceSubtitleSync(t *testing.T) {
 	if order[0] != "tts.start" {
 		t.Fatalf("expected first item 'tts.start', got %s", order[0])
 	}
-	if order[1] != "sentence:你好世界。" {
-		t.Fatalf("expected second item 'sentence:你好世界。', got %s", order[1])
+	if order[1] != "sentence:"+s1 {
+		t.Fatalf("expected second item %q, got %s", "sentence:"+s1, order[1])
 	}
 	// 中间应有音频包，随后才是第二句字幕
 	foundSecondSentence := false
 	for i := 2; i < len(order); i++ {
-		if order[i] == "sentence:今天天气真好。" {
+		if order[i] == "sentence:"+s2 {
 			foundSecondSentence = true
 			if order[i-1] != "audio" {
 				t.Fatalf("expected audio packet before second sentence start, got %s", order[i-1])
