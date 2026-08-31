@@ -6,125 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
 )
-
-func TestDefaultServerTools(t *testing.T) {
-	tools := DefaultServerTools()
-	if len(tools) != 2 {
-		t.Fatalf("expected 2 default server tools, got %d", len(tools))
-	}
-
-	toolMap := make(map[string]ai.Tool)
-	for _, tool := range tools {
-		toolMap[tool.Name] = tool
-	}
-
-	timeTool, exists := toolMap[ServerToolGetCurrentTime]
-	if !exists {
-		t.Fatalf("expected tool %s to exist", ServerToolGetCurrentTime)
-	}
-	if timeTool.Description == "" {
-		t.Fatal("expected non-empty description for get_current_time tool")
-	}
-	if timeTool.Parameters == nil {
-		t.Fatal("expected non-nil parameters for get_current_time tool")
-	}
-
-	closeTool, exists := toolMap[ServerToolCloseSession]
-	if !exists {
-		t.Fatalf("expected tool %s to exist", ServerToolCloseSession)
-	}
-	if closeTool.Description == "" {
-		t.Fatal("expected non-empty description for close_session tool")
-	}
-	if closeTool.Parameters == nil {
-		t.Fatal("expected non-nil parameters for close_session tool")
-	}
-}
-
-func TestExecuteGetCurrentTime(t *testing.T) {
-	out, err := executeGetCurrentTime()
-	if err != nil {
-		t.Fatalf("executeGetCurrentTime failed: %v", err)
-	}
-	if out == nil {
-		t.Fatal("expected non-nil output")
-	}
-	if out.DateTime == "" || out.Date == "" || out.Time == "" || out.Weekday == "" || out.Timezone == "" || out.UTCOffset == "" {
-		t.Fatalf("expected non-empty fields in GetCurrentTimeOutput: %+v", out)
-	}
-}
-
-func TestExecuteCloseSession(t *testing.T) {
-	in := CloseSessionInput{Reason: "用户想要休息"}
-	out, err := executeCloseSession(in)
-	if err != nil {
-		t.Fatalf("executeCloseSession failed: %v", err)
-	}
-	if out == nil {
-		t.Fatal("expected non-nil output")
-	}
-	if out.Status != "success" {
-		t.Fatalf("expected status 'success', got %v", out.Status)
-	}
-	if out.Message == "" {
-		t.Fatal("expected non-empty message in CloseSessionOutput")
-	}
-}
-
-func TestExecuteServerTool_GetCurrentTime(t *testing.T) {
-	ctx := context.Background()
-	result, err := executeServerTool(ctx, ServerToolGetCurrentTime, nil)
-	if err != nil {
-		t.Fatalf("executeServerTool failed: %v", err)
-	}
-
-	out, ok := result.(*GetCurrentTimeOutput)
-	if !ok {
-		t.Fatalf("expected *GetCurrentTimeOutput, got %T", result)
-	}
-
-	if out.DateTime == "" || out.Date == "" || out.Time == "" || out.Weekday == "" || out.Timezone == "" || out.UTCOffset == "" {
-		t.Fatalf("expected non-empty fields in *GetCurrentTimeOutput: %+v", out)
-	}
-}
-
-func TestExecuteServerTool_CloseSession(t *testing.T) {
-	ctx := context.Background()
-
-	// 1. 测试 struct 入参
-	result, err := executeServerTool(ctx, ServerToolCloseSession, CloseSessionInput{Reason: "退出"})
-	if err != nil {
-		t.Fatalf("executeServerTool failed: %v", err)
-	}
-
-	out, ok := result.(*CloseSessionOutput)
-	if !ok {
-		t.Fatalf("expected *CloseSessionOutput, got %T", result)
-	}
-	if out.Status != "success" {
-		t.Fatalf("expected status 'success', got %v", out.Status)
-	}
-
-	// 2. 测试 map 入参
-	resMap, err := executeServerTool(ctx, ServerToolCloseSession, map[string]any{"reason": "睡觉了"})
-	if err != nil {
-		t.Fatalf("executeServerTool with map failed: %v", err)
-	}
-	outMap, ok := resMap.(*CloseSessionOutput)
-	if !ok || outMap.Status != "success" {
-		t.Fatalf("expected successful *CloseSessionOutput from map input, got %+v", resMap)
-	}
-}
-
-func TestExecuteServerTool_NotFound(t *testing.T) {
-	ctx := context.Background()
-	_, err := executeServerTool(ctx, "non_existent_tool", nil)
-	if err == nil {
-		t.Fatal("expected error for non existent tool, got nil")
-	}
-}
 
 func TestSession_AvailableTools_ServerPriorityAndDedup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -138,7 +22,7 @@ func TestSession_AvailableTools_ServerPriorityAndDedup(t *testing.T) {
 		generation: 1,
 		mcpTools: []ai.Tool{
 			{
-				Name:        ServerToolCloseSession, // 与服务端工具重名，应被服务端工具遮蔽
+				Name:        agentkit.ToolCloseSession, // 与服务端内置工具重名，应被服务端工具遮蔽
 				Description: "设备端伪造的 close_session",
 			},
 			{
@@ -164,9 +48,9 @@ func TestSession_AvailableTools_ServerPriorityAndDedup(t *testing.T) {
 	var hasTime, hasClose, hasVolume bool
 	for _, tool := range tools {
 		switch tool.Name {
-		case ServerToolGetCurrentTime:
+		case agentkit.ToolGetCurrentTime:
 			hasTime = true
-		case ServerToolCloseSession:
+		case agentkit.ToolCloseSession:
 			hasClose = true
 			if tool.Description == "设备端伪造的 close_session" {
 				t.Fatal("device tool must not override server tool definition")
@@ -198,7 +82,7 @@ func TestSession_AvailableTools_ExecuteServerToolClosure(t *testing.T) {
 	tools := sess.availableTools(1)
 	var closeTool *ai.Tool
 	for i := range tools {
-		if tools[i].Name == ServerToolCloseSession {
+		if tools[i].Name == agentkit.ToolCloseSession {
 			closeTool = &tools[i]
 			break
 		}
@@ -216,7 +100,7 @@ func TestSession_AvailableTools_ExecuteServerToolClosure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("closeTool.Run failed: %v", err)
 	}
-	out, ok := res.(*CloseSessionOutput)
+	out, ok := res.(*agentkit.CloseSessionOutput)
 	if !ok || out == nil || out.Status != "success" {
 		t.Fatalf("expected *CloseSessionOutput with status 'success', got %T (%+v)", res, res)
 	}
@@ -243,7 +127,7 @@ func TestSession_ExecuteToolClosure_StaleGeneration(t *testing.T) {
 	}
 
 	// 传入代次 1 的请求
-	_, err := sess.executeToolClosure(ctx, 1, ServerToolGetCurrentTime, nil)
+	_, err := sess.executeToolClosure(ctx, 1, agentkit.ToolGetCurrentTime, nil)
 	if err == nil {
 		t.Fatal("expected error on generation mismatch, got nil")
 	}
@@ -261,7 +145,7 @@ func TestSession_ExecuteToolClosure_ContextCanceled(t *testing.T) {
 		generation: 1,
 	}
 
-	_, err := sess.executeToolClosure(ctx, 1, ServerToolGetCurrentTime, nil)
+	_, err := sess.executeToolClosure(ctx, 1, agentkit.ToolGetCurrentTime, nil)
 	if err == nil {
 		t.Fatal("expected error for canceled context, got nil")
 	}
@@ -333,7 +217,7 @@ func TestWithTools_AsSoleToolChannel_NoToolsInSystemPromptOrMessages(t *testing.
 
 	// 2. 验证工具描述唯一通过 availableTools 独立通道传递
 	tools := sess.availableTools(1)
-	if len(tools) != 3 { // 2 server tools + 1 mcp tool
+	if len(tools) != 3 { // 2 builtin tools + 1 mcp tool
 		t.Fatalf("expected 3 tools in availableTools, got %d", len(tools))
 	}
 }

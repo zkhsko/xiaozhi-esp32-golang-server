@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
 )
 
@@ -347,7 +348,7 @@ func TestOrchestrateLLMAndTTS_MultiTurnTools_Success(t *testing.T) {
 	mockLLM.generate = func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
 		// 验证传入了可执行工具
 		for _, tool := range req.Tools {
-			if tool.Name == ServerToolGetCurrentTime {
+			if tool.Name == agentkit.ToolGetCurrentTime {
 				res, err := tool.Run(ctx, map[string]any{})
 				if err != nil {
 					return "", err
