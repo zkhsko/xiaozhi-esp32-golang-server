@@ -276,89 +276,75 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	pacer.FinishInput(userText, finalText)
 }
 
-// sentenceTask 封装单句流式语音合成任务及其 PCM 数据流通道。
-type sentenceTask struct {
-	sentence string
-	pcmCh    chan []byte
-	errCh    chan error
-}
-
-// fetchSentenceTTS 为单个句子建立流式 TTS 会话，持续拉取 PCM 数据块写入 task 通道，并在结束时关闭通道。
-func (s *Session) fetchSentenceTTS(ctx context.Context, gen uint64, sentence string, pcmCh chan<- []byte, errCh chan<- error) {
-	defer close(pcmCh)
-
+// synthesizeSentence 为单个句子建立流式 TTS 会话，顺序流式拉取 PCM 数据、进行分帧 Opus 编码并写入下行节奏器。
+// 保持严格单并发合成，当前句子拉取完毕后再拉取下一句。
+func (s *Session) synthesizeSentence(ctx context.Context, gen uint64, sentence string, streamEncoder *audio.StreamEncoder, pacer *DownlinkPacer) error {
 	if s.ttsClient == nil {
-		return
+		return nil
 	}
 
 	stream, err := s.ttsClient.CreateStream(ctx)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-			return
-		}
-		select {
-		case errCh <- err:
-		default:
-		}
-		return
+		return err
 	}
 	defer stream.Close()
 
 	if err := stream.SendSentence(ctx, sentence); err != nil {
-		if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-			return
-		}
-		select {
-		case errCh <- err:
-		default:
-		}
-		return
+		return err
 	}
 
 	if err := stream.Finish(ctx); err != nil {
-		if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-			return
-		}
-		select {
-		case errCh <- err:
-		default:
-		}
-		return
+		return err
 	}
+
+	hasEnqueuedSentenceStart := false
 
 	for {
 		if ctx.Err() != nil || s.Generation() > gen {
-			return
+			return ctx.Err()
 		}
 
 		pcmChunk, err := stream.NextPCM(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return
+				return nil
 			}
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-				return
-			}
-			select {
-			case errCh <- err:
-			default:
-			}
-			return
+			return err
 		}
 
 		if len(pcmChunk) == 0 {
 			continue
 		}
 
-		select {
-		case <-ctx.Done():
-			return
-		case pcmCh <- pcmChunk:
+		if !hasEnqueuedSentenceStart {
+			if pacer != nil {
+				if err := pacer.EnqueueSentenceStart(sentence); err != nil {
+					return err
+				}
+			}
+			hasEnqueuedSentenceStart = true
+		}
+
+		packets, err := streamEncoder.Feed(pcmChunk)
+		if err != nil {
+			return err
+		}
+
+		for _, pkt := range packets {
+			if s.Generation() > gen {
+				return errors.New("generation mismatch")
+			}
+			s.handleEncodedOpusPacket(gen, pkt)
+			if pacer != nil {
+				if err := pacer.Enqueue(pkt); err != nil {
+					return err
+				}
+			}
 		}
 	}
 }
 
-// consumeSentencesTTS 采用流水线并行合成与流式分帧编码，边生成边将单句字幕通知与 Opus 音频包实时压入下行节奏器。
+// consumeSentencesTTS 严格保持单并发合成与流式分帧编码，边生成边将单句字幕通知与 Opus 音频包实时压入下行节奏器。
 func (s *Session) consumeSentencesTTS(ctx context.Context, gen uint64, sentenceCh <-chan string, pacer *DownlinkPacer, done chan<- error) {
 	var consumeErr error
 	defer func() {
@@ -401,148 +387,31 @@ func (s *Session) consumeSentencesTTS(ctx context.Context, gen uint64, sentenceC
 	streamEncoder := audio.NewStreamEncoder(enc)
 	sessionId := s.SessionId()
 
-	taskCh := make(chan *sentenceTask, 100)
-
-	// 启动分发协程：从 sentenceCh 读取每个分句，并发启动 fetchSentenceTTS 抓取 PCM，并按序把 task 塞入 taskCh
-	go func() {
-		defer close(taskCh)
-		for {
-			var sentence string
-			var ok bool
-			select {
-			case <-ctx.Done():
-				return
-			case sentence, ok = <-sentenceCh:
-				if !ok {
-					return
-				}
-			}
-
-			if sentence == "" {
-				continue
-			}
-
-			task := &sentenceTask{
-				sentence: sentence,
-				pcmCh:    make(chan []byte, 100),
-				errCh:    make(chan error, 1),
-			}
-
-			select {
-			case <-ctx.Done():
-				return
-			case taskCh <- task:
-			}
-
-			go s.fetchSentenceTTS(ctx, gen, task.sentence, task.pcmCh, task.errCh)
-		}
-	}()
-
-	// 顺序消费 taskCh 中的每个 task，实现单句字幕首包先于音频入队，后续 PCM 边编码边流式入队
-	for {
+	for sentence := range sentenceCh {
 		if ctx.Err() != nil || s.Generation() > gen {
 			return
 		}
+		if sentence == "" {
+			continue
+		}
 
-		var task *sentenceTask
-		var ok bool
-		select {
-		case <-ctx.Done():
+		if err := s.synthesizeSentence(ctx, gen, sentence, streamEncoder, pacer); err != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
+				return
+			}
+			consumeErr = err
+			s.logger.Warn("tts sentence stream error",
+				"error", err,
+				"session_id", sessionId,
+				"generation", gen,
+			)
+			s.postEvent(event{
+				kind:       eventKindError,
+				generation: gen,
+				err:        err,
+				fatal:      true,
+			})
 			return
-		case task, ok = <-taskCh:
-			if !ok {
-				break
-			}
-		}
-
-		if !ok {
-			break
-		}
-
-		hasEnqueuedSentenceStart := false
-
-		for {
-			if ctx.Err() != nil || s.Generation() > gen {
-				return
-			}
-
-			var pcmChunk []byte
-			var pcmOk bool
-			select {
-			case <-ctx.Done():
-				return
-			case pcmChunk, pcmOk = <-task.pcmCh:
-			}
-
-			if !pcmOk {
-				break
-			}
-
-			if len(pcmChunk) == 0 {
-				continue
-			}
-
-			if !hasEnqueuedSentenceStart {
-				if pacer != nil {
-					if err := pacer.EnqueueSentenceStart(task.sentence); err != nil {
-						return
-					}
-				}
-				hasEnqueuedSentenceStart = true
-			}
-
-			packets, err := streamEncoder.Feed(pcmChunk)
-			if err != nil {
-				consumeErr = err
-				s.logger.Warn("failed to encode tts pcm to opus",
-					"error", err,
-					"session_id", sessionId,
-					"generation", gen,
-				)
-				s.postEvent(event{
-					kind:       eventKindError,
-					generation: gen,
-					err:        err,
-					fatal:      true,
-				})
-				return
-			}
-
-			for _, pkt := range packets {
-				if s.Generation() > gen {
-					return
-				}
-				s.handleEncodedOpusPacket(gen, pkt)
-				if pacer != nil {
-					if err := pacer.Enqueue(pkt); err != nil {
-						return
-					}
-				}
-			}
-		}
-
-		// 检查 task 是否在后台拉取过程中发生异常
-		select {
-		case tErr := <-task.errCh:
-			if tErr != nil {
-				if errors.Is(tErr, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-					return
-				}
-				consumeErr = tErr
-				s.logger.Warn("tts sentence stream error",
-					"error", tErr,
-					"session_id", sessionId,
-					"generation", gen,
-				)
-				s.postEvent(event{
-					kind:       eventKindError,
-					generation: gen,
-					err:        tErr,
-					fatal:      true,
-				})
-				return
-			}
-		default:
 		}
 	}
 

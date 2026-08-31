@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ type mockTTSStream struct {
 	finished  bool
 	closed    bool
 	sentences []string
+	onClose   func()
 }
 
 func (m *mockTTSStream) SendSentence(ctx context.Context, text string) error {
@@ -58,6 +60,9 @@ func (m *mockTTSStream) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closed = true
+	if m.onClose != nil {
+		m.onClose()
+	}
 	return nil
 }
 
@@ -267,6 +272,73 @@ func TestConsumeSentencesTTS_ExplicitContract_ContextCanceled(t *testing.T) {
 	case <-pcmDone:
 	case <-time.After(1 * time.Second):
 		t.Fatal("consumeSentencesTTS did not exit promptly after context cancellation")
+	}
+}
+
+func TestConsumeSentencesTTS_SingleConcurrency(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var activeStreams atomic.Int32
+	var maxObservedConcurrency atomic.Int32
+
+	mockTTS := &mockTTSClient{
+		newStream: func() *mockTTSStream {
+			curr := activeStreams.Add(1)
+			for {
+				max := maxObservedConcurrency.Load()
+				if curr <= max || maxObservedConcurrency.CompareAndSwap(max, curr) {
+					break
+				}
+			}
+			return &mockTTSStream{
+				pcmChunks: [][]byte{make([]byte, 2880), make([]byte, 2880)},
+				onClose: func() {
+					activeStreams.Add(-1)
+				},
+			}
+		},
+	}
+
+	sess := &Session{
+		ctx:        ctx,
+		cancel:     cancel,
+		logger:     slog.Default(),
+		events:     make(chan event, 10),
+		sessionId:  "sess-single-concurrency-test",
+		generation: 1,
+		state:      StateSpeaking,
+		ttsClient:  mockTTS,
+	}
+
+	pacer := NewDownlinkPacer(ctx, sess, 1, 100, nil)
+	go pacer.Run()
+	defer pacer.Stop()
+
+	sentenceCh := make(chan string, 10)
+	sentenceCh <- "第一句很长的话用来做语音合成测试。"
+	sentenceCh <- "第二句很长的话用来做语音合成测试。"
+	sentenceCh <- "第三句很长的话用来做语音合成测试。"
+	close(sentenceCh)
+
+	pcmDone := make(chan error, 1)
+	go sess.consumeSentencesTTS(ctx, 1, sentenceCh, pacer, pcmDone)
+
+	select {
+	case err := <-pcmDone:
+		if err != nil {
+			t.Fatalf("unexpected error from consumeSentencesTTS: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("consumeSentencesTTS timed out")
+	}
+
+	if max := maxObservedConcurrency.Load(); max != 1 {
+		t.Fatalf("expected max observed concurrency to be 1, got %d", max)
+	}
+
+	if count := len(mockTTS.streams); count != 3 {
+		t.Fatalf("expected 3 streams created sequentially, got %d", count)
 	}
 }
 
