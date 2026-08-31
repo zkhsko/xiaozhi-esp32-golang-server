@@ -44,8 +44,26 @@ func defaultTickerFactory(d time.Duration) Ticker {
 	return &realTicker{ticker: time.NewTicker(d)}
 }
 
+// pacerItemKind 表示下行调度项的类型。
+type pacerItemKind uint8
+
+const (
+	// pacerItemAudio 表示 Opus 编码音频二进制包。
+	pacerItemAudio pacerItemKind = iota
+
+	// pacerItemSentenceStart 表示分句字幕开始播报文本通知。
+	pacerItemSentenceStart
+)
+
+// pacerItem 定义下行调度器队列中的单个调度单元。
+type pacerItem struct {
+	kind     pacerItemKind
+	data     []byte
+	sentence string
+}
+
 // DownlinkPacer 负责按 60 ms 实时节奏将编码后的 Opus 音频包逐包下发至 Writer，
-// 并协调 tts.start 与 tts.stop 消息的精确顺序及状态转换。
+// 并协调 tts.start、tts.sentence_start 与 tts.stop 消息的精确顺序及状态转换。
 type DownlinkPacer struct {
 	session *Session
 	writer  *Writer
@@ -54,7 +72,7 @@ type DownlinkPacer struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 
-	packetQueue chan []byte
+	itemQueue   chan pacerItem
 	finishChan  chan struct{}
 	finishOnce  sync.Once
 	doneChan    chan struct{}
@@ -101,7 +119,7 @@ func NewDownlinkPacer(ctx context.Context, session *Session, gen uint64, queueCa
 		gen:           gen,
 		ctx:           pacerCtx,
 		cancel:        cancel,
-		packetQueue:   make(chan []byte, queueCap),
+		itemQueue:     make(chan pacerItem, queueCap),
 		finishChan:    make(chan struct{}),
 		doneChan:      make(chan struct{}),
 		tickerFactory: tickerFactory,
@@ -144,7 +162,32 @@ func (p *DownlinkPacer) Enqueue(packet []byte) error {
 	select {
 	case <-p.ctx.Done():
 		return p.ctx.Err()
-	case p.packetQueue <- copied:
+	case p.itemQueue <- pacerItem{kind: pacerItemAudio, data: copied}:
+		return nil
+	}
+}
+
+// EnqueueSentenceStart 将单句字幕通知存入下行发送队列，确保与对应音频帧保持严格顺序。
+func (p *DownlinkPacer) EnqueueSentenceStart(sentence string) error {
+	if sentence == "" {
+		return nil
+	}
+
+	p.mu.Lock()
+	if p.stopped {
+		p.mu.Unlock()
+		return ErrPacerStopped
+	}
+	p.mu.Unlock()
+
+	if p.session != nil && p.session.Generation() > p.gen {
+		return ErrPacerStopped
+	}
+
+	select {
+	case <-p.ctx.Done():
+		return p.ctx.Err()
+	case p.itemQueue <- pacerItem{kind: pacerItemSentenceStart, sentence: sentence}:
 		return nil
 	}
 }
@@ -191,11 +234,11 @@ func (p *DownlinkPacer) HasSentStop() bool {
 	return p.hasSentStop
 }
 
-// drainQueue 清空队列中残留的数据包。
+// drainQueue 清空队列中残留的数据项。
 func (p *DownlinkPacer) drainQueue() {
 	for {
 		select {
-		case <-p.packetQueue:
+		case <-p.itemQueue:
 		default:
 			return
 		}
@@ -221,8 +264,15 @@ func (p *DownlinkPacer) Run() {
 		case <-p.ctx.Done():
 			return
 
-		case pkt := <-p.packetQueue:
-			if err := p.sendPacket(pkt); err != nil {
+		case item := <-p.itemQueue:
+			if item.kind == pacerItemSentenceStart {
+				if err := p.sendTTSSentenceStart(item.sentence); err != nil {
+					return
+				}
+				continue
+			}
+
+			if err := p.sendPacket(item.data); err != nil {
 				return
 			}
 			if ticker == nil {
@@ -245,8 +295,15 @@ func (p *DownlinkPacer) drainRemaining(ticker Ticker) {
 		select {
 		case <-p.ctx.Done():
 			return
-		case pkt := <-p.packetQueue:
-			if err := p.sendPacket(pkt); err != nil {
+		case item := <-p.itemQueue:
+			if item.kind == pacerItemSentenceStart {
+				if err := p.sendTTSSentenceStart(item.sentence); err != nil {
+					return
+				}
+				continue
+			}
+
+			if err := p.sendPacket(item.data); err != nil {
 				return
 			}
 			if ticker == nil {
@@ -273,6 +330,45 @@ func (p *DownlinkPacer) waitTick(ticker Ticker) bool {
 	case <-ticker.C():
 		return true
 	}
+}
+
+// sendTTSSentenceStart 在当前句子音频即将播放时下发 tts.sentence_start 文本消息。
+func (p *DownlinkPacer) sendTTSSentenceStart(sentence string) error {
+	if sentence == "" {
+		return nil
+	}
+	if p.session != nil && p.session.Generation() > p.gen {
+		return nil
+	}
+
+	// 确保在下发第一句字幕前，先触发 tts.start 状态切换
+	if err := p.sendTTSStart(); err != nil {
+		return err
+	}
+
+	if p.session != nil && p.session.Generation() > p.gen {
+		return nil
+	}
+
+	sessionId := p.sessionId()
+	startBytes, err := EncodeTTSSentenceStartMessage(sessionId, sentence)
+	if err != nil {
+		return fmt.Errorf("encode sentence start message: %w", err)
+	}
+
+	if p.session != nil {
+		if p.session.Generation() > p.gen {
+			return nil
+		}
+		if err := p.session.sendTextMessage(startBytes); err != nil {
+			return fmt.Errorf("send sentence start text message: %w", err)
+		}
+	} else if p.writer != nil {
+		if err := p.writer.SendText(p.ctx, startBytes); err != nil {
+			return fmt.Errorf("send sentence start text message: %w", err)
+		}
+	}
+	return nil
 }
 
 // sendTTSStart 发送 tts.start 文本消息并将 Session 状态置为 StateSpeaking。

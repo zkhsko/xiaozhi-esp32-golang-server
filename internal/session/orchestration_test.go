@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"xiaozhi-esp32-golang-server/internal/ai"
 )
 
@@ -107,13 +109,24 @@ func (m *mockLLMClient) Generate(ctx context.Context, request ai.LLMRequest, cal
 	return "默认回复", nil
 }
 
-func TestConsumeTTSPCM_ExplicitContract_Success(t *testing.T) {
+func TestConsumeSentencesTTS_ExplicitContract_Success(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	conn := &mockWSConn{}
 	writer := NewWriter(ctx, conn, 100, nil)
 	defer writer.Close()
+
+	// 24000 Hz, 16-bit mono = 48000 bytes/sec, 60ms = 2880 bytes.
+	pcmFrame := make([]byte, 2880)
+	stream := &mockTTSStream{
+		pcmChunks: [][]byte{pcmFrame, pcmFrame},
+	}
+	mockTTS := &mockTTSClient{
+		newStream: func() *mockTTSStream {
+			return stream
+		},
+	}
 
 	sess := &Session{
 		ctx:        ctx,
@@ -124,21 +137,20 @@ func TestConsumeTTSPCM_ExplicitContract_Success(t *testing.T) {
 		sessionId:  "sess-consume-test",
 		generation: 1,
 		state:      StateSpeaking,
+		ttsClient:  mockTTS,
 	}
 
 	pacer := NewDownlinkPacer(ctx, sess, 1, 100, nil)
 	go pacer.Run()
 	defer pacer.Stop()
 
-	// 24000 Hz, 16-bit mono = 48000 bytes/sec, 60ms = 2880 bytes.
-	pcmFrame := make([]byte, 2880)
-	stream := &mockTTSStream{
-		pcmChunks: [][]byte{pcmFrame, pcmFrame},
-	}
+	sentenceCh := make(chan string, 5)
+	sentenceCh <- "你好测试"
+	close(sentenceCh)
 
 	pcmDone := make(chan error, 1)
 
-	go sess.consumeTTSPCM(ctx, 1, stream, pacer, pcmDone)
+	go sess.consumeSentencesTTS(ctx, 1, sentenceCh, pacer, pcmDone)
 
 	select {
 	case err, ok := <-pcmDone:
@@ -146,10 +158,10 @@ func TestConsumeTTSPCM_ExplicitContract_Success(t *testing.T) {
 			t.Fatal("expected channel open before read")
 		}
 		if err != nil {
-			t.Fatalf("consumeTTSPCM returned unexpected error: %v", err)
+			t.Fatalf("consumeSentencesTTS returned unexpected error: %v", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("consumeTTSPCM timed out")
+		t.Fatal("consumeSentencesTTS timed out")
 	}
 
 	select {
@@ -161,9 +173,16 @@ func TestConsumeTTSPCM_ExplicitContract_Success(t *testing.T) {
 	}
 }
 
-func TestConsumeTTSPCM_ExplicitContract_StreamError(t *testing.T) {
+func TestConsumeSentencesTTS_ExplicitContract_StreamError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	expectedErr := errors.New("simulated tts stream failure")
+	mockTTS := &mockTTSClient{
+		newStream: func() *mockTTSStream {
+			return &mockTTSStream{err: expectedErr}
+		},
+	}
 
 	sess := &Session{
 		ctx:        ctx,
@@ -173,20 +192,20 @@ func TestConsumeTTSPCM_ExplicitContract_StreamError(t *testing.T) {
 		sessionId:  "sess-consume-err-test",
 		generation: 1,
 		state:      StateSpeaking,
+		ttsClient:  mockTTS,
 	}
 
 	pacer := NewDownlinkPacer(ctx, sess, 1, 100, nil)
 	go pacer.Run()
 	defer pacer.Stop()
 
-	expectedErr := errors.New("simulated tts stream failure")
-	stream := &mockTTSStream{
-		err: expectedErr,
-	}
+	sentenceCh := make(chan string, 5)
+	sentenceCh <- "测试错误句子"
+	close(sentenceCh)
 
 	pcmDone := make(chan error, 1)
 
-	go sess.consumeTTSPCM(ctx, 1, stream, pacer, pcmDone)
+	go sess.consumeSentencesTTS(ctx, 1, sentenceCh, pacer, pcmDone)
 
 	select {
 	case err := <-pcmDone:
@@ -194,7 +213,7 @@ func TestConsumeTTSPCM_ExplicitContract_StreamError(t *testing.T) {
 			t.Fatalf("expected %v, got %v", expectedErr, err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("consumeTTSPCM did not return on stream error")
+		t.Fatal("consumeSentencesTTS did not return on stream error")
 	}
 
 	select {
@@ -210,8 +229,14 @@ func TestConsumeTTSPCM_ExplicitContract_StreamError(t *testing.T) {
 	}
 }
 
-func TestConsumeTTSPCM_ExplicitContract_ContextCanceled(t *testing.T) {
+func TestConsumeSentencesTTS_ExplicitContract_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	mockTTS := &mockTTSClient{
+		newStream: func() *mockTTSStream {
+			return &mockTTSStream{pcmChunks: [][]byte{make([]byte, 2880)}}
+		},
+	}
 
 	sess := &Session{
 		ctx:        ctx,
@@ -221,6 +246,7 @@ func TestConsumeTTSPCM_ExplicitContract_ContextCanceled(t *testing.T) {
 		sessionId:  "sess-consume-cancel-test",
 		generation: 1,
 		state:      StateSpeaking,
+		ttsClient:  mockTTS,
 	}
 
 	pacer := NewDownlinkPacer(ctx, sess, 1, 100, nil)
@@ -229,17 +255,18 @@ func TestConsumeTTSPCM_ExplicitContract_ContextCanceled(t *testing.T) {
 
 	cancel()
 
-	pcmDone := make(chan error, 1)
-	stream := &mockTTSStream{
-		pcmChunks: [][]byte{make([]byte, 2880)},
-	}
+	sentenceCh := make(chan string, 5)
+	sentenceCh <- "测试取消句子"
+	close(sentenceCh)
 
-	go sess.consumeTTSPCM(ctx, 1, stream, pacer, pcmDone)
+	pcmDone := make(chan error, 1)
+
+	go sess.consumeSentencesTTS(ctx, 1, sentenceCh, pacer, pcmDone)
 
 	select {
 	case <-pcmDone:
 	case <-time.After(1 * time.Second):
-		t.Fatal("consumeTTSPCM did not exit promptly after context cancellation")
+		t.Fatal("consumeSentencesTTS did not exit promptly after context cancellation")
 	}
 }
 
@@ -552,3 +579,98 @@ func TestSession_SystemPrompt_ToolsOrderingAndFormatting(t *testing.T) {
 		}
 	})
 }
+
+func TestOrchestrateLLMAndTTS_SentenceSubtitleSync(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 100, nil)
+	defer writer.Close()
+
+	ticker := newManualTicker()
+
+	mockTTS := &mockTTSClient{
+		newStream: func() *mockTTSStream {
+			return &mockTTSStream{
+				pcmChunks: [][]byte{make([]byte, 2880*3)},
+			}
+		},
+	}
+
+	mockLLM := &mockLLMClient{
+		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+			if callback != nil {
+				_ = callback(ctx, ai.LLMChunk{Text: "你好世界。", Iteration: 0})
+				_ = callback(ctx, ai.LLMChunk{Text: "今天天气真好。", Iteration: 0})
+			}
+			return "你好世界。今天天气真好。", nil
+		},
+	}
+
+	events := make(chan event, 10)
+	sess := &Session{
+		ctx:           ctx,
+		cancel:        cancel,
+		writer:        writer,
+		logger:        slog.Default(),
+		events:        events,
+		sessionId:     "sess-subtitle-sync",
+		generation:    1,
+		state:         StateSpeaking,
+		llmClient:     mockLLM,
+		ttsClient:     mockTTS,
+		tickerFactory: func(d time.Duration) Ticker { return ticker },
+	}
+
+	go sess.orchestrateLLMAndTTS(ctx, 1, "测试音字同步")
+
+	// 驱动 ticker 推进所有音频包下发
+	go func() {
+		for i := 0; i < 20; i++ {
+			ticker.Tick()
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case ev := <-events:
+		if ev.kind != eventKindTurnFinished {
+			t.Fatalf("expected eventKindTurnFinished, got %v", ev.kind)
+		}
+		sess.handleTurnFinishedEvent(ev)
+	case <-time.After(3 * time.Second):
+		t.Fatal("orchestrateLLMAndTTS timed out")
+	}
+
+	msgs := conn.getMessages()
+	if len(msgs) == 0 {
+		t.Fatal("expected messages sent to websocket")
+	}
+
+	var sentenceStarts []string
+	for _, m := range msgs {
+		if m.typ == websocket.MessageText {
+			var parsed map[string]any
+			if err := json.Unmarshal(m.payload, &parsed); err == nil {
+				if parsed["type"] == "tts" && parsed["state"] == "sentence_start" {
+					if txt, ok := parsed["text"].(string); ok {
+						sentenceStarts = append(sentenceStarts, txt)
+					}
+				}
+			}
+		}
+	}
+
+	if len(sentenceStarts) != 2 {
+		t.Fatalf("expected 2 sentence_start messages, got %d: %v", len(sentenceStarts), sentenceStarts)
+	}
+
+	if sentenceStarts[0] != "你好世界。" {
+		t.Fatalf("expected first sentence '你好世界。', got %q", sentenceStarts[0])
+	}
+	if sentenceStarts[1] != "今天天气真好。" {
+		t.Fatalf("expected second sentence '今天天气真好。', got %q", sentenceStarts[1])
+	}
+}
+
