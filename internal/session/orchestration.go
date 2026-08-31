@@ -15,7 +15,7 @@ func (s *Session) buildLLMMessages(userText string) []ai.Message {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	sysPrompt := s.buildSystemPromptLocked()
+	sysPrompt := s.systemPrompt
 
 	capacity := 1 + len(s.history)
 	if sysPrompt != "" {

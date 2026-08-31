@@ -21,7 +21,7 @@ var (
 	ErrServerToolNotFound = errors.New("server tool not found")
 )
 
-// DefaultServerTools 返回当前服务端支持并启用的默认服务端工具列表副本（纯元数据定义，用于提示词渲染）。
+// DefaultServerTools 返回当前服务端支持并启用的默认服务端工具列表副本。
 func DefaultServerTools() []ai.Tool {
 	return []ai.Tool{
 		{

@@ -359,65 +359,9 @@ func (s *Session) getMCPTools() []ai.Tool {
 	return copied
 }
 
-// FormatDeviceToolsPrompt 将工具列表序列化为完整 JSON 格式字符串。
-func FormatDeviceToolsPrompt(tools []ai.Tool) string {
-	if len(tools) == 0 {
-		return ""
-	}
-
-	mcpToolsList := make([]MCPTool, 0, len(tools))
-	for _, t := range tools {
-		mcpToolsList = append(mcpToolsList, MCPTool{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.Parameters,
-		})
-	}
-
-	toolsJSON, err := json.MarshalIndent(mcpToolsList, "", "  ")
-	if err != nil {
-		toolsJSON, _ = json.Marshal(mcpToolsList)
-	}
-
-	return string(toolsJSON)
-}
-
-// buildSystemPromptLocked 在持有锁的前提下计算当前会话实际生效的系统提示词。
-// 使用标准库 os.Expand 对基础提示词中的占位符（如 ${tools}）进行展开替换。
-func (s *Session) buildSystemPromptLocked() string {
-	serverTools := DefaultServerTools()
-	deviceTools := s.mcpTools
-
-	totalLen := len(deviceTools) + len(serverTools)
-	allTools := make([]ai.Tool, 0, totalLen)
-	seen := make(map[string]struct{}, totalLen)
-
-	// 1. 设备 MCP 工具在前
-	for _, t := range deviceTools {
-		if _, exists := seen[t.Name]; !exists {
-			seen[t.Name] = struct{}{}
-			allTools = append(allTools, t)
-		}
-	}
-
-	// 2. 服务端工具拼接在 MCP 工具之后
-	for _, t := range serverTools {
-		if _, exists := seen[t.Name]; !exists {
-			seen[t.Name] = struct{}{}
-			allTools = append(allTools, t)
-		}
-	}
-
-	toolsPrompt := FormatDeviceToolsPrompt(allTools)
-	values := map[string]string{
-		"tools": toolsPrompt,
-	}
-	return RenderPrompt(s.systemPrompt, values)
-}
-
-// SystemPrompt 返回当前会话实际生效的完整系统提示词（含根据设备上报工具追加的控制指令）。
+// SystemPrompt 返回当前会话实际生效的完整系统提示词。
 func (s *Session) SystemPrompt() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.buildSystemPromptLocked()
+	return s.systemPrompt
 }

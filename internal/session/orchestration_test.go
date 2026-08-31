@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -486,98 +485,15 @@ func TestOrchestrateLLMAndTTS_ContextCanceled(t *testing.T) {
 	}
 }
 
-func TestSession_SystemPrompt_ToolsOrderingAndFormatting(t *testing.T) {
-	t.Run("no tools placeholder in prompt means no tools appended", func(t *testing.T) {
-		sess := &Session{
-			systemPrompt: "你是小智助手。",
-			mcpTools: []ai.Tool{
-				{
-					Name:        "self.lamp.turn_on",
-					Description: "打开灯光",
-				},
-			},
-		}
+func TestSession_SystemPrompt(t *testing.T) {
+	sess := &Session{
+		systemPrompt: "你是小智助手。",
+	}
 
-		prompt := sess.SystemPrompt()
-		if prompt != "你是小智助手。" {
-			t.Fatalf("expected unchanged prompt without appended tools, got %q", prompt)
-		}
-	})
-
-	t.Run("tools placeholder replaced with device tools first followed by server tools", func(t *testing.T) {
-		sess := &Session{
-			systemPrompt: "你是小智助手。\n\n${tools}",
-			mcpTools: []ai.Tool{
-				{
-					Name:        "self.lamp.turn_on",
-					Description: "打开灯光",
-				},
-				{
-					Name:        "self.audio_speaker.set_volume",
-					Description: "设置音量",
-				},
-			},
-		}
-
-		prompt := sess.SystemPrompt()
-		basePrefix := "你是小智助手。\n\n"
-		if !strings.HasPrefix(prompt, basePrefix) {
-			t.Fatalf("expected base prompt prefix in %s", prompt)
-		}
-
-		jsonPart := strings.TrimPrefix(prompt, basePrefix)
-		var parsedTools []MCPTool
-		if err := json.Unmarshal([]byte(jsonPart), &parsedTools); err != nil {
-			t.Fatalf("expected valid JSON array without surrounding prompts, got err: %v\ncontent: %s", err, jsonPart)
-		}
-		if len(parsedTools) != 4 {
-			t.Fatalf("expected 4 tools in JSON, got %d", len(parsedTools))
-		}
-
-		idxDeviceTool1 := strings.Index(prompt, "self.lamp.turn_on")
-		idxDeviceTool2 := strings.Index(prompt, "self.audio_speaker.set_volume")
-		idxServerTool1 := strings.Index(prompt, ServerToolGetCurrentTime)
-		idxServerTool2 := strings.Index(prompt, ServerToolCloseSession)
-
-		if idxDeviceTool1 == -1 || idxDeviceTool2 == -1 || idxServerTool1 == -1 || idxServerTool2 == -1 {
-			t.Fatalf("all tools should be present in prompt:\n%s", prompt)
-		}
-
-		if !(idxDeviceTool1 < idxServerTool1 && idxDeviceTool2 < idxServerTool1) {
-			t.Fatalf("device tools should appear before server tools:\n%s", prompt)
-		}
-	})
-
-	t.Run("tools placeholder replacement inside template middle", func(t *testing.T) {
-		sess := &Session{
-			systemPrompt: "你是一个智能语音管家。\n【可用工具】\n${tools}\n请严格按照上述工具列表响应。",
-			mcpTools: []ai.Tool{
-				{
-					Name:        "self.lamp.turn_on",
-					Description: "打开灯光",
-				},
-			},
-		}
-
-		prompt := sess.SystemPrompt()
-
-		if !strings.HasPrefix(prompt, "你是一个智能语音管家。\n【可用工具】\n") {
-			t.Fatalf("expected template prefix in prompt, got:\n%s", prompt)
-		}
-		if !strings.HasSuffix(prompt, "\n请严格按照上述工具列表响应。") {
-			t.Fatalf("expected template suffix in prompt, got:\n%s", prompt)
-		}
-
-		idxSuffix := strings.Index(prompt, "请严格按照上述工具列表响应。")
-		idxTools := strings.Index(prompt, "self.lamp.turn_on")
-		if idxTools == -1 || idxTools >= idxSuffix {
-			t.Fatalf("tools should be placed before suffix instruction:\n%s", prompt)
-		}
-
-		if strings.Count(prompt, "self.lamp.turn_on") != 1 {
-			t.Fatalf("expected self.lamp.turn_on to appear exactly once, got count %d in:\n%s", strings.Count(prompt, "self.lamp.turn_on"), prompt)
-		}
-	})
+	prompt := sess.SystemPrompt()
+	if prompt != "你是小智助手。" {
+		t.Fatalf("expected prompt %q, got %q", "你是小智助手。", prompt)
+	}
 }
 
 func TestOrchestrateLLMAndTTS_SentenceSubtitleSync(t *testing.T) {
