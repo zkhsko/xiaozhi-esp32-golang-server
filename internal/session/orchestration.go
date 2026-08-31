@@ -276,7 +276,89 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	pacer.FinishInput(userText, finalText)
 }
 
-// consumeSentencesTTS 逐句消费分句通道，通过 TTS 客户端合成每句音频并分帧编码为 Opus 包，严格按序将分句字幕通知与音频帧送入下行节奏器。
+// sentenceTask 封装单句流式语音合成任务及其 PCM 数据流通道。
+type sentenceTask struct {
+	sentence string
+	pcmCh    chan []byte
+	errCh    chan error
+}
+
+// fetchSentenceTTS 为单个句子建立流式 TTS 会话，持续拉取 PCM 数据块写入 task 通道，并在结束时关闭通道。
+func (s *Session) fetchSentenceTTS(ctx context.Context, gen uint64, sentence string, pcmCh chan<- []byte, errCh chan<- error) {
+	defer close(pcmCh)
+
+	if s.ttsClient == nil {
+		return
+	}
+
+	stream, err := s.ttsClient.CreateStream(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
+			return
+		}
+		select {
+		case errCh <- err:
+		default:
+		}
+		return
+	}
+	defer stream.Close()
+
+	if err := stream.SendSentence(ctx, sentence); err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
+			return
+		}
+		select {
+		case errCh <- err:
+		default:
+		}
+		return
+	}
+
+	if err := stream.Finish(ctx); err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
+			return
+		}
+		select {
+		case errCh <- err:
+		default:
+		}
+		return
+	}
+
+	for {
+		if ctx.Err() != nil || s.Generation() > gen {
+			return
+		}
+
+		pcmChunk, err := stream.NextPCM(ctx)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
+				return
+			}
+			select {
+			case errCh <- err:
+			default:
+			}
+			return
+		}
+
+		if len(pcmChunk) == 0 {
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case pcmCh <- pcmChunk:
+		}
+	}
+}
+
+// consumeSentencesTTS 采用流水线并行合成与流式分帧编码，边生成边将单句字幕通知与 Opus 音频包实时压入下行节奏器。
 func (s *Session) consumeSentencesTTS(ctx context.Context, gen uint64, sentenceCh <-chan string, pacer *DownlinkPacer, done chan<- error) {
 	var consumeErr error
 	defer func() {
@@ -319,17 +401,55 @@ func (s *Session) consumeSentencesTTS(ctx context.Context, gen uint64, sentenceC
 	streamEncoder := audio.NewStreamEncoder(enc)
 	sessionId := s.SessionId()
 
+	taskCh := make(chan *sentenceTask, 100)
+
+	// 启动分发协程：从 sentenceCh 读取每个分句，并发启动 fetchSentenceTTS 抓取 PCM，并按序把 task 塞入 taskCh
+	go func() {
+		defer close(taskCh)
+		for {
+			var sentence string
+			var ok bool
+			select {
+			case <-ctx.Done():
+				return
+			case sentence, ok = <-sentenceCh:
+				if !ok {
+					return
+				}
+			}
+
+			if sentence == "" {
+				continue
+			}
+
+			task := &sentenceTask{
+				sentence: sentence,
+				pcmCh:    make(chan []byte, 100),
+				errCh:    make(chan error, 1),
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case taskCh <- task:
+			}
+
+			go s.fetchSentenceTTS(ctx, gen, task.sentence, task.pcmCh, task.errCh)
+		}
+	}()
+
+	// 顺序消费 taskCh 中的每个 task，实现单句字幕首包先于音频入队，后续 PCM 边编码边流式入队
 	for {
 		if ctx.Err() != nil || s.Generation() > gen {
 			return
 		}
 
-		var sentence string
+		var task *sentenceTask
 		var ok bool
 		select {
 		case <-ctx.Done():
 			return
-		case sentence, ok = <-sentenceCh:
+		case task, ok = <-taskCh:
 			if !ok {
 				break
 			}
@@ -339,133 +459,36 @@ func (s *Session) consumeSentencesTTS(ctx context.Context, gen uint64, sentenceC
 			break
 		}
 
-		if sentence == "" {
-			continue
-		}
+		hasEnqueuedSentenceStart := false
 
-		// 为当前单句创建合成流
-		stream, err := s.ttsClient.CreateStream(ctx)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-				return
-			}
-			consumeErr = err
-			s.logger.Warn("failed to create tts stream for sentence",
-				"error", err,
-				"session_id", sessionId,
-				"generation", gen,
-			)
-			s.postEvent(event{
-				kind:       eventKindError,
-				generation: gen,
-				err:        err,
-				fatal:      true,
-			})
-			return
-		}
-
-		s.mu.Lock()
-		s.ttsStream = stream
-		s.mu.Unlock()
-
-		if err := stream.SendSentence(ctx, sentence); err != nil {
-			_ = stream.Close()
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-				return
-			}
-			consumeErr = err
-			s.logger.Warn("failed to send sentence to tts",
-				"error", err,
-				"session_id", sessionId,
-				"generation", gen,
-			)
-			s.postEvent(event{
-				kind:       eventKindError,
-				generation: gen,
-				err:        err,
-				fatal:      true,
-			})
-			return
-		}
-
-		if err := stream.Finish(ctx); err != nil {
-			_ = stream.Close()
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-				return
-			}
-			consumeErr = err
-			s.logger.Warn("failed to finish tts sentence stream",
-				"error", err,
-				"session_id", sessionId,
-				"generation", gen,
-			)
-			s.postEvent(event{
-				kind:       eventKindError,
-				generation: gen,
-				err:        err,
-				fatal:      true,
-			})
-			return
-		}
-
-		var sentencePackets [][]byte
-
-		// 持续消费当前句子的 PCM 数据
-		sentenceFailed := false
 		for {
 			if ctx.Err() != nil || s.Generation() > gen {
-				_ = stream.Close()
 				return
 			}
 
-			pcmChunk, err := stream.NextPCM(ctx)
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					// 当前句子 PCM 读取完毕，刷新尾帧
-					packets, flushErr := streamEncoder.Flush()
-					if flushErr != nil {
-						consumeErr = flushErr
-						s.logger.Warn("failed to flush tts opus encoder",
-							"error", flushErr,
-							"session_id", sessionId,
-							"generation", gen,
-						)
-						s.postEvent(event{
-							kind:       eventKindError,
-							generation: gen,
-							err:        flushErr,
-							fatal:      true,
-						})
-						sentenceFailed = true
-					} else if len(packets) > 0 {
-						sentencePackets = append(sentencePackets, packets...)
-					}
-					break
-				}
+			var pcmChunk []byte
+			var pcmOk bool
+			select {
+			case <-ctx.Done():
+				return
+			case pcmChunk, pcmOk = <-task.pcmCh:
+			}
 
-				if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-					_ = stream.Close()
-					return
-				}
-
-				consumeErr = err
-				s.logger.Warn("tts stream pcm read failed",
-					"error", err,
-					"session_id", sessionId,
-					"generation", gen,
-				)
-				s.postEvent(event{
-					kind:       eventKindError,
-					generation: gen,
-					err:        err,
-					fatal:      true,
-				})
-				sentenceFailed = true
+			if !pcmOk {
 				break
 			}
 
 			if len(pcmChunk) == 0 {
 				continue
+			}
+
+			if !hasEnqueuedSentenceStart {
+				if pacer != nil {
+					if err := pacer.EnqueueSentenceStart(task.sentence); err != nil {
+						return
+					}
+				}
+				hasEnqueuedSentenceStart = true
 			}
 
 			packets, err := streamEncoder.Feed(pcmChunk)
@@ -482,46 +505,44 @@ func (s *Session) consumeSentencesTTS(ctx context.Context, gen uint64, sentenceC
 					err:        err,
 					fatal:      true,
 				})
-				sentenceFailed = true
-				break
+				return
 			}
 
-			if len(packets) > 0 {
-				sentencePackets = append(sentencePackets, packets...)
-			}
-		}
-
-		_ = stream.Close()
-		s.mu.Lock()
-		if s.ttsStream == stream {
-			s.ttsStream = nil
-		}
-		s.mu.Unlock()
-
-		if sentenceFailed {
-			return
-		}
-
-		if ctx.Err() != nil || s.Generation() > gen {
-			return
-		}
-
-		// 若该句生成了音频包，先下发该句字幕通知，再将所有音频包送入 Pacer 队列
-		if len(sentencePackets) > 0 {
-			if pacer != nil {
-				if err := pacer.EnqueueSentenceStart(sentence); err != nil {
+			for _, pkt := range packets {
+				if s.Generation() > gen {
 					return
 				}
-				for _, pkt := range sentencePackets {
-					if s.Generation() > gen {
-						return
-					}
-					s.handleEncodedOpusPacket(gen, pkt)
+				s.handleEncodedOpusPacket(gen, pkt)
+				if pacer != nil {
 					if err := pacer.Enqueue(pkt); err != nil {
 						return
 					}
 				}
 			}
+		}
+
+		// 检查 task 是否在后台拉取过程中发生异常
+		select {
+		case tErr := <-task.errCh:
+			if tErr != nil {
+				if errors.Is(tErr, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
+					return
+				}
+				consumeErr = tErr
+				s.logger.Warn("tts sentence stream error",
+					"error", tErr,
+					"session_id", sessionId,
+					"generation", gen,
+				)
+				s.postEvent(event{
+					kind:       eventKindError,
+					generation: gen,
+					err:        tErr,
+					fatal:      true,
+				})
+				return
+			}
+		default:
 		}
 	}
 
@@ -553,9 +574,6 @@ func (s *Session) consumeSentencesTTS(ctx context.Context, gen uint64, sentenceC
 					"generation", gen,
 				)
 			} else {
-				tailPackets, _ := streamEncoder.Flush()
-				promptPackets = append(promptPackets, tailPackets...)
-
 				for _, pkt := range promptPackets {
 					if s.Generation() > gen {
 						return
@@ -567,6 +585,35 @@ func (s *Session) consumeSentencesTTS(ctx context.Context, gen uint64, sentenceC
 						}
 					}
 				}
+			}
+		}
+	}
+
+	// 所有分句与提示音 PCM 输入完毕，统一刷新最后一包 Opus 尾帧
+	flushPackets, flushErr := streamEncoder.Flush()
+	if flushErr != nil {
+		consumeErr = flushErr
+		s.logger.Warn("failed to flush tts opus encoder",
+			"error", flushErr,
+			"session_id", sessionId,
+			"generation", gen,
+		)
+		s.postEvent(event{
+			kind:       eventKindError,
+			generation: gen,
+			err:        flushErr,
+			fatal:      true,
+		})
+		return
+	}
+	for _, pkt := range flushPackets {
+		if s.Generation() > gen {
+			return
+		}
+		s.handleEncodedOpusPacket(gen, pkt)
+		if pacer != nil {
+			if err := pacer.Enqueue(pkt); err != nil {
+				return
 			}
 		}
 	}

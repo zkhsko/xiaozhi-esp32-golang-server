@@ -578,4 +578,53 @@ func TestOrchestrateLLMAndTTS_SentenceSubtitleSync(t *testing.T) {
 	if sentenceStarts[1] != "今天天气真好。" {
 		t.Fatalf("expected second sentence '今天天气真好。', got %q", sentenceStarts[1])
 	}
+
+	// 验证消息类型的精确时间序：
+	// tts.start -> sentence_start(你好世界) -> binary chunks -> sentence_start(今天天气真好) -> binary chunks -> tts.stop
+	var order []string
+	for _, m := range msgs {
+		if m.typ == websocket.MessageText {
+			var parsed map[string]any
+			if err := json.Unmarshal(m.payload, &parsed); err == nil {
+				if parsed["type"] == "tts" {
+					if parsed["state"] == "sentence_start" {
+						order = append(order, "sentence:"+parsed["text"].(string))
+					} else if parsed["state"] == "start" {
+						order = append(order, "tts.start")
+					} else if parsed["state"] == "stop" {
+						order = append(order, "tts.stop")
+					}
+				}
+			}
+		} else if m.typ == websocket.MessageBinary {
+			order = append(order, "audio")
+		}
+	}
+
+	if len(order) < 6 {
+		t.Fatalf("unexpected message order sequence length: %d: %v", len(order), order)
+	}
+	if order[0] != "tts.start" {
+		t.Fatalf("expected first item 'tts.start', got %s", order[0])
+	}
+	if order[1] != "sentence:你好世界。" {
+		t.Fatalf("expected second item 'sentence:你好世界。', got %s", order[1])
+	}
+	// 中间应有音频包，随后才是第二句字幕
+	foundSecondSentence := false
+	for i := 2; i < len(order); i++ {
+		if order[i] == "sentence:今天天气真好。" {
+			foundSecondSentence = true
+			if order[i-1] != "audio" {
+				t.Fatalf("expected audio packet before second sentence start, got %s", order[i-1])
+			}
+			break
+		}
+	}
+	if !foundSecondSentence {
+		t.Fatal("second sentence not found in order sequence")
+	}
+	if order[len(order)-1] != "tts.stop" {
+		t.Fatalf("expected last item 'tts.stop', got %s", order[len(order)-1])
+	}
 }
