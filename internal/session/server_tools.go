@@ -48,59 +48,97 @@ func DefaultServerTools() []ai.Tool {
 	}
 }
 
+// GetCurrentTimeInput 定义获取当前时间工具的入参。
+type GetCurrentTimeInput struct{}
+
+// GetCurrentTimeOutput 定义获取当前时间工具的结构化返回值。
+type GetCurrentTimeOutput struct {
+	DateTime  string `json:"datetime"`
+	Date      string `json:"date"`
+	Time      string `json:"time"`
+	Weekday   string `json:"weekday"`
+	Timezone  string `json:"timezone"`
+	UTCOffset string `json:"utc_offset"`
+}
+
+// CloseSessionInput 定义关闭会话工具的入参。
+type CloseSessionInput struct {
+	Reason string `json:"reason,omitempty" jsonschema:"description=关闭会话的原因（可选）"`
+}
+
+// CloseSessionOutput 定义关闭会话工具的结构化返回值。
+type CloseSessionOutput struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
 // isServerTool 检查指定名称是否为启用的服务端工具。
 func isServerTool(name string) bool {
 	return name == ServerToolGetCurrentTime ||
 		name == ServerToolCloseSession
 }
 
-// executeServerTool 执行指定名称的服务端工具。
-func executeServerTool(ctx context.Context, name string, _ any) (string, error) {
+// parseCloseSessionInput 将入参解析为 CloseSessionInput。
+func parseCloseSessionInput(input any) CloseSessionInput {
+	var in CloseSessionInput
+	if input == nil {
+		return in
+	}
+	switch v := input.(type) {
+	case CloseSessionInput:
+		return v
+	case *CloseSessionInput:
+		if v != nil {
+			return *v
+		}
+	case map[string]any:
+		if r, ok := v["reason"].(string); ok {
+			in.Reason = r
+		}
+	case string:
+		if v != "" {
+			_ = json.Unmarshal([]byte(v), &in)
+		}
+	}
+	return in
+}
+
+// executeServerTool 执行指定名称的服务端工具，返回结构化结果。
+func executeServerTool(ctx context.Context, name string, input any) (any, error) {
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return nil, err
 	}
 
 	switch name {
 	case ServerToolGetCurrentTime:
 		return executeGetCurrentTime()
 	case ServerToolCloseSession:
-		return executeCloseSession()
+		return executeCloseSession(parseCloseSessionInput(input))
 	default:
-		return "", fmt.Errorf("%w: %s", ErrServerToolNotFound, name)
+		return nil, fmt.Errorf("%w: %s", ErrServerToolNotFound, name)
 	}
 }
 
-// executeCloseSession 执行会话关闭工具逻辑，返回格式化确认 JSON。
-func executeCloseSession() (string, error) {
-	data := map[string]any{
-		"status":  "success",
-		"message": "session will be closed after this turn. You must now say a short goodbye to the user.",
-	}
-	bytes, err := json.Marshal(data)
-	if err != nil {
-		return "", fmt.Errorf("marshal close session result: %w", err)
-	}
-	return string(bytes), nil
+// executeCloseSession 执行会话关闭工具逻辑，返回结构化确认对象。
+func executeCloseSession(_ CloseSessionInput) (*CloseSessionOutput, error) {
+	return &CloseSessionOutput{
+		Status:  "success",
+		Message: "session will be closed after this turn. You must now say a short goodbye to the user.",
+	}, nil
 }
 
-// executeGetCurrentTime 获取服务端系统当前日期、时间、星期、时区及 UTC 偏移。
-func executeGetCurrentTime() (string, error) {
+// executeGetCurrentTime 获取服务端系统当前日期、时间、星期、时区及 UTC 偏移，返回结构化对象。
+func executeGetCurrentTime() (*GetCurrentTimeOutput, error) {
 	now := time.Now()
 	zoneName, _ := now.Zone()
-	data := map[string]any{
-		"datetime":   now.Format("2006-01-02 15:04:05"),
-		"date":       now.Format("2006-01-02"),
-		"time":       now.Format("15:04:05"),
-		"weekday":    now.Weekday().String(),
-		"timezone":   zoneName,
-		"utc_offset": now.Format("-07:00"),
-	}
-
-	bytes, err := json.Marshal(data)
-	if err != nil {
-		return "", fmt.Errorf("marshal current time: %w", err)
-	}
-	return string(bytes), nil
+	return &GetCurrentTimeOutput{
+		DateTime:  now.Format("2006-01-02 15:04:05"),
+		Date:      now.Format("2006-01-02"),
+		Time:      now.Format("15:04:05"),
+		Weekday:   now.Weekday().String(),
+		Timezone:  zoneName,
+		UTCOffset: now.Format("-07:00"),
+	}, nil
 }
 
 // availableTools 返回向大语言模型提供的完整可执行工具列表（服务端工具 + 设备 MCP 工具）。
@@ -178,7 +216,7 @@ func (s *Session) executeToolClosure(ctx context.Context, gen uint64, name strin
 			s.mu.Unlock()
 		}
 
-		resultText, err := executeServerTool(ctx, name, input)
+		result, err := executeServerTool(ctx, name, input)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 				return nil, err
@@ -200,7 +238,7 @@ func (s *Session) executeToolClosure(ctx context.Context, gen uint64, name strin
 			"generation", gen,
 			"tool_name", name,
 		)
-		return resultText, nil
+		return result, nil
 	}
 
 	// 2. 设备 MCP 工具通过 JSON-RPC 下发给设备执行

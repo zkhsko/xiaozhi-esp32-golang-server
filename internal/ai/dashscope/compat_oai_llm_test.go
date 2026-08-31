@@ -763,3 +763,120 @@ func TestLLMClient_Generate_WithTools_SchemaPayloadVerification(t *testing.T) {
 		t.Fatal("system prompt must NOT contain injected tool schemas")
 	}
 }
+
+func TestLLMClient_Generate_TypedStructToolResult(t *testing.T) {
+	type TypedToolOutput struct {
+		Status   string `json:"status"`
+		Datetime string `json:"datetime"`
+		Timezone string `json:"timezone"`
+	}
+
+	var requestCount atomic.Int32
+	var reqBodiesMu sync.Mutex
+	var reqBodies []map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err == nil {
+			var parsed map[string]any
+			if err := json.Unmarshal(bodyBytes, &parsed); err == nil {
+				reqBodiesMu.Lock()
+				reqBodies = append(reqBodies, parsed)
+				reqBodiesMu.Unlock()
+			}
+		}
+
+		reqNum := requestCount.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+
+		if reqNum == 1 {
+			// 第一轮返回工具调用
+			_, _ = fmt.Fprint(w, `data: {"id":"chatcmpl-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_struct_1","type":"function","function":{"name":"server.get_time","arguments":"{}"}}]},"index":0}]}`+"\n\n")
+			_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+			flusher.Flush()
+			return
+		}
+
+		// 第二轮根据结构化结果返回答复
+		_, _ = fmt.Fprint(w, `data: {"id":"chatcmpl-2","choices":[{"delta":{"content":"当前系统时间获取完毕。"},"index":0}]}`+"\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer server.Close()
+
+	cfg := &database.LLMConfig{
+		APIKey:              "test-key",
+		Endpoint:            server.URL,
+		Model:               "qwen-plus",
+		FirstTokenTimeoutMS: 5000,
+		OverallTimeoutMS:    15000,
+	}
+	client, err := NewLLMClient(cfg)
+	if err != nil {
+		t.Fatalf("NewLLMClient failed: %v", err)
+	}
+
+	structTool := ai.Tool{
+		Name:        "server.get_time",
+		Description: "获取结构化时间",
+		Run: func(ctx context.Context, input any) (any, error) {
+			// 返回强类型 struct 结构体结果
+			return &TypedToolOutput{
+				Status:   "success",
+				Datetime: "2026-08-31 18:00:00",
+				Timezone: "CST",
+			}, nil
+		},
+	}
+
+	finalText, err := client.Generate(
+		context.Background(),
+		ai.LLMRequest{
+			Messages: []ai.Message{
+				{Role: ai.RoleUser, Content: "查时间"},
+			},
+			Tools:    []ai.Tool{structTool},
+			MaxTurns: 4,
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Generate with struct tool result failed: %v", err)
+	}
+	if finalText != "当前系统时间获取完毕。" {
+		t.Fatalf("unexpected finalText %q", finalText)
+	}
+
+	// 验证第二轮请求中，typed struct 被正确序列化并填入 tool message
+	reqBodiesMu.Lock()
+	defer reqBodiesMu.Unlock()
+
+	if len(reqBodies) != 2 {
+		t.Fatalf("expected 2 request bodies, got %d", len(reqBodies))
+	}
+
+	req2Messages, ok := reqBodies[1]["messages"].([]any)
+	if !ok || len(req2Messages) < 2 {
+		t.Fatalf("expected messages in req2, got %v", reqBodies[1]["messages"])
+	}
+
+	var foundToolResult bool
+	for _, m := range req2Messages {
+		msgMap, ok := m.(map[string]any)
+		if ok && msgMap["role"] == "tool" {
+			foundToolResult = true
+			if msgMap["tool_call_id"] != "call_struct_1" {
+				t.Fatalf("expected tool_call_id 'call_struct_1', got %v", msgMap["tool_call_id"])
+			}
+			contentStr, _ := msgMap["content"].(string)
+			if !strings.Contains(contentStr, "2026-08-31 18:00:00") || !strings.Contains(contentStr, "CST") {
+				t.Fatalf("expected tool result content to contain structured output fields, got %q", contentStr)
+			}
+		}
+	}
+	if !foundToolResult {
+		t.Fatalf("expected tool message with role=tool in req2, got: %v", req2Messages)
+	}
+}

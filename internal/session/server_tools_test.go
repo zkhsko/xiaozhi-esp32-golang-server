@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -44,6 +43,36 @@ func TestDefaultServerTools(t *testing.T) {
 	}
 }
 
+func TestExecuteGetCurrentTime(t *testing.T) {
+	out, err := executeGetCurrentTime()
+	if err != nil {
+		t.Fatalf("executeGetCurrentTime failed: %v", err)
+	}
+	if out == nil {
+		t.Fatal("expected non-nil output")
+	}
+	if out.DateTime == "" || out.Date == "" || out.Time == "" || out.Weekday == "" || out.Timezone == "" || out.UTCOffset == "" {
+		t.Fatalf("expected non-empty fields in GetCurrentTimeOutput: %+v", out)
+	}
+}
+
+func TestExecuteCloseSession(t *testing.T) {
+	in := CloseSessionInput{Reason: "用户想要休息"}
+	out, err := executeCloseSession(in)
+	if err != nil {
+		t.Fatalf("executeCloseSession failed: %v", err)
+	}
+	if out == nil {
+		t.Fatal("expected non-nil output")
+	}
+	if out.Status != "success" {
+		t.Fatalf("expected status 'success', got %v", out.Status)
+	}
+	if out.Message == "" {
+		t.Fatal("expected non-empty message in CloseSessionOutput")
+	}
+}
+
 func TestExecuteServerTool_GetCurrentTime(t *testing.T) {
 	ctx := context.Background()
 	result, err := executeServerTool(ctx, ServerToolGetCurrentTime, nil)
@@ -51,33 +80,41 @@ func TestExecuteServerTool_GetCurrentTime(t *testing.T) {
 		t.Fatalf("executeServerTool failed: %v", err)
 	}
 
-	var data map[string]any
-	if err := json.Unmarshal([]byte(result), &data); err != nil {
-		t.Fatalf("failed to unmarshal get_current_time result: %v", err)
+	out, ok := result.(*GetCurrentTimeOutput)
+	if !ok {
+		t.Fatalf("expected *GetCurrentTimeOutput, got %T", result)
 	}
 
-	expectedKeys := []string{"datetime", "date", "time", "weekday", "timezone", "utc_offset"}
-	for _, key := range expectedKeys {
-		if val, ok := data[key]; !ok || val == "" {
-			t.Fatalf("expected non-empty field %q in get_current_time result", key)
-		}
+	if out.DateTime == "" || out.Date == "" || out.Time == "" || out.Weekday == "" || out.Timezone == "" || out.UTCOffset == "" {
+		t.Fatalf("expected non-empty fields in *GetCurrentTimeOutput: %+v", out)
 	}
 }
 
 func TestExecuteServerTool_CloseSession(t *testing.T) {
 	ctx := context.Background()
-	result, err := executeServerTool(ctx, ServerToolCloseSession, nil)
+
+	// 1. 测试 struct 入参
+	result, err := executeServerTool(ctx, ServerToolCloseSession, CloseSessionInput{Reason: "退出"})
 	if err != nil {
 		t.Fatalf("executeServerTool failed: %v", err)
 	}
 
-	var data map[string]any
-	if err := json.Unmarshal([]byte(result), &data); err != nil {
-		t.Fatalf("failed to unmarshal close_session result: %v", err)
+	out, ok := result.(*CloseSessionOutput)
+	if !ok {
+		t.Fatalf("expected *CloseSessionOutput, got %T", result)
+	}
+	if out.Status != "success" {
+		t.Fatalf("expected status 'success', got %v", out.Status)
 	}
 
-	if data["status"] != "success" {
-		t.Fatalf("expected status 'success', got %v", data["status"])
+	// 2. 测试 map 入参
+	resMap, err := executeServerTool(ctx, ServerToolCloseSession, map[string]any{"reason": "睡觉了"})
+	if err != nil {
+		t.Fatalf("executeServerTool with map failed: %v", err)
+	}
+	outMap, ok := resMap.(*CloseSessionOutput)
+	if !ok || outMap.Status != "success" {
+		t.Fatalf("expected successful *CloseSessionOutput from map input, got %+v", resMap)
 	}
 }
 
@@ -179,8 +216,9 @@ func TestSession_AvailableTools_ExecuteServerToolClosure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("closeTool.Run failed: %v", err)
 	}
-	if res == nil {
-		t.Fatal("expected non-nil result from closeTool.Run")
+	out, ok := res.(*CloseSessionOutput)
+	if !ok || out == nil || out.Status != "success" {
+		t.Fatalf("expected *CloseSessionOutput with status 'success', got %T (%+v)", res, res)
 	}
 
 	sess.mu.RLock()
