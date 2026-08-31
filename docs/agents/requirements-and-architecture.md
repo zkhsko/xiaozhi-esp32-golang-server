@@ -28,8 +28,8 @@
 - `internal/config`：基础设施与会话静态配置的加载、校验及敏感连接信息注入边界。
 - `internal/database`：数据库连接、迁移、设备生命周期数据、AI 运行时配置及会话配置快照的数据访问边界。
 - `internal/router`：设备生命周期、管理配置和用户操作等 HTTP API 的路由与 Handler 装配。
-- `internal/session`：WebSocket 生命周期、鉴权、按设备类型加载 Agent 运行时配置、状态机、语音对话编排、工具调用编排、MCP 协议和并发控制。
-- `internal/agentkit`：WebSocket 语音交互链路中供大模型调用的内置 Agent 工具集合，不拥有 WebSocket 连接或会话生命周期。
+- `internal/session`：WebSocket 生命周期、鉴权、按设备类型加载 Agent 运行时配置、状态机、语音对话编排、工具调用编排、设备 MCP 传输接入与生命周期控制。
+- `internal/agentkit`：供大模型调用的统一工具能力层，负责内置 Agent 工具以及设备 MCP 的协议适配、能力发现、调用执行和工具集合构造；不拥有 WebSocket 连接或会话生命周期。
 - `internal/audio`：音频编解码、缓冲和实时下发节奏控制。
 - `internal/ai`：ASR、LLM、TTS 的统一抽象、值对象及供应商适配边界。
 - `internal/logger`：结构化日志、安全脱敏和诊断限流。
@@ -45,27 +45,33 @@ HTTP / WebSocket 入口 (internal/router)
         ├── internal/database (鉴权与 Agent 运行时快照)
         ├── internal/audio
         ├── internal/agentkit
+        │     ├── 内置 Agent 工具
+        │     └── DeviceMCPClient (JSON-RPC、发现与调用)
         └── internal/ai
 ```
 
-上层编排模块只依赖下层抽象。供应商适配器、具体工具和基础设施不得反向依赖 `internal/session`。
+依赖方向固定为 `session -> agentkit -> ai`。`internal/session` 通过最小发送接口向 AgentKit 注入 MCP payload 下发能力，并负责添加 `session_id`、`type: "mcp"` 等 WebSocket 外层协议字段。AgentKit 不得反向依赖 `internal/session`、会话 Writer 或具体 WebSocket 实现。供应商适配器、具体工具和基础设施同样不得反向依赖 `internal/session`。
 
-### 3.3 AgentKit 结构与职责
+### 3.3 AgentKit 与设备 MCP 结构及职责
 
-`internal/agentkit` 采用单包、按工具分文件的扁平结构：
+`internal/agentkit` 采用单包、按能力分文件的扁平结构：
 
 ```text
 internal/agentkit/
+├── agentkit.go
+├── device_mcp.go
 ├── close_session.go
-├── current_time.go
-└── current_weather.go
+└── current_time.go
 ```
 
-- 三个文件统一声明 `package agentkit`，通过文件区分工具，不为小型工具机械拆分子包。
-- 每个文件负责对应工具的模型描述、参数约束和独立执行逻辑。
-- 需要外部服务的工具通过最小依赖接口注入，不直接依赖会话对象。
-- `close_session.go` 只表达关闭会话的意图，具体关闭时机和连接清理由 `internal/session` 处理。
-- `internal/session` 负责聚合 AgentKit 与设备 MCP 工具、去重、授权、路由和多轮 LLM 编排，不承载具体内置工具实现。
+- 所有文件统一声明 `package agentkit`，通过文件区分内置工具、工具集合策略和设备 MCP 客户端，不为单一小型能力机械拆分子包。
+- 每个内置工具文件负责对应工具的模型描述、参数约束和独立执行逻辑；需要外部服务时通过最小依赖接口注入，不直接依赖会话对象。
+- `device_mcp.go` 提供会话级 `DeviceMCPClient`，负责 MCP JSON-RPC DTO、请求 ID 与响应关联、`initialize`、分页 `tools/list`、设备工具缓存与发现白名单、`tools/call` 以及结果转换。
+- `DeviceMCPClient` 只生成和消费 MCP JSON-RPC payload。WebSocket 外层消息封装、`features.mcp` 协商、上行 payload 转发、generation 校验、Context 取消以及客户端创建和关闭均由 `internal/session` 负责。
+- AgentKit 负责聚合内置工具与普通设备 MCP 工具，并执行去重、内置工具优先和来源路由；设备 user-only 工具不得进入普通对话 LLM 的工具集合。
+- `close_session.go` 只表达关闭会话的意图，具体关闭时机、代次校验和连接清理由 `internal/session` 处理。
+- `internal/session` 负责多轮 LLM 与语音链路编排，不承载内置工具实现或设备 MCP JSON-RPC 协议细节。
+- 只有设备 MCP 出现 Agent 以外的稳定生产消费者时，才将通用协议客户端进一步下沉为独立 package；当前不提前创建额外抽象。
 
 ## 4. 数据库与持久化设计
 
@@ -128,9 +134,11 @@ internal/agentkit/
 
 鉴权完成后，服务端根据设备类型加载对应的 Agent 及其 ASR、LLM、TTS 运行时快照，为当前连接创建独立客户端实例。随后客户端与服务端协商会话身份和音频能力；任一必要配置缺失、不可用或初始化超时，都必须在进入正式会话前失败并释放资源。
 
+设备声明支持 MCP 时，Session 为当前连接创建独立的 `DeviceMCPClient` 并启动有界的能力发现。MCP 属于可选扩展，发现失败或超时不得破坏基础语音会话，但必须将设备工具明确标记为不可用。首轮 LLM 工具快照构造前必须在独立超时内等待发现结果，避免首轮对话与工具发现竞态；超时后仅使用内置工具继续当前会话。
+
 ### 6.3 控制消息
 
-文本消息承载会话初始化、收音控制、中止控制、识别结果、语音合成状态和 MCP 交互。消息解析必须经过类型校验和大小限制。
+文本消息承载会话初始化、收音控制、中止控制、识别结果、语音合成状态和 MCP 交互。Session 负责 MCP WebSocket 外层消息的解析和封装，并将合法的 JSON-RPC payload 转交 `DeviceMCPClient`；消息解析必须经过类型校验和大小限制。
 
 ### 6.4 音频流
 
@@ -140,17 +148,18 @@ internal/agentkit/
 
 ### 7.1 工具来源与优先级
 
-1. **内置 Agent 工具**：由 `internal/agentkit` 提供，包括当前时间、关闭会话和当前天气等服务端能力。
-2. **设备 MCP 工具**：由设备动态声明，并通过 MCP 协议发现和调用。
+1. **内置 Agent 工具**：由 `internal/agentkit` 提供，包括当前时间和关闭会话等服务端能力。
+2. **设备 MCP 工具**：由会话级 `DeviceMCPClient` 动态发现和调用，仅普通设备工具可以提供给对话 LLM。
 3. **优先级**：内置工具优先于设备同名工具，避免设备覆盖服务端保留能力。
 
 ### 7.2 工具编排规则
 
-- 大模型通过统一工具描述感知可用能力，不感知具体执行位置。
-- 工具进入模型上下文前必须完成聚合、去重和会话级授权。
-- 内置工具由 AgentKit 执行，设备工具通过 MCP 转发执行。
+- 大模型通过 AgentKit 构造的统一可执行工具集合感知能力，不感知工具位于服务端还是设备端。
+- 工具进入模型上下文前必须完成聚合、去重、来源优先级处理和会话级授权，并形成当前轮次不可变的工具快照。
+- 内置工具由 AgentKit 本地执行；设备工具由 `DeviceMCPClient` 通过 MCP JSON-RPC 转发执行，调用前必须再次检查发现白名单。
+- Session 在工具执行入口统一施加当前轮 Context 和 generation 约束，过期轮次不得发起新的设备调用，也不得写入会话副作用。
 - 工具结果作为后续模型上下文继续驱动当前轮回复。
-- 关闭会话工具只产生关闭意图，会话必须在当前轮最终回复完成后再释放连接。
+- 关闭会话工具只产生关闭意图；该意图必须绑定当前 generation，并在当前轮最终回复完成后由 Session 释放连接。中止或代次切换必须使旧关闭意图失效。
 - 工具调用循环必须具有明确的迭代上限、取消边界和错误收敛策略。
 
 ## 8. 状态机与并发资源设计
@@ -171,6 +180,7 @@ CONNECTED -> READY -> LISTENING -> PROCESSING -> SPEAKING
 
 - 会话数、消息大小、音频缓冲、工具调用次数和历史上下文均必须有界。
 - ASR、LLM、TTS、MCP、会话初始化和优雅关闭均必须具备独立超时与取消边界。
+- `DeviceMCPClient` 必须由 Session 按连接创建和关闭；关闭时应取消全部等待中的请求并释放请求关联状态，任何 MCP 后台任务不得超出所属 Session 生命周期。
 - 上下行链路采用背压而不是无界缓存；无法恢复的持续拥塞应主动结束会话。
 - 会话资源必须按统一顺序注册和释放，确保并发名额、网络连接和后台任务不会泄漏。
 - 服务停止时先停止新会话准入，再在有限宽限期内清理存量会话。
