@@ -18,7 +18,7 @@
             style="width: 160px;"
           >
             <el-option label="全部平台" value="" />
-            <el-option label="阿里百炼" value="bailian" />
+            <el-option label="阿里百炼" value="dashscope" />
             <el-option label="OpenAI" value="openai" />
             <el-option label="DeepSeek" value="deepseek" />
             <el-option label="火山引擎" value="volcengine" />
@@ -96,7 +96,7 @@
               effect="plain"
               size="small"
             >
-              {{ row.provider || 'bailian' }}
+              {{ row.provider || 'dashscope' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -271,7 +271,7 @@
             default-first-option
             style="width: 100%;"
           >
-            <el-option label="阿里百炼" value="bailian" />
+            <el-option label="DashScope" value="dashscope" />
             <el-option label="OpenAI" value="openai" />
             <el-option label="DeepSeek" value="deepseek" />
             <el-option label="火山引擎" value="volcengine" />
@@ -408,7 +408,7 @@ const configDialog = reactive({
   form: {
     id: 0,
     name: '',
-    provider: 'bailian',
+    provider: 'dashscope',
     endpoint: '',
     proxy_url: '',
     model: '',
@@ -491,7 +491,7 @@ const configRules: FormRules = {
 // 平台标签颜色映射
 function getProviderTagType(provider: string): '' | 'primary' | 'success' | 'warning' | 'info' | 'danger' {
   switch (provider) {
-    case 'bailian':
+    case 'dashscope':
       return 'primary'
     case 'openai':
       return 'success'
@@ -568,7 +568,7 @@ function openCreateDialog() {
   configDialog.form = {
     id: 0,
     name: '',
-    provider: 'bailian',
+    provider: 'dashscope',
     endpoint: '',
     proxy_url: '',
     model: '',
@@ -586,7 +586,7 @@ function openEditDialog(row: LLMConfigItem) {
   configDialog.form = {
     id: row.id,
     name: row.name,
-    provider: row.provider || 'bailian',
+    provider: row.provider || 'dashscope',
     endpoint: row.endpoint,
     proxy_url: row.proxy_url || '',
     model: row.model,

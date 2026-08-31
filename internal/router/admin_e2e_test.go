@@ -257,9 +257,9 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 
 	// 17. LLM 配置 E2E 创建
 	createLLMBody, _ := json.Marshal(SaveLLMConfigRequest{
-		Name:                "E2E 百炼 LLM",
-		Provider:            "bailian",
-		Endpoint:            "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
+		Name:                "E2E DashScope LLM",
+		Provider:            "dashscope",
+		Endpoint:            "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		APIKey:              "sk-e2e-llm-key",
 		Model:               "qwen-max",
 		ProxyURL:            "http://127.0.0.1:7890",
@@ -279,7 +279,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    LLMConfigItem `json:"data"`
 	}
 	_ = json.Unmarshal(wLLMCreate.Body.Bytes(), &llmCreateResp)
-	if !llmCreateResp.Success || llmCreateResp.Data.Id == 0 || !llmCreateResp.Data.HasAPIKey || llmCreateResp.Data.Provider != "bailian" || llmCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
+	if !llmCreateResp.Success || llmCreateResp.Data.Id == 0 || !llmCreateResp.Data.HasAPIKey || llmCreateResp.Data.Provider != "dashscope" || llmCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected llm create resp: %+v", llmCreateResp)
 	}
 	createdLLMId := llmCreateResp.Data.Id
@@ -297,8 +297,8 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    LLMConfigListData `json:"data"`
 	}
 	_ = json.Unmarshal(wLLMList.Body.Bytes(), &llmListResp)
-	if llmListResp.Data.Total != 1 || len(llmListResp.Data.Items) != 1 || llmListResp.Data.Items[0].Provider != "bailian" || llmListResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
-		t.Fatalf("expected 1 LLM config item with provider bailian and proxy_url, got %v", llmListResp.Data.Items)
+	if llmListResp.Data.Total != 1 || len(llmListResp.Data.Items) != 1 || llmListResp.Data.Items[0].Provider != "dashscope" || llmListResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("expected 1 LLM config item with provider dashscope and proxy_url, got %v", llmListResp.Data.Items)
 	}
 
 	// 19. LLM 配置单条删除
@@ -392,7 +392,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	// 25. Agent 配置 E2E 测试准备基础依赖 ASR, LLM, TTS
 	asrCfg := &database.ASRConfig{Name: "E2E-Agent-ASR", Provider: "bailian", Endpoint: "wss://asr.com", Model: "m1", ConnectTimeoutMS: 5000, Enabled: true}
 	_ = db.CreateASRConfig(context.Background(), asrCfg)
-	llmCfg := &database.LLMConfig{Name: "E2E-Agent-LLM", Provider: "bailian", Endpoint: "https://llm.com", Model: "m2", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
+	llmCfg := &database.LLMConfig{Name: "E2E-Agent-LLM", Provider: "dashscope", Endpoint: "https://llm.com", Model: "m2", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
 	_ = db.CreateLLMConfig(context.Background(), llmCfg)
 	ttsCfg := &database.TTSConfig{Name: "E2E-Agent-TTS", Provider: "bailian", Endpoint: "wss://tts.com", Model: "m3", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
 	_ = db.CreateTTSConfig(context.Background(), ttsCfg)

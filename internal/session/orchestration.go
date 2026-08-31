@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/audio"
@@ -103,10 +102,6 @@ func (s *Session) stopTTS() {
 	}
 }
 
-// maxToolIterations 定义单轮会话中允许大语言模型连续进行工具调用的最大迭代次数。
-// 达到上限后将禁用工具列表调用大语言模型，强制模型输出最终回复，防止死循环。
-const maxToolIterations = 8
-
 // orchestrateLLMAndTTS 在后台协程中协同编排流式大语言模型生成、增量分句与回答级流式语音合成。
 func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText string) {
 	if s.llmClient == nil && s.ttsClient == nil {
@@ -182,22 +177,11 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	// 启动后台协程消费 TTS PCM 数据并送入 24 kHz Opus 分帧编码器与节奏调度器
 	go s.consumeTTSPCM(ctx, gen, ttsStream, pacer, pcmDone)
 
-	// 3. 构造上下文消息并启动多轮工具调用与流式回复循环 (Agent Loop)
+	// 3. 构造上下文消息与工具列表并执行流式生成
 	messages := s.buildLLMMessages(userText)
-	tools := s.availableTools()
+	tools := s.availableTools(gen)
 	splitter := NewSentenceSplitter()
-	var assistantText strings.Builder
 	sessionId := s.SessionId()
-
-	s.mu.RLock()
-	currentSysPrompt := s.buildSystemPromptLocked()
-	s.mu.RUnlock()
-
-	s.logger.Info("llm system prompt for turn",
-		"session_id", sessionId,
-		"generation", gen,
-		"system_prompt", currentSysPrompt,
-	)
 
 	// sendSentence 先下发设备文本消息 tts.sentence_start，再调用 ttsStream.SendSentence 写入，保证文本严格先于对应音频
 	sendSentence := func(sentence string) error {
@@ -224,138 +208,45 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 		return nil
 	}
 
-	for iter := 0; ; iter++ {
-		if ctx.Err() != nil || s.Generation() > gen {
-			return
-		}
-
-		var iterTools []ai.Tool
-		if iter < maxToolIterations {
-			iterTools = tools
-		}
-
-		llmStream, err := s.llmClient.CreateStream(ctx, messages, iterTools)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-				return
+	currentIteration := 0
+	finalText, err := s.llmClient.Generate(
+		ctx,
+		ai.LLMRequest{
+			Messages: messages,
+			Tools:    tools,
+			MaxTurns: 8,
+		},
+		func(ctx context.Context, chunk ai.LLMChunk) error {
+			if chunk.Iteration != currentIteration {
+				splitter = NewSentenceSplitter()
+				currentIteration = chunk.Iteration
 			}
-			s.logger.Warn("failed to create llm stream",
-				"error", err,
-				"session_id", sessionId,
-				"generation", gen,
-				"iteration", iter,
-			)
-			s.postEvent(event{
-				kind:       eventKindError,
-				generation: gen,
-				err:        err,
-				fatal:      true,
-			})
-			return
-		}
 
-		var iterText strings.Builder
-		streamErr := func() error {
-			defer func() { _ = llmStream.Close() }()
-			for {
-				chunk, err := llmStream.Recv()
-				if err != nil {
-					if errors.Is(err, io.EOF) {
-						return nil
-					}
-					if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-						return err
-					}
+			for _, sentence := range splitter.Feed(chunk.Text) {
+				if err := sendSentence(sentence); err != nil {
 					return err
 				}
-
-				if ctx.Err() != nil || s.Generation() > gen {
-					return ctx.Err()
-				}
-
-				if chunk == "" {
-					continue
-				}
-
-				iterText.WriteString(chunk)
-				sentences := splitter.Feed(chunk)
-				for _, sentence := range sentences {
-					if err := sendSentence(sentence); err != nil {
-						return err
-					}
-				}
 			}
-		}()
+			return nil
+		},
+	)
 
-		if streamErr != nil {
-			if errors.Is(streamErr, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
-				return
-			}
-			s.logger.Warn("llm stream read failed",
-				"error", streamErr,
-				"session_id", sessionId,
-				"generation", gen,
-				"iteration", iter,
-			)
-			s.postEvent(event{
-				kind:       eventKindError,
-				generation: gen,
-				err:        streamErr,
-				fatal:      true,
-			})
+	if err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil || s.Generation() > gen {
 			return
 		}
-
-		if ctx.Err() != nil || s.Generation() > gen {
-			return
-		}
-
-		toolCalls := llmStream.ToolCalls()
-		if len(toolCalls) > 0 && iter < maxToolIterations {
-			s.logger.Info("llm returned tool calls",
-				"session_id", sessionId,
-				"generation", gen,
-				"iteration", iter,
-				"tool_count", len(toolCalls),
-			)
-
-			// 将助手的 ToolCalls 追加至上下文
-			messages = append(messages, ai.Message{
-				Role:      ai.RoleAssistant,
-				Content:   iterText.String(),
-				ToolCalls: toolCalls,
-			})
-
-			// 逐一校验并执行工具（服务端工具或设备 MCP 工具），将结果注入上下文
-			for _, tc := range toolCalls {
-				if ctx.Err() != nil || s.Generation() > gen {
-					return
-				}
-				resultText := s.executeTool(ctx, gen, tc)
-				messages = append(messages, ai.Message{
-					Role:       ai.RoleTool,
-					Content:    resultText,
-					ToolCallId: tc.Id,
-				})
-			}
-
-			// 重置 splitter 和 assistantText，准备接收后续迭代文本
-			splitter = NewSentenceSplitter()
-			assistantText.Reset()
-			continue
-		}
-
-		if iter >= maxToolIterations && len(toolCalls) > 0 {
-			s.logger.Warn("max tool iterations reached, forcing text reply termination",
-				"session_id", sessionId,
-				"generation", gen,
-				"iteration", iter,
-			)
-		}
-
-		// 没有 toolCalls 或已达到工具调用上限，说明当前轮次为最终回复
-		assistantText.WriteString(iterText.String())
-		break
+		s.logger.Warn("llm generate failed",
+			"error", err,
+			"session_id", sessionId,
+			"generation", gen,
+		)
+		s.postEvent(event{
+			kind:       eventKindError,
+			generation: gen,
+			err:        err,
+			fatal:      true,
+		})
+		return
 	}
 
 	if ctx.Err() != nil || s.Generation() > gen {
@@ -422,7 +313,7 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	}
 
 	pipelineSucceeded = true
-	pacer.FinishInput(userText, assistantText.String())
+	pacer.FinishInput(userText, finalText)
 }
 
 // consumeTTSPCM 持续消费百炼 TTS 生成的 24 kHz PCM 数据块，通过分帧编码器组装为 60 ms 帧、进行 Opus 编码并送入节奏调度器。

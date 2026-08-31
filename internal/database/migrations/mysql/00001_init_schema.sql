@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS `asr_config` (
 CREATE TABLE IF NOT EXISTS `llm_config` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '配置自增主键',
     `name` VARCHAR(128) NOT NULL COMMENT '配置展示名称（非唯一）',
-    `provider` VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'LLM 服务商/平台：bailian / openai / deepseek / ollama 等',
+    `provider` VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'LLM 服务商/平台：dashscope / deepseek / kimi / zai 等',
     `endpoint` VARCHAR(1024) NOT NULL COMMENT 'LLM HTTP Endpoint',
     `api_key` VARCHAR(1024) NOT NULL DEFAULT '' COMMENT '明文 API Key',
     `model` VARCHAR(255) NOT NULL COMMENT 'LLM 模型',

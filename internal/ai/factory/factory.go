@@ -5,7 +5,14 @@ import (
 	"strings"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/ai/anthropic"
 	"xiaozhi-esp32-golang-server/internal/ai/bailian"
+	"xiaozhi-esp32-golang-server/internal/ai/dashscope"
+	"xiaozhi-esp32-golang-server/internal/ai/deepseek"
+	"xiaozhi-esp32-golang-server/internal/ai/kimi"
+	"xiaozhi-esp32-golang-server/internal/ai/openrouter"
+	"xiaozhi-esp32-golang-server/internal/ai/xai"
+	"xiaozhi-esp32-golang-server/internal/ai/zai"
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
@@ -31,9 +38,21 @@ func CreateLLMClient(cfg *database.LLMConfig) (ai.LLMClient, error) {
 	}
 
 	provider := strings.TrimSpace(cfg.Provider)
-	switch provider {
-	case "bailian", "":
-		return bailian.NewLLMClient(cfg)
+	switch strings.ToLower(provider) {
+	case "dashscope", "":
+		return dashscope.NewLLMClient(cfg)
+	case "deepseek":
+		return deepseek.NewLLMClient(cfg)
+	case "kimi":
+		return kimi.NewLLMClient(cfg)
+	case "zai":
+		return zai.NewLLMClient(cfg)
+	case "openrouter":
+		return openrouter.NewLLMClient(cfg)
+	case "xai":
+		return xai.NewLLMClient(cfg)
+	case "anthropic":
+		return anthropic.NewLLMClient(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported llm provider: %s", provider)
 	}
@@ -46,7 +65,7 @@ func CreateTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (ai.TT
 	}
 
 	provider := strings.TrimSpace(cfg.Provider)
-	switch provider {
+	switch strings.ToLower(provider) {
 	case "bailian", "":
 		return bailian.NewTTSClient(cfg, voice, queueCap)
 	default:

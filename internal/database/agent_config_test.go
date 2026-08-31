@@ -27,7 +27,7 @@ func createTestComponents(t *testing.T, db *Database, ctx context.Context) (asrI
 
 	llm := &LLMConfig{
 		Name:                "测试LLM",
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		APIKey:              "sk-test-llm-key",
 		Model:               "qwen-plus",
@@ -571,7 +571,7 @@ func TestAgentConfig_FindActiveAgentRuntimeSnapshot(t *testing.T) {
 		t.Errorf("unexpected ASR snapshot: %+v", snapshot.ASRConfig)
 	}
 	// 验证 LLM 快照
-	if snapshot.LLMConfig.Id != llmId || snapshot.LLMConfig.Model != "qwen-plus" || snapshot.LLMConfig.Provider != "bailian" {
+	if snapshot.LLMConfig.Id != llmId || snapshot.LLMConfig.Model != "qwen-plus" || snapshot.LLMConfig.Provider != "dashscope" {
 		t.Errorf("unexpected LLM snapshot: %+v", snapshot.LLMConfig)
 	}
 	// 验证 TTS 快照

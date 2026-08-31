@@ -33,7 +33,7 @@ func TestWebSocketDynamicLoading_EndToEnd(t *testing.T) {
 
 	llmA := &database.LLMConfig{
 		Name:                "LLM-A",
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		APIKey:              "key-a",
 		Model:               "qwen-turbo",
@@ -90,7 +90,7 @@ func TestWebSocketDynamicLoading_EndToEnd(t *testing.T) {
 
 	llmB := &database.LLMConfig{
 		Name:                "LLM-B",
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		APIKey:              "key-b",
 		Model:               "qwen-max",

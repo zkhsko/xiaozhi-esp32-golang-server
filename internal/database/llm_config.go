@@ -60,7 +60,7 @@ var (
 // 字段约束与索引规范：
 // - id: 主键自增。
 // - name: 展示名称，非唯一（允许重复），最大 128 字节。
-// - provider: 服务商/平台标识（如 bailian / openai / deepseek / ollama），默认空字符串，最大 64 字节。
+// - provider: 服务商/平台标识（如 dashscope / deepseek / kimi / zai 等），默认空字符串，最大 64 字节。
 // - endpoint: LLM HTTP Endpoint，必须以 http:// 或 https:// 开头，最大 1024 字节。
 // - api_key: 明文 API Key（脱敏时不输出，json:"-"），最大 1024 字节。
 // - model: LLM 模型名称，最大 255 字节。

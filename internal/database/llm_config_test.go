@@ -13,8 +13,8 @@ func TestLLMConfig_CRUD(t *testing.T) {
 
 	// 1. Create LLMConfig
 	cfg := &LLMConfig{
-		Name:                "百炼大语言模型",
-		Provider:            "bailian",
+		Name:                "DashScope大语言模型",
+		Provider:            "dashscope",
 		Endpoint:            "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
 		APIKey:              "sk-test-llm-api-key-123456",
 		Model:               "qwen-max",
@@ -37,11 +37,11 @@ func TestLLMConfig_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindLLMConfigById failed: %v", err)
 	}
-	if found.Name != "百炼大语言模型" {
-		t.Errorf("expected name %q, got %q", "百炼大语言模型", found.Name)
+	if found.Name != "DashScope大语言模型" {
+		t.Errorf("expected name %q, got %q", "DashScope大语言模型", found.Name)
 	}
-	if found.Provider != "bailian" {
-		t.Errorf("expected provider %q, got %q", "bailian", found.Provider)
+	if found.Provider != "dashscope" {
+		t.Errorf("expected provider %q, got %q", "dashscope", found.Provider)
 	}
 	if found.Endpoint != "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation" {
 		t.Errorf("expected endpoint %q, got %q", "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation", found.Endpoint)
@@ -178,7 +178,7 @@ func TestLLMConfig_ListAndFilter(t *testing.T) {
 	ctx := context.Background()
 
 	items := []*LLMConfig{
-		{Name: "LLM-Alpha", Provider: "bailian", Endpoint: "https://alpha.example.com/llm", Model: "m1", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true},
+		{Name: "LLM-Alpha", Provider: "dashscope", Endpoint: "https://alpha.example.com/llm", Model: "m1", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true},
 		{Name: "LLM-Beta", Provider: "openai", Endpoint: "https://beta.example.com/llm", Model: "m2", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true},
 		{Name: "LLM-Gamma", Provider: "deepseek", Endpoint: "https://gamma.example.com/llm", Model: "m3", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: false},
 	}
@@ -275,7 +275,7 @@ func TestLLMConfig_Validation(t *testing.T) {
 			name: "name exceeds 128 bytes",
 			cfg: &LLMConfig{
 				Name:                strings.Repeat("a", 129),
-				Provider:            "bailian",
+				Provider:            "dashscope",
 				Endpoint:            "https://example.com/llm",
 				Model:               "model-1",
 				FirstTokenTimeoutMS: 5000,

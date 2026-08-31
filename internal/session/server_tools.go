@@ -21,7 +21,7 @@ var (
 	ErrServerToolNotFound = errors.New("server tool not found")
 )
 
-// DefaultServerTools 返回当前服务端支持并启用的默认服务端工具列表副本。
+// DefaultServerTools 返回当前服务端支持并启用的默认服务端工具列表副本（纯元数据定义，用于提示词渲染）。
 func DefaultServerTools() []ai.Tool {
 	return []ai.Tool{
 		{
@@ -55,7 +55,7 @@ func isServerTool(name string) bool {
 }
 
 // executeServerTool 执行指定名称的服务端工具。
-func executeServerTool(ctx context.Context, name string, _ string) (string, error) {
+func executeServerTool(ctx context.Context, name string, _ any) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -103,99 +103,135 @@ func executeGetCurrentTime() (string, error) {
 	return string(bytes), nil
 }
 
-// availableTools 返回向大语言模型提供的完整工具列表（服务端工具 + 设备 MCP 工具）。
+// availableTools 返回向大语言模型提供的完整可执行工具列表（服务端工具 + 设备 MCP 工具）。
 // 合并规则：
 // 1. 服务端工具优先。
 // 2. 同名工具只向大模型提供一次。
 // 3. 设备不得覆盖同名服务端工具。
-func (s *Session) availableTools() []ai.Tool {
-	serverTools := DefaultServerTools()
+// 4. 每个工具附加闭包 Run 函数供 Genkit 执行。
+func (s *Session) availableTools(gen uint64) []ai.Tool {
+	serverDefs := DefaultServerTools()
 
 	s.mu.RLock()
 	deviceTools := s.mcpTools
 	s.mu.RUnlock()
 
-	if len(deviceTools) == 0 {
-		return serverTools
-	}
-
-	seen := make(map[string]struct{}, len(serverTools)+len(deviceTools))
-	merged := make([]ai.Tool, 0, len(serverTools)+len(deviceTools))
+	totalLen := len(serverDefs) + len(deviceTools)
+	seen := make(map[string]struct{}, totalLen)
+	merged := make([]ai.Tool, 0, totalLen)
 
 	// 1. 服务端工具优先
-	for _, t := range serverTools {
-		seen[t.Name] = struct{}{}
-		merged = append(merged, t)
+	for _, def := range serverDefs {
+		toolName := def.Name
+		seen[toolName] = struct{}{}
+		merged = append(merged, ai.Tool{
+			Name:        toolName,
+			Description: def.Description,
+			Parameters:  def.Parameters,
+			Run: func(ctx context.Context, input any) (any, error) {
+				return s.executeToolClosure(ctx, gen, toolName, input)
+			},
+		})
 	}
 
 	// 2. 设备 MCP 工具追加，若与服务端工具同名则忽略
-	for _, t := range deviceTools {
-		if _, exists := seen[t.Name]; !exists {
-			seen[t.Name] = struct{}{}
-			merged = append(merged, t)
+	for _, def := range deviceTools {
+		toolName := def.Name
+		if _, exists := seen[toolName]; !exists {
+			seen[toolName] = struct{}{}
+			merged = append(merged, ai.Tool{
+				Name:        toolName,
+				Description: def.Description,
+				Parameters:  def.Parameters,
+				Run: func(ctx context.Context, input any) (any, error) {
+					return s.executeToolClosure(ctx, gen, toolName, input)
+				},
+			})
 		}
 	}
 
 	return merged
 }
 
-// executeTool 统一调度并执行大模型调用的工具（优先服务端工具，次选已授权的设备 MCP 工具）。
-func (s *Session) executeTool(ctx context.Context, gen uint64, tc ai.ToolCall) string {
+// executeToolClosure 统一调度并执行大模型调用的工具闭包（优先服务端工具，次选已授权的设备 MCP 工具）。
+func (s *Session) executeToolClosure(ctx context.Context, gen uint64, name string, input any) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.Generation() > gen {
+		return nil, errors.New("generation mismatch")
+	}
+
 	sessionId := s.SessionId()
 
 	// 1. 服务端工具直接在服务端执行
-	if isServerTool(tc.Name) {
+	if isServerTool(name) {
 		s.logger.Info("executing server tool call",
 			"session_id", sessionId,
 			"generation", gen,
-			"tool_name", tc.Name,
+			"tool_name", name,
 		)
 
-		if tc.Name == ServerToolCloseSession {
+		if name == ServerToolCloseSession {
 			s.mu.Lock()
 			s.closeAfterTurn = true
 			s.mu.Unlock()
 		}
 
-		resultText, err := executeServerTool(ctx, tc.Name, tc.Arguments)
+		resultText, err := executeServerTool(ctx, name, input)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+				return nil, err
+			}
 			s.logger.Warn("server tool call failed",
 				"session_id", sessionId,
 				"generation", gen,
-				"tool_name", tc.Name,
+				"tool_name", name,
 				"error", err,
 			)
-			return fmt.Sprintf("Error: %v", err)
+			return map[string]any{
+				"status":  "error",
+				"message": err.Error(),
+			}, nil
 		}
 
 		s.logger.Info("server tool call executed successfully",
 			"session_id", sessionId,
 			"generation", gen,
-			"tool_name", tc.Name,
+			"tool_name", name,
 		)
-		return resultText
+		return resultText, nil
 	}
 
 	// 2. 设备 MCP 工具通过 JSON-RPC 下发给设备执行
-	if s.isMCPToolAllowed(tc.Name) {
-		resultText, err := s.callMCPTool(ctx, tc.Name, tc.Arguments)
+	if s.isMCPToolAllowed(name) {
+		resultText, err := s.callMCPToolWithInput(ctx, gen, name, input)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+				return nil, err
+			}
 			s.logger.Warn("mcp tool call failed during turn",
 				"session_id", sessionId,
 				"generation", gen,
-				"tool_name", tc.Name,
+				"tool_name", name,
 				"error", err,
 			)
-			return fmt.Sprintf("Error: %v", err)
+			return map[string]any{
+				"status":  "error",
+				"message": err.Error(),
+			}, nil
 		}
-		return resultText
+		return resultText, nil
 	}
 
 	// 3. 未启用或未授权的工具
 	s.logger.Warn("tool call rejected: tool not authorized in session",
 		"session_id", sessionId,
 		"generation", gen,
-		"tool_name", tc.Name,
+		"tool_name", name,
 	)
-	return fmt.Sprintf("Error: tool %q is not authorized in current session", tc.Name)
+	return map[string]any{
+		"status":  "error",
+		"message": fmt.Sprintf("tool %q is not authorized in current session", name),
+	}, nil
 }

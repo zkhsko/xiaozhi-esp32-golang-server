@@ -23,7 +23,7 @@ func createTestAgent(t *testing.T, db *Database, ctx context.Context, name strin
 
 	llm := &LLMConfig{
 		Name:                "测试LLM-" + name,
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		Model:               "qwen-plus",
 		FirstTokenTimeoutMS: 5000,
@@ -367,7 +367,7 @@ func TestResolveAgentRuntimeSnapshotByDeviceType(t *testing.T) {
 
 	llm := &LLMConfig{
 		Name:                "LLM-Snap",
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		Model:               "qwen-plus",
 		FirstTokenTimeoutMS: 5000,

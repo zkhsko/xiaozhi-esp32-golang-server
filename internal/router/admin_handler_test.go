@@ -504,9 +504,9 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 
 	// 1. Create LLM Config via /llm-config/save
 	createBody := []byte(`{
-		"name": "百炼大语言模型",
-		"provider": "bailian",
-		"endpoint": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
+		"name": "DashScope大语言模型",
+		"provider": "dashscope",
+		"endpoint": "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		"api_key": "sk-secret-llm-key-123456",
 		"model": "qwen-max",
 		"proxy_url": "http://127.0.0.1:7890",
@@ -536,8 +536,8 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	if !createResp.Data.HasAPIKey {
 		t.Fatalf("expected has_api_key true")
 	}
-	if createResp.Data.Provider != "bailian" {
-		t.Fatalf("expected provider bailian, got %q", createResp.Data.Provider)
+	if createResp.Data.Provider != "dashscope" {
+		t.Fatalf("expected provider dashscope, got %q", createResp.Data.Provider)
 	}
 	if createResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("expected proxy_url http://127.0.0.1:7890, got %q", createResp.Data.ProxyURL)
@@ -545,7 +545,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	llmId := createResp.Data.Id
 
 	// 2. List LLM Configs
-	reqList := httptest.NewRequest(http.MethodGet, "/llm-config/list?page=1&page_size=10&name=百炼", nil)
+	reqList := httptest.NewRequest(http.MethodGet, "/llm-config/list?page=1&page_size=10&name=DashScope", nil)
 	wList := httptest.NewRecorder()
 	routes.ServeHTTP(wList, reqList)
 
@@ -562,7 +562,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
 		t.Fatalf("unexpected list count: total=%d, items=%d", listResp.Data.Total, len(listResp.Data.Items))
 	}
-	if listResp.Data.Items[0].Name != "百炼大语言模型" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "bailian" || listResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
+	if listResp.Data.Items[0].Name != "DashScope大语言模型" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "dashscope" || listResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected item content: %+v", listResp.Data.Items[0])
 	}
 
@@ -794,7 +794,7 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 	// 准备基础 ASR, LLM, TTS 组件
 	asr := &database.ASRConfig{Name: "默认ASR", Provider: "bailian", Endpoint: "wss://asr.example.com", Model: "asr-v1", ConnectTimeoutMS: 5000, Enabled: true}
 	_ = db.CreateASRConfig(ctx, asr)
-	llm := &database.LLMConfig{Name: "默认LLM", Provider: "bailian", Endpoint: "https://llm.example.com", Model: "qwen-turbo", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
+	llm := &database.LLMConfig{Name: "默认LLM", Provider: "dashscope", Endpoint: "https://llm.example.com", Model: "qwen-turbo", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
 	_ = db.CreateLLMConfig(ctx, llm)
 	tts := &database.TTSConfig{Name: "默认TTS", Provider: "bailian", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["voice1"]`, ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
 	_ = db.CreateTTSConfig(ctx, tts)
@@ -942,7 +942,7 @@ func TestAdminDeviceTypeEndpoints(t *testing.T) {
 	// 准备基础 ASR, LLM, TTS 和 Agent
 	asr := &database.ASRConfig{Name: "ASR-1", Provider: "bailian", Endpoint: "wss://asr.example.com", Model: "asr-v1", ConnectTimeoutMS: 5000, Enabled: true}
 	_ = db.CreateASRConfig(ctx, asr)
-	llm := &database.LLMConfig{Name: "LLM-1", Provider: "bailian", Endpoint: "https://llm.example.com", Model: "qwen-turbo", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
+	llm := &database.LLMConfig{Name: "LLM-1", Provider: "dashscope", Endpoint: "https://llm.example.com", Model: "qwen-turbo", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
 	_ = db.CreateLLMConfig(ctx, llm)
 	tts := &database.TTSConfig{Name: "TTS-1", Provider: "bailian", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["v1"]`, ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
 	_ = db.CreateTTSConfig(ctx, tts)

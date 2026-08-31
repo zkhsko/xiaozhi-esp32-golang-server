@@ -266,22 +266,32 @@ func (s *Session) isMCPToolAllowed(name string) bool {
 	return false
 }
 
-// callMCPTool 向设备下发 tools/call 请求并返回结果文本。
-func (s *Session) callMCPTool(ctx context.Context, name string, argumentsJSON string) (string, error) {
+// callMCPToolWithInput 向设备下发 tools/call 请求并返回结果文本。
+func (s *Session) callMCPToolWithInput(ctx context.Context, gen uint64, name string, input any) (string, error) {
+	if s.Generation() > gen {
+		return "", errors.New("generation mismatch")
+	}
 	if !s.isMCPToolAllowed(name) {
 		return "", fmt.Errorf("%w: %s", ErrMCPToolNotFound, name)
 	}
 
 	var args any
-	if argumentsJSON != "" {
-		var parsed map[string]any
-		if err := json.Unmarshal([]byte(argumentsJSON), &parsed); err == nil {
-			args = parsed
+	switch v := input.(type) {
+	case string:
+		if v != "" {
+			var parsed map[string]any
+			if err := json.Unmarshal([]byte(v), &parsed); err == nil {
+				args = parsed
+			} else {
+				args = v
+			}
 		} else {
-			args = argumentsJSON
+			args = map[string]any{}
 		}
-	} else {
+	case nil:
 		args = map[string]any{}
+	default:
+		args = input
 	}
 
 	callParams := map[string]any{
@@ -291,6 +301,7 @@ func (s *Session) callMCPTool(ctx context.Context, name string, argumentsJSON st
 
 	s.logger.Info("executing mcp tool call",
 		"session_id", s.SessionId(),
+		"generation", gen,
 		"tool_name", name,
 	)
 
@@ -328,6 +339,7 @@ func (s *Session) callMCPTool(ctx context.Context, name string, argumentsJSON st
 
 	s.logger.Info("mcp tool call executed successfully",
 		"session_id", s.SessionId(),
+		"generation", gen,
 		"tool_name", name,
 	)
 

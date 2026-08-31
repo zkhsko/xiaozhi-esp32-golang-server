@@ -1,8 +1,10 @@
 package factory
 
 import (
+	"errors"
 	"testing"
 
+	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
@@ -23,16 +25,38 @@ func TestFactory_CreateClients(t *testing.T) {
 	if _, err := CreateASRClient(unsupportedASR); err == nil {
 		t.Error("expected error for unsupported asr provider")
 	}
-	unsupportedLLM := &database.LLMConfig{Provider: "unsupported", Endpoint: "http://example.com", APIKey: "key", Model: "m", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000}
+	unsupportedLLM := &database.LLMConfig{Provider: "unknown_provider", Endpoint: "http://example.com", APIKey: "key", Model: "m", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000}
 	if _, err := CreateLLMClient(unsupportedLLM); err == nil {
 		t.Error("expected error for unsupported llm provider")
+	}
+	// LLM 不再兼容 bailian
+	bailianLLM := &database.LLMConfig{Provider: "bailian", Endpoint: "http://example.com", APIKey: "key", Model: "m", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000}
+	if _, err := CreateLLMClient(bailianLLM); err == nil {
+		t.Error("expected error for bailian llm provider (no compatibility retained)")
 	}
 	unsupportedTTS := &database.TTSConfig{Provider: "unsupported", Endpoint: "ws://example.com", APIKey: "key", Model: "m"}
 	if _, err := CreateTTSClient(unsupportedTTS, "voice", 100); err == nil {
 		t.Error("expected error for unsupported tts provider")
 	}
 
-	// 3. Bailian configs (with and without proxy)
+	// 3. Placeholder providers return ErrLLMProviderNotImplemented
+	placeholderProviders := []string{"deepseek", "kimi", "zai", "openrouter", "xai", "anthropic"}
+	for _, p := range placeholderProviders {
+		cfg := &database.LLMConfig{
+			Provider: p,
+			Endpoint: "https://example.com",
+			APIKey:   "key",
+			Model:    "m",
+		}
+		_, err := CreateLLMClient(cfg)
+		if err == nil {
+			t.Errorf("expected error for placeholder provider %s, got nil", p)
+		} else if !errors.Is(err, ai.ErrLLMProviderNotImplemented) {
+			t.Errorf("expected ErrLLMProviderNotImplemented for provider %s, got: %v", p, err)
+		}
+	}
+
+	// 4. ASR / DashScope LLM / TTS configs (with and without proxy)
 	asrCfg := &database.ASRConfig{
 		Provider:         "bailian",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
@@ -49,21 +73,23 @@ func TestFactory_CreateClients(t *testing.T) {
 		t.Fatal("expected non-nil asr client")
 	}
 
-	llmCfg := &database.LLMConfig{
-		Provider:            "bailian",
-		Endpoint:            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		APIKey:              "test-key",
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 5000,
-		OverallTimeoutMS:    30000,
-		ProxyURL:            "http://127.0.0.1:8080",
-	}
-	llmClient, err := CreateLLMClient(llmCfg)
-	if err != nil {
-		t.Fatalf("CreateLLMClient failed: %v", err)
-	}
-	if llmClient == nil {
-		t.Fatal("expected non-nil llm client")
+	for _, p := range []string{"dashscope", ""} {
+		llmCfg := &database.LLMConfig{
+			Provider:            p,
+			Endpoint:            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			APIKey:              "test-key",
+			Model:               "qwen-plus",
+			FirstTokenTimeoutMS: 5000,
+			OverallTimeoutMS:    30000,
+			ProxyURL:            "http://127.0.0.1:8080",
+		}
+		llmClient, err := CreateLLMClient(llmCfg)
+		if err != nil {
+			t.Fatalf("CreateLLMClient(%q) failed: %v", p, err)
+		}
+		if llmClient == nil {
+			t.Fatalf("expected non-nil llm client for provider %q", p)
+		}
 	}
 
 	ttsCfg := &database.TTSConfig{
@@ -85,7 +111,7 @@ func TestFactory_CreateClients(t *testing.T) {
 		t.Fatal("expected non-nil tts client")
 	}
 
-	// 4. TTS Empty voice validation
+	// 5. TTS Empty voice validation
 	if _, err := CreateTTSClient(ttsCfg, "  ", 100); err == nil {
 		t.Error("expected error for empty voice, got nil")
 	}
