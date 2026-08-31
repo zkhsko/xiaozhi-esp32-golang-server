@@ -6,7 +6,6 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/ai/anthropic"
-	"xiaozhi-esp32-golang-server/internal/ai/bailian"
 	"xiaozhi-esp32-golang-server/internal/ai/dashscope"
 	"xiaozhi-esp32-golang-server/internal/ai/deepseek"
 	"xiaozhi-esp32-golang-server/internal/ai/kimi"
@@ -24,8 +23,8 @@ func CreateASRClient(cfg *database.ASRConfig) (ai.ASRClient, error) {
 
 	provider := strings.TrimSpace(cfg.Provider)
 	switch provider {
-	case "bailian", "":
-		return bailian.NewASRClient(cfg)
+	case "dashscope", "":
+		return dashscope.NewASRClient(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported asr provider: %s", provider)
 	}
@@ -66,8 +65,8 @@ func CreateTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (ai.TT
 
 	provider := strings.TrimSpace(cfg.Provider)
 	switch strings.ToLower(provider) {
-	case "bailian", "":
-		return bailian.NewTTSClient(cfg, voice, queueCap)
+	case "dashscope", "":
+		return dashscope.NewTTSClient(cfg, voice, queueCap)
 	default:
 		return nil, fmt.Errorf("unsupported tts provider: %s", provider)
 	}

@@ -18,7 +18,7 @@
             style="width: 160px;"
           >
             <el-option label="全部平台" value="" />
-            <el-option label="阿里百炼" value="bailian" />
+            <el-option label="阿里百炼" value="dashscope" />
             <el-option label="火山引擎" value="volcengine" />
             <el-option label="OpenAI" value="openai" />
           </el-select>
@@ -90,11 +90,11 @@
         <el-table-column prop="provider" label="服务平台" width="130" align="center">
           <template #default="{ row }">
             <el-tag
-              :type="row.provider === 'bailian' ? 'primary' : row.provider === 'volcengine' ? 'warning' : 'info'"
+              :type="row.provider === 'dashscope' ? 'primary' : row.provider === 'volcengine' ? 'warning' : 'info'"
               effect="plain"
               size="small"
             >
-              {{ row.provider || 'bailian' }}
+              {{ row.provider || 'dashscope' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -280,7 +280,7 @@
             default-first-option
             style="width: 100%;"
           >
-            <el-option label="阿里百炼" value="bailian" />
+            <el-option label="阿里百炼" value="dashscope" />
             <el-option label="火山引擎" value="volcengine" />
             <el-option label="OpenAI" value="openai" />
           </el-select>
@@ -439,7 +439,7 @@ const configDialog = reactive({
   form: {
     id: 0,
     name: '',
-    provider: 'bailian',
+    provider: 'dashscope',
     endpoint: '',
     proxy_url: '',
     model: '',
@@ -590,7 +590,7 @@ function openCreateDialog() {
   configDialog.form = {
     id: 0,
     name: '',
-    provider: 'bailian',
+    provider: 'dashscope',
     endpoint: '',
     proxy_url: '',
     model: '',
@@ -616,7 +616,7 @@ function openEditDialog(row: ASRConfigItem) {
   configDialog.form = {
     id: row.id,
     name: row.name,
-    provider: row.provider || 'bailian',
+    provider: row.provider || 'dashscope',
     endpoint: row.endpoint,
     proxy_url: row.proxy_url || '',
     model: row.model,

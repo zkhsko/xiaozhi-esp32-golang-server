@@ -11,7 +11,7 @@ func createTestAgent(t *testing.T, db *Database, ctx context.Context, name strin
 	t.Helper()
 	asr := &ASRConfig{
 		Name:             "测试ASR-" + name,
-		Provider:         "bailian",
+		Provider:         "dashscope",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		Model:            "qwen-asr",
 		ConnectTimeoutMS: 5000,
@@ -36,7 +36,7 @@ func createTestAgent(t *testing.T, db *Database, ctx context.Context, name strin
 
 	tts := &TTSConfig{
 		Name:                "测试TTS-" + name,
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
 		Model:               "cosyvoice-v1",
 		Voices:              `["voice1"]`,
@@ -355,7 +355,7 @@ func TestResolveAgentRuntimeSnapshotByDeviceType(t *testing.T) {
 	// 4. 正常链路测试
 	asr := &ASRConfig{
 		Name:             "ASR-Snap",
-		Provider:         "bailian",
+		Provider:         "dashscope",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		Model:            "qwen-asr",
 		ConnectTimeoutMS: 5000,
@@ -380,7 +380,7 @@ func TestResolveAgentRuntimeSnapshotByDeviceType(t *testing.T) {
 
 	tts := &TTSConfig{
 		Name:                "TTS-Snap",
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
 		Model:               "cosyvoice-v1",
 		Voices:              `["voice1"]`,

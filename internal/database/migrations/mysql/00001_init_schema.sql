@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS `device_type` (
 CREATE TABLE IF NOT EXISTS `asr_config` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '配置自增主键',
     `name` VARCHAR(128) NOT NULL COMMENT '配置展示名称（非唯一）',
-    `provider` VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'ASR 服务商/平台：bailian / volcengine / openai 等',
+    `provider` VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'ASR 服务商/平台：dashscope / volcengine / openai 等',
     `endpoint` VARCHAR(1024) NOT NULL COMMENT 'ASR WebSocket Endpoint',
     `api_key` VARCHAR(1024) NOT NULL DEFAULT '' COMMENT '明文 API Key',
     `model` VARCHAR(255) NOT NULL COMMENT 'ASR 模型',
@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS `llm_config` (
 CREATE TABLE IF NOT EXISTS `tts_config` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '配置自增主键',
     `name` VARCHAR(128) NOT NULL COMMENT '配置展示名称（非唯一）',
-    `provider` VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'TTS 服务商/平台：bailian / volcengine / openai 等',
+    `provider` VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'TTS 服务商/平台：dashscope / volcengine / openai 等',
     `endpoint` VARCHAR(1024) NOT NULL COMMENT 'TTS WebSocket Endpoint',
     `api_key` VARCHAR(1024) NOT NULL DEFAULT '' COMMENT '明文 API Key',
     `model` VARCHAR(255) NOT NULL COMMENT 'TTS 模型',

@@ -192,7 +192,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	// 13. ASR 配置 E2E 创建
 	createASRBody, _ := json.Marshal(SaveASRConfigRequest{
 		Name:             "E2E 百炼 ASR",
-		Provider:         "bailian",
+		Provider:         "dashscope",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:           "sk-e2e-asr-key",
 		Model:            "qwen-audio-3.0-asr-flash-streaming",
@@ -213,7 +213,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    ASRConfigItem `json:"data"`
 	}
 	_ = json.Unmarshal(wASRCreate.Body.Bytes(), &asrCreateResp)
-	if !asrCreateResp.Success || asrCreateResp.Data.Id == 0 || !asrCreateResp.Data.HasAPIKey || asrCreateResp.Data.Provider != "bailian" || asrCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
+	if !asrCreateResp.Success || asrCreateResp.Data.Id == 0 || !asrCreateResp.Data.HasAPIKey || asrCreateResp.Data.Provider != "dashscope" || asrCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected asr create resp: %+v", asrCreateResp)
 	}
 	createdASRId := asrCreateResp.Data.Id
@@ -231,8 +231,8 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    ASRConfigListData `json:"data"`
 	}
 	_ = json.Unmarshal(wASRList.Body.Bytes(), &asrListResp)
-	if asrListResp.Data.Total != 1 || len(asrListResp.Data.Items) != 1 || asrListResp.Data.Items[0].Provider != "bailian" || asrListResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
-		t.Fatalf("expected 1 ASR config item with provider bailian and proxy_url, got %v", asrListResp.Data.Items)
+	if asrListResp.Data.Total != 1 || len(asrListResp.Data.Items) != 1 || asrListResp.Data.Items[0].Provider != "dashscope" || asrListResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("expected 1 ASR config item with provider dashscope and proxy_url, got %v", asrListResp.Data.Items)
 	}
 
 	// 15. ASR 配置单条删除
@@ -324,7 +324,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	// 21. TTS 配置 E2E 创建
 	createTTSBody, _ := json.Marshal(SaveTTSConfigRequest{
 		Name:                "E2E 百炼 TTS",
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:              "sk-e2e-tts-key",
 		Model:               "cosyvoice-v1",
@@ -347,7 +347,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    TTSConfigItem `json:"data"`
 	}
 	_ = json.Unmarshal(wTTSCreate.Body.Bytes(), &ttsCreateResp)
-	if !ttsCreateResp.Success || ttsCreateResp.Data.Id == 0 || !ttsCreateResp.Data.HasAPIKey || ttsCreateResp.Data.Provider != "bailian" || ttsCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
+	if !ttsCreateResp.Success || ttsCreateResp.Data.Id == 0 || !ttsCreateResp.Data.HasAPIKey || ttsCreateResp.Data.Provider != "dashscope" || ttsCreateResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected tts create resp: %+v", ttsCreateResp)
 	}
 	createdTTSId := ttsCreateResp.Data.Id
@@ -365,8 +365,8 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		Data    TTSConfigListData `json:"data"`
 	}
 	_ = json.Unmarshal(wTTSList.Body.Bytes(), &ttsListResp)
-	if ttsListResp.Data.Total != 1 || len(ttsListResp.Data.Items) != 1 || ttsListResp.Data.Items[0].Provider != "bailian" || ttsListResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
-		t.Fatalf("expected 1 TTS config item with provider bailian and proxy_url, got %v", ttsListResp.Data.Items)
+	if ttsListResp.Data.Total != 1 || len(ttsListResp.Data.Items) != 1 || ttsListResp.Data.Items[0].Provider != "dashscope" || ttsListResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
+		t.Fatalf("expected 1 TTS config item with provider dashscope and proxy_url, got %v", ttsListResp.Data.Items)
 	}
 
 	// 23. TTS 配置单条删除
@@ -390,11 +390,11 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	}
 
 	// 25. Agent 配置 E2E 测试准备基础依赖 ASR, LLM, TTS
-	asrCfg := &database.ASRConfig{Name: "E2E-Agent-ASR", Provider: "bailian", Endpoint: "wss://asr.com", Model: "m1", ConnectTimeoutMS: 5000, Enabled: true}
+	asrCfg := &database.ASRConfig{Name: "E2E-Agent-ASR", Provider: "dashscope", Endpoint: "wss://asr.com", Model: "m1", ConnectTimeoutMS: 5000, Enabled: true}
 	_ = db.CreateASRConfig(context.Background(), asrCfg)
 	llmCfg := &database.LLMConfig{Name: "E2E-Agent-LLM", Provider: "dashscope", Endpoint: "https://llm.com", Model: "m2", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
 	_ = db.CreateLLMConfig(context.Background(), llmCfg)
-	ttsCfg := &database.TTSConfig{Name: "E2E-Agent-TTS", Provider: "bailian", Endpoint: "wss://tts.com", Model: "m3", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	ttsCfg := &database.TTSConfig{Name: "E2E-Agent-TTS", Provider: "dashscope", Endpoint: "wss://tts.com", Model: "m3", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
 	_ = db.CreateTTSConfig(context.Background(), ttsCfg)
 
 	// 26. Agent 配置 E2E 创建

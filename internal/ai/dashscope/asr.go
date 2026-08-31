@@ -1,4 +1,4 @@
-package bailian
+package dashscope
 
 import (
 	"context"
@@ -18,10 +18,10 @@ import (
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
-// maxASRReadMessageBytes 定义百炼 ASR WebSocket 单帧最大读取字节数（1 MiB）。
+// maxASRReadMessageBytes 定义 DashScope ASR WebSocket 单帧最大读取字节数（1 MiB）。
 const maxASRReadMessageBytes = 1 * 1024 * 1024
 
-// ASRClient 实现基于百炼 WebSocket 流式协议的语音识别客户端。
+// ASRClient 实现基于 DashScope WebSocket 流式协议的语音识别客户端。
 type ASRClient struct {
 	endpoint       string
 	apiKey         string
@@ -30,7 +30,7 @@ type ASRClient struct {
 	httpClient     *http.Client
 }
 
-// NewASRClient 基于数据库 ASR 配置实体构造百炼 ASR 客户端实例。
+// NewASRClient 基于数据库 ASR 配置实体构造 DashScope ASR 客户端实例。
 func NewASRClient(cfg *database.ASRConfig) (*ASRClient, error) {
 	if cfg == nil {
 		return nil, errors.New("asr config cannot be nil")
@@ -39,10 +39,10 @@ func NewASRClient(cfg *database.ASRConfig) (*ASRClient, error) {
 		return nil, errors.New("dashscope api key is required")
 	}
 	if strings.TrimSpace(cfg.Endpoint) == "" {
-		return nil, errors.New("bailian ws endpoint is required")
+		return nil, errors.New("dashscope ws endpoint is required")
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
-		return nil, errors.New("bailian asr model is required")
+		return nil, errors.New("dashscope asr model is required")
 	}
 
 	timeout := time.Duration(cfg.ConnectTimeoutMS) * time.Millisecond
@@ -136,7 +136,7 @@ type asrResponseMessage struct {
 	Payload asrResponsePayload `json:"payload"`
 }
 
-// CreateStream 创建并启动一条百炼流式语音识别会话。
+// CreateStream 创建并启动一条 DashScope 流式语音识别会话。
 func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -154,7 +154,7 @@ func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 
 	conn, _, err := websocket.Dial(dialCtx, c.endpoint, opts)
 	if err != nil {
-		return nil, fmt.Errorf("dial bailian asr websocket: %w", err)
+		return nil, fmt.Errorf("dial dashscope asr websocket: %w", err)
 	}
 	conn.SetReadLimit(maxASRReadMessageBytes)
 
@@ -243,7 +243,7 @@ func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 	return stream, nil
 }
 
-// ASRStream 实现百炼流式语音识别会话。
+// ASRStream 实现 DashScope 流式语音识别会话。
 type ASRStream struct {
 	conn   *websocket.Conn
 	taskId string
@@ -287,7 +287,7 @@ func (s *ASRStream) readLoop() {
 	for {
 		msgType, data, err := s.conn.Read(s.ctx)
 		if err != nil {
-			s.recordError(fmt.Errorf("read bailian asr websocket: %w", err))
+			s.recordError(fmt.Errorf("read dashscope asr websocket: %w", err))
 			return
 		}
 
@@ -362,11 +362,11 @@ func (s *ASRStream) readLoop() {
 			if msg == "" {
 				msg = "asr task failed on server"
 			}
-			s.recordError(fmt.Errorf("bailian asr task failed: [%s] %s", code, msg))
+			s.recordError(fmt.Errorf("dashscope asr task failed: [%s] %s", code, msg))
 			return
 
 		default:
-			// 忽略百炼未知事件，保证状态不混乱、不崩溃
+			// 忽略 DashScope 未知事件，保证状态不混乱、不崩溃
 		}
 	}
 }
@@ -480,7 +480,7 @@ func (s *ASRStream) WritePCM(ctx context.Context, data []byte) error {
 	return nil
 }
 
-// Finish 通知百炼服务端音频流输入已结束。
+// Finish 通知 DashScope 服务端音频流输入已结束。
 func (s *ASRStream) Finish(ctx context.Context) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -599,3 +599,4 @@ func newUUID() string {
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
+

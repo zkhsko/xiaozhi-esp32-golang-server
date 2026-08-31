@@ -363,7 +363,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	// 1. Create ASR Config via /asr-config/save
 	createBody := []byte(`{
 		"name": "百炼语音识别",
-		"provider": "bailian",
+		"provider": "dashscope",
 		"endpoint": "wss://dashscope.aliyuncs.com/api-v1/ws",
 		"api_key": "sk-secret-key-123456",
 		"model": "qwen-audio-3.0-asr-flash-streaming",
@@ -394,8 +394,8 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	if !createResp.Data.HasAPIKey {
 		t.Fatalf("expected has_api_key true")
 	}
-	if createResp.Data.Provider != "bailian" {
-		t.Fatalf("expected provider bailian, got %q", createResp.Data.Provider)
+	if createResp.Data.Provider != "dashscope" {
+		t.Fatalf("expected provider dashscope, got %q", createResp.Data.Provider)
 	}
 	if createResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("expected proxy_url http://127.0.0.1:7890, got %q", createResp.Data.ProxyURL)
@@ -420,7 +420,7 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
 		t.Fatalf("unexpected list count: total=%d, items=%d", listResp.Data.Total, len(listResp.Data.Items))
 	}
-	if listResp.Data.Items[0].Name != "百炼语音识别" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "bailian" || listResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
+	if listResp.Data.Items[0].Name != "百炼语音识别" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "dashscope" || listResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected item content: %+v", listResp.Data.Items[0])
 	}
 
@@ -647,7 +647,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	// 1. Create TTS Config via /tts-config/save
 	createBody := []byte(`{
 		"name": "百炼语音合成",
-		"provider": "bailian",
+		"provider": "dashscope",
 		"endpoint": "wss://dashscope.aliyuncs.com/api-v1/ws",
 		"api_key": "sk-secret-tts-key-123456",
 		"model": "cosyvoice-v1",
@@ -680,8 +680,8 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	if !createResp.Data.HasAPIKey {
 		t.Fatalf("expected has_api_key true")
 	}
-	if createResp.Data.Provider != "bailian" {
-		t.Fatalf("expected provider bailian, got %q", createResp.Data.Provider)
+	if createResp.Data.Provider != "dashscope" {
+		t.Fatalf("expected provider dashscope, got %q", createResp.Data.Provider)
 	}
 	if createResp.Data.ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("expected proxy_url http://127.0.0.1:7890, got %q", createResp.Data.ProxyURL)
@@ -706,7 +706,7 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	if listResp.Data.Total != 1 || len(listResp.Data.Items) != 1 {
 		t.Fatalf("unexpected list count: total=%d, items=%d", listResp.Data.Total, len(listResp.Data.Items))
 	}
-	if listResp.Data.Items[0].Name != "百炼语音合成" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "bailian" || listResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
+	if listResp.Data.Items[0].Name != "百炼语音合成" || !listResp.Data.Items[0].HasAPIKey || listResp.Data.Items[0].Provider != "dashscope" || listResp.Data.Items[0].ProxyURL != "http://127.0.0.1:7890" {
 		t.Fatalf("unexpected item content: %+v", listResp.Data.Items[0])
 	}
 
@@ -792,11 +792,11 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 	ctx := context.Background()
 
 	// 准备基础 ASR, LLM, TTS 组件
-	asr := &database.ASRConfig{Name: "默认ASR", Provider: "bailian", Endpoint: "wss://asr.example.com", Model: "asr-v1", ConnectTimeoutMS: 5000, Enabled: true}
+	asr := &database.ASRConfig{Name: "默认ASR", Provider: "dashscope", Endpoint: "wss://asr.example.com", Model: "asr-v1", ConnectTimeoutMS: 5000, Enabled: true}
 	_ = db.CreateASRConfig(ctx, asr)
 	llm := &database.LLMConfig{Name: "默认LLM", Provider: "dashscope", Endpoint: "https://llm.example.com", Model: "qwen-turbo", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
 	_ = db.CreateLLMConfig(ctx, llm)
-	tts := &database.TTSConfig{Name: "默认TTS", Provider: "bailian", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["voice1"]`, ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	tts := &database.TTSConfig{Name: "默认TTS", Provider: "dashscope", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["voice1"]`, ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
 	_ = db.CreateTTSConfig(ctx, tts)
 
 	// 1. Create Agent Config via /agent-config/save
@@ -940,11 +940,11 @@ func TestAdminDeviceTypeEndpoints(t *testing.T) {
 	ctx := context.Background()
 
 	// 准备基础 ASR, LLM, TTS 和 Agent
-	asr := &database.ASRConfig{Name: "ASR-1", Provider: "bailian", Endpoint: "wss://asr.example.com", Model: "asr-v1", ConnectTimeoutMS: 5000, Enabled: true}
+	asr := &database.ASRConfig{Name: "ASR-1", Provider: "dashscope", Endpoint: "wss://asr.example.com", Model: "asr-v1", ConnectTimeoutMS: 5000, Enabled: true}
 	_ = db.CreateASRConfig(ctx, asr)
 	llm := &database.LLMConfig{Name: "LLM-1", Provider: "dashscope", Endpoint: "https://llm.example.com", Model: "qwen-turbo", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
 	_ = db.CreateLLMConfig(ctx, llm)
-	tts := &database.TTSConfig{Name: "TTS-1", Provider: "bailian", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["v1"]`, ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	tts := &database.TTSConfig{Name: "TTS-1", Provider: "dashscope", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["v1"]`, ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
 	_ = db.CreateTTSConfig(ctx, tts)
 
 	agent1 := &database.AgentConfig{Name: "Agent-A", ASRConfigId: asr.Id, LLMConfigId: llm.Id, TTSConfigId: tts.Id, SystemPrompt: "prompt A", Voice: "v1", Enabled: true}

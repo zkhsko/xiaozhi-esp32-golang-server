@@ -14,7 +14,7 @@ func TestASRConfig_CRUD(t *testing.T) {
 	// 1. Create ASRConfig
 	cfg := &ASRConfig{
 		Name:             "百炼语音识别",
-		Provider:         "bailian",
+		Provider:         "dashscope",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:           "sk-test-asr-api-key-123456",
 		Model:            "qwen-audio-3.0-asr-flash-streaming",
@@ -40,8 +40,8 @@ func TestASRConfig_CRUD(t *testing.T) {
 	if found.Name != "百炼语音识别" {
 		t.Errorf("expected name %q, got %q", "百炼语音识别", found.Name)
 	}
-	if found.Provider != "bailian" {
-		t.Errorf("expected provider %q, got %q", "bailian", found.Provider)
+	if found.Provider != "dashscope" {
+		t.Errorf("expected provider %q, got %q", "dashscope", found.Provider)
 	}
 	if found.Endpoint != "wss://dashscope.aliyuncs.com/api-v1/ws" {
 		t.Errorf("expected endpoint %q, got %q", "wss://dashscope.aliyuncs.com/api-v1/ws", found.Endpoint)
@@ -208,7 +208,7 @@ func TestASRConfig_ListAndFilter(t *testing.T) {
 	ctx := context.Background()
 
 	items := []*ASRConfig{
-		{Name: "ASR-Alpha", Provider: "bailian", Endpoint: "wss://alpha.example.com/asr", Model: "m1", ConnectTimeoutMS: 5000, Enabled: true},
+		{Name: "ASR-Alpha", Provider: "dashscope", Endpoint: "wss://alpha.example.com/asr", Model: "m1", ConnectTimeoutMS: 5000, Enabled: true},
 		{Name: "ASR-Beta", Provider: "volcengine", Endpoint: "wss://beta.example.com/asr", Model: "m2", ConnectTimeoutMS: 5000, Enabled: true},
 		{Name: "ASR-Gamma", Provider: "openai", Endpoint: "wss://gamma.example.com/asr", Model: "m3", ConnectTimeoutMS: 5000, Enabled: false},
 	}
@@ -304,7 +304,7 @@ func TestASRConfig_Validation(t *testing.T) {
 			name: "name exceeds 128 bytes",
 			cfg: &ASRConfig{
 				Name:             strings.Repeat("a", 129),
-				Provider:         "bailian",
+				Provider:         "dashscope",
 				Endpoint:         "wss://example.com/asr",
 				Model:            "model-1",
 				ConnectTimeoutMS: 5000,

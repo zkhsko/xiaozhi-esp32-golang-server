@@ -1,4 +1,4 @@
-package bailian
+package dashscope
 
 import (
 	"context"
@@ -19,10 +19,10 @@ import (
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
-// maxTTSReadMessageBytes 定义百炼 TTS WebSocket 单帧最大读取字节数（4 MiB），满足 24 kHz PCM 块下发需求。
+// maxTTSReadMessageBytes 定义 DashScope TTS WebSocket 单帧最大读取字节数（4 MiB），满足 24 kHz PCM 块下发需求。
 const maxTTSReadMessageBytes = 4 * 1024 * 1024
 
-// TTSClient 实现基于百炼 WebSocket 流式协议的语音合成客户端。
+// TTSClient 实现基于 DashScope WebSocket 流式协议的语音合成客户端。
 type TTSClient struct {
 	endpoint          string
 	apiKey            string
@@ -35,7 +35,7 @@ type TTSClient struct {
 	httpClient        *http.Client
 }
 
-// NewTTSClient 基于数据库 TTS 配置实体与 Agent 指定音色构造百炼 TTS 客户端实例。
+// NewTTSClient 基于数据库 TTS 配置实体与 Agent 指定音色构造 DashScope TTS 客户端实例。
 func NewTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (*TTSClient, error) {
 	if cfg == nil {
 		return nil, errors.New("tts config cannot be nil")
@@ -44,10 +44,10 @@ func NewTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (*TTSClie
 		return nil, errors.New("dashscope api key is required")
 	}
 	if strings.TrimSpace(cfg.Endpoint) == "" {
-		return nil, errors.New("bailian ws endpoint is required")
+		return nil, errors.New("dashscope ws endpoint is required")
 	}
 	if strings.TrimSpace(cfg.Model) == "" {
-		return nil, errors.New("bailian tts model is required")
+		return nil, errors.New("dashscope tts model is required")
 	}
 	trimmedVoice := strings.TrimSpace(voice)
 	if trimmedVoice == "" {
@@ -183,7 +183,7 @@ func (c *TTSClient) CreateStream(ctx context.Context) (ai.TTSStream, error) {
 
 	conn, _, err := websocket.Dial(dialCtx, c.endpoint, opts)
 	if err != nil {
-		return nil, fmt.Errorf("dial bailian tts websocket: %w", err)
+		return nil, fmt.Errorf("dial dashscope tts websocket: %w", err)
 	}
 	conn.SetReadLimit(maxTTSReadMessageBytes)
 
@@ -275,7 +275,7 @@ func (c *TTSClient) CreateStream(ctx context.Context) (ai.TTSStream, error) {
 	return stream, nil
 }
 
-// TTSStream 实现百炼流式语音合成会话。
+// TTSStream 实现 DashScope 流式语音合成会话。
 type TTSStream struct {
 	conn   *websocket.Conn
 	taskId string
@@ -393,7 +393,7 @@ func (s *TTSStream) readLoop() {
 			} else if s.sentenceTimedOut.Load() {
 				s.recordError(fmt.Errorf("tts sentence timeout (%v): %w", s.sentenceTimeout, context.DeadlineExceeded))
 			} else {
-				s.recordError(fmt.Errorf("read bailian tts websocket: %w", err))
+				s.recordError(fmt.Errorf("read dashscope tts websocket: %w", err))
 			}
 			return
 		}
@@ -451,11 +451,11 @@ func (s *TTSStream) readLoop() {
 				if msg == "" {
 					msg = "tts task failed on server"
 				}
-				s.recordError(fmt.Errorf("bailian tts task failed: [%s] %s", code, msg))
+				s.recordError(fmt.Errorf("dashscope tts task failed: [%s] %s", code, msg))
 				return
 
 			default:
-				// 忽略未知百炼事件，保持流正常运转
+				// 忽略未知 DashScope 事件，保持流正常运转
 			}
 		}
 	}
@@ -567,7 +567,7 @@ func (s *TTSStream) SendSentence(ctx context.Context, text string) error {
 	return nil
 }
 
-// Finish 通知百炼服务端文本输入已全部结束。
+// Finish 通知 DashScope 服务端文本输入已全部结束。
 func (s *TTSStream) Finish(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -682,7 +682,7 @@ func (s *TTSStream) NextPCM(ctx context.Context) ([]byte, error) {
 	}
 }
 
-// Cancel 尝试向百炼服务端发送 cancel-task 结束指令并安全关闭会话。
+// Cancel 尝试向 DashScope 服务端发送 cancel-task 结束指令并安全关闭会话。
 func (s *TTSStream) Cancel(ctx context.Context) error {
 	s.stopTimers()
 

@@ -20,7 +20,7 @@ func TestWebSocketDynamicLoading_EndToEnd(t *testing.T) {
 	// Agent A: 语音助手
 	asrA := &database.ASRConfig{
 		Name:             "ASR-A",
-		Provider:         "bailian",
+		Provider:         "dashscope",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:           "key-a",
 		Model:            "qwen-asr-a",
@@ -47,7 +47,7 @@ func TestWebSocketDynamicLoading_EndToEnd(t *testing.T) {
 
 	ttsA := &database.TTSConfig{
 		Name:                "TTS-A",
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:              "key-a",
 		Model:               "cosyvoice-v1",
@@ -77,7 +77,7 @@ func TestWebSocketDynamicLoading_EndToEnd(t *testing.T) {
 	// Agent B: 故事助手
 	asrB := &database.ASRConfig{
 		Name:             "ASR-B",
-		Provider:         "bailian",
+		Provider:         "dashscope",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:           "key-b",
 		Model:            "qwen-asr-b",
@@ -104,7 +104,7 @@ func TestWebSocketDynamicLoading_EndToEnd(t *testing.T) {
 
 	ttsB := &database.TTSConfig{
 		Name:                "TTS-B",
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:              "key-b",
 		Model:               "cosyvoice-v2",

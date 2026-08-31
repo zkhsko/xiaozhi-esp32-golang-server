@@ -15,7 +15,7 @@ func TestTTSConfig_CRUD(t *testing.T) {
 	// 1. Create TTSConfig
 	cfg := &TTSConfig{
 		Name:                "百炼语音合成",
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:              "sk-test-tts-api-key-123456",
 		Model:               "cosyvoice-v1",
@@ -43,8 +43,8 @@ func TestTTSConfig_CRUD(t *testing.T) {
 	if found.Name != "百炼语音合成" {
 		t.Errorf("expected name %q, got %q", "百炼语音合成", found.Name)
 	}
-	if found.Provider != "bailian" {
-		t.Errorf("expected provider %q, got %q", "bailian", found.Provider)
+	if found.Provider != "dashscope" {
+		t.Errorf("expected provider %q, got %q", "dashscope", found.Provider)
 	}
 	if found.Endpoint != "wss://dashscope.aliyuncs.com/api-v1/ws" {
 		t.Errorf("expected endpoint %q, got %q", "wss://dashscope.aliyuncs.com/api-v1/ws", found.Endpoint)
@@ -332,7 +332,7 @@ func TestTTSConfig_ListAndFilter(t *testing.T) {
 	ctx := context.Background()
 
 	items := []*TTSConfig{
-		{Name: "TTS-Alpha", Provider: "bailian", Endpoint: "wss://alpha.example.com/tts", Model: "m1", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true},
+		{Name: "TTS-Alpha", Provider: "dashscope", Endpoint: "wss://alpha.example.com/tts", Model: "m1", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true},
 		{Name: "TTS-Beta", Provider: "volcengine", Endpoint: "wss://beta.example.com/tts", Model: "m2", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true},
 		{Name: "TTS-Gamma", Provider: "openai", Endpoint: "wss://gamma.example.com/tts", Model: "m3", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: false},
 	}
@@ -430,7 +430,7 @@ func TestTTSConfig_Validation(t *testing.T) {
 			name: "name exceeds 128 bytes",
 			cfg: &TTSConfig{
 				Name:                strings.Repeat("a", 129),
-				Provider:            "bailian",
+				Provider:            "dashscope",
 				Endpoint:            "wss://example.com/tts",
 				Model:               "model-1",
 				ConnectTimeoutMS:    5000,

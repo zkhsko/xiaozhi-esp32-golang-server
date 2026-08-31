@@ -271,7 +271,7 @@
             default-first-option
             style="width: 100%;"
           >
-            <el-option label="DashScope" value="dashscope" />
+            <el-option label="阿里百炼" value="dashscope" />
             <el-option label="OpenAI" value="openai" />
             <el-option label="DeepSeek" value="deepseek" />
             <el-option label="火山引擎" value="volcengine" />

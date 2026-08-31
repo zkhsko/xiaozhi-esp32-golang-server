@@ -13,7 +13,7 @@ func createTestComponents(t *testing.T, db *Database, ctx context.Context) (asrI
 
 	asr := &ASRConfig{
 		Name:             "测试ASR",
-		Provider:         "bailian",
+		Provider:         "dashscope",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:           "sk-test-asr-key",
 		Model:            "qwen-audio-3.0-asr-flash-streaming",
@@ -41,7 +41,7 @@ func createTestComponents(t *testing.T, db *Database, ctx context.Context) (asrI
 
 	tts := &TTSConfig{
 		Name:                "测试TTS",
-		Provider:            "bailian",
+		Provider:            "dashscope",
 		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
 		APIKey:              "sk-test-tts-key",
 		Model:               "cosyvoice-v1",
@@ -441,7 +441,7 @@ func TestAgentConfig_ComponentReferencesValidation(t *testing.T) {
 	// 4. 组件处于禁用状态
 	disabledASR := &ASRConfig{
 		Name:             "禁用ASR",
-		Provider:         "bailian",
+		Provider:         "dashscope",
 		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
 		Model:            "m1",
 		ConnectTimeoutMS: 5000,
@@ -567,7 +567,7 @@ func TestAgentConfig_FindActiveAgentRuntimeSnapshot(t *testing.T) {
 	}
 
 	// 验证 ASR 快照
-	if snapshot.ASRConfig.Id != asrId || snapshot.ASRConfig.Model != "qwen-audio-3.0-asr-flash-streaming" || snapshot.ASRConfig.Provider != "bailian" {
+	if snapshot.ASRConfig.Id != asrId || snapshot.ASRConfig.Model != "qwen-audio-3.0-asr-flash-streaming" || snapshot.ASRConfig.Provider != "dashscope" {
 		t.Errorf("unexpected ASR snapshot: %+v", snapshot.ASRConfig)
 	}
 	// 验证 LLM 快照
@@ -575,7 +575,7 @@ func TestAgentConfig_FindActiveAgentRuntimeSnapshot(t *testing.T) {
 		t.Errorf("unexpected LLM snapshot: %+v", snapshot.LLMConfig)
 	}
 	// 验证 TTS 快照
-	if snapshot.TTSConfig.Id != ttsId || snapshot.TTSConfig.Model != "cosyvoice-v1" || snapshot.TTSConfig.Provider != "bailian" {
+	if snapshot.TTSConfig.Id != ttsId || snapshot.TTSConfig.Model != "cosyvoice-v1" || snapshot.TTSConfig.Provider != "dashscope" {
 		t.Errorf("unexpected TTS snapshot: %+v", snapshot.TTSConfig)
 	}
 
