@@ -485,17 +485,6 @@ func TestOrchestrateLLMAndTTS_ContextCanceled(t *testing.T) {
 	}
 }
 
-func TestSession_SystemPrompt(t *testing.T) {
-	sess := &Session{
-		systemPrompt: "你是小智助手。",
-	}
-
-	prompt := sess.SystemPrompt()
-	if prompt != "你是小智助手。" {
-		t.Fatalf("expected prompt %q, got %q", "你是小智助手。", prompt)
-	}
-}
-
 func TestOrchestrateLLMAndTTS_SentenceSubtitleSync(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

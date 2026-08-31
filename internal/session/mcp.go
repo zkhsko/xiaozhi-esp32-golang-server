@@ -346,22 +346,3 @@ func (s *Session) callMCPToolWithInput(ctx context.Context, gen uint64, name str
 	return resultText, nil
 }
 
-// getMCPTools 返回当前会话已发现的 MCP Tools 列表副本。
-func (s *Session) getMCPTools() []ai.Tool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if len(s.mcpTools) == 0 {
-		return nil
-	}
-	copied := make([]ai.Tool, len(s.mcpTools))
-	copy(copied, s.mcpTools)
-	return copied
-}
-
-// SystemPrompt 返回当前会话实际生效的完整系统提示词。
-func (s *Session) SystemPrompt() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.systemPrompt
-}
