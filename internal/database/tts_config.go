@@ -261,7 +261,7 @@ func (d *Database) UpdateTTSConfigById(ctx context.Context, cfg *TTSConfig) erro
 		"api_key":                cfg.APIKey,
 		"model":                  strings.TrimSpace(cfg.Model),
 		"voices":                 cfg.Voices,
-		"proxy_url":               strings.TrimSpace(cfg.ProxyURL),
+		"proxy_url":              strings.TrimSpace(cfg.ProxyURL),
 		"connect_timeout_ms":     cfg.ConnectTimeoutMS,
 		"first_audio_timeout_ms": cfg.FirstAudioTimeoutMS,
 		"sentence_timeout_ms":    cfg.SentenceTimeoutMS,
@@ -370,4 +370,3 @@ func (d *Database) BatchDeleteTTSConfigs(ctx context.Context, ids []uint64) erro
 	}
 	return nil
 }
-

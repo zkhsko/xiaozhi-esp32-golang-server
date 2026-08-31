@@ -541,6 +541,3 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 		t.Fatalf("SPA route for device-types failed, code=%d", wSPA7.Code)
 	}
 }
-
-
-

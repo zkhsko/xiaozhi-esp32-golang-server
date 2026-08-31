@@ -586,4 +586,3 @@ func TestLLMConfig_Delete(t *testing.T) {
 		t.Fatalf("expected ErrLLMConfigNotFound for cfgB, got %v", err)
 	}
 }
-

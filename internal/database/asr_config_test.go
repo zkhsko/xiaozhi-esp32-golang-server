@@ -584,4 +584,3 @@ func TestASRConfig_DeleteAndBatchDelete(t *testing.T) {
 		t.Fatalf("expected total 0 after batch delete, got %d", total)
 	}
 }
-

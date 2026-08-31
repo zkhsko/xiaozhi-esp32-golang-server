@@ -350,4 +350,3 @@ func (d *Database) BatchDeleteASRConfigs(ctx context.Context, ids []uint64) erro
 	}
 	return nil
 }
-

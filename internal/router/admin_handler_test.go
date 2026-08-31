@@ -1065,6 +1065,3 @@ func TestAdminDeviceTypeEndpoints(t *testing.T) {
 		t.Fatalf("expected 0 device types after batch delete, got %d", finalCount)
 	}
 }
-
-
-

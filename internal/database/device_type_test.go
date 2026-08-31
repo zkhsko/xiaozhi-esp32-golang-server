@@ -471,4 +471,3 @@ func TestResolveAgentRuntimeSnapshotByDeviceType(t *testing.T) {
 		t.Errorf("expected ErrAgentConfigNotFound, got %v", err)
 	}
 }
-

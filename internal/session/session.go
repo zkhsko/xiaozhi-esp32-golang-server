@@ -76,11 +76,11 @@ type Session struct {
 	serialNumber string
 	systemPrompt string
 	cfg          *config.Config
-	asrClient   ai.ASRClient
-	llmClient   ai.LLMClient
-	ttsClient   ai.TTSClient
-	logger      *slog.Logger
-	diagLimiter *logger.RateLimiter
+	asrClient    ai.ASRClient
+	llmClient    ai.LLMClient
+	ttsClient    ai.TTSClient
+	logger       *slog.Logger
+	diagLimiter  *logger.RateLimiter
 
 	writer *Writer
 	events chan event

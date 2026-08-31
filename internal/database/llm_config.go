@@ -238,9 +238,9 @@ func (d *Database) UpdateLLMConfigById(ctx context.Context, cfg *LLMConfig) erro
 		"endpoint":               strings.TrimSpace(cfg.Endpoint),
 		"api_key":                cfg.APIKey,
 		"model":                  strings.TrimSpace(cfg.Model),
-		"proxy_url":               strings.TrimSpace(cfg.ProxyURL),
+		"proxy_url":              strings.TrimSpace(cfg.ProxyURL),
 		"first_token_timeout_ms": cfg.FirstTokenTimeoutMS,
-		"overall_timeout_ms":    cfg.OverallTimeoutMS,
+		"overall_timeout_ms":     cfg.OverallTimeoutMS,
 		"enabled":                cfg.Enabled,
 		"updated_at":             time.Now(),
 	}
@@ -346,4 +346,3 @@ func (d *Database) BatchDeleteLLMConfigs(ctx context.Context, ids []uint64) erro
 	}
 	return nil
 }
-

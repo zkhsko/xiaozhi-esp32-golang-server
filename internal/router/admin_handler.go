@@ -357,8 +357,6 @@ type BatchDeleteDeviceTypeRequest struct {
 	Ids []uint64 `json:"ids"`
 }
 
-
-
 // AdminHandler 处理 /admin-api/ 管理接口。
 type AdminHandler struct {
 	cfg    *config.Config
@@ -684,7 +682,7 @@ func (h *AdminHandler) handleGenerateCredential(w http.ResponseWriter, r *http.R
 			SerialNumber:     curSN,
 			HMACKey:          keyHex,
 			AuthMethod:       database.AuthMethodEfuseHMAC,
-			DeviceType:        deviceType,
+			DeviceType:       deviceType,
 			CredentialStatus: database.CredentialStatusEnabled,
 		})
 	}
@@ -2405,7 +2403,3 @@ func (h *AdminHandler) handleBatchDeleteDeviceTypes(w http.ResponseWriter, r *ht
 		Message: fmt.Sprintf("成功批量删除 %d 条设备类型配置", len(req.Ids)),
 	})
 }
-
-
-
-

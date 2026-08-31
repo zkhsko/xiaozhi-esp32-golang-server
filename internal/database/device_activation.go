@@ -199,6 +199,7 @@ func (d *Database) FindDeviceActivationBySerialNumber(ctx context.Context, seria
 //  2. 插入或更新 device_user_ref 绑定关系（user_id=userId）；
 //  3. 从 device_hmac_credential 生产表获取 device_type（若凭证状态为 enabled 则更新为 activated）；
 //  4. 插入或更新 device_access_token（access_token=accessToken, device_type=生产表device_type, has_exposed=false, issued_at=now, expires_at=nil, revoked_at=nil）。
+//
 // 若事务中任一步骤失败，整笔事务全部回滚，保证不出现部分提交。
 func (d *Database) BindDeviceWithSN(ctx context.Context, serialNumber, deviceId, clientId, accessToken string, userId uint64) (*DeviceActivation, error) {
 	if d == nil || d.gormDB == nil {

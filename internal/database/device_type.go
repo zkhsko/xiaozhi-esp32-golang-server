@@ -481,4 +481,3 @@ func (d *Database) ResolveAgentRuntimeSnapshotByDeviceType(ctx context.Context, 
 		TTSConfig: tts,
 	}, nil
 }
-

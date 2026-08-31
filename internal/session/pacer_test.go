@@ -419,5 +419,3 @@ func TestDownlinkPacer_SentenceStartSyncOrder(t *testing.T) {
 		t.Fatalf("msg 6 expected tts.stop, got %+v", m6)
 	}
 }
-
-

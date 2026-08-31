@@ -72,10 +72,10 @@ type DownlinkPacer struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 
-	itemQueue   chan pacerItem
-	finishChan  chan struct{}
-	finishOnce  sync.Once
-	doneChan    chan struct{}
+	itemQueue  chan pacerItem
+	finishChan chan struct{}
+	finishOnce sync.Once
+	doneChan   chan struct{}
 
 	tickerFactory func(time.Duration) Ticker
 	frameDuration time.Duration
