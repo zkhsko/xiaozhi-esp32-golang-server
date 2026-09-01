@@ -713,9 +713,6 @@ func TestTTSPipeline_EndToEndSequence(t *testing.T) {
 
 	ticker := newManualTicker()
 
-	var streamCreationOrder []string
-	var mu sync.Mutex
-
 	mockTTS := &mockTTSClient{
 		newStream: func() *mockTTSStream {
 			s := &mockTTSStream{
@@ -841,9 +838,6 @@ func TestTTSPipeline_EndToEndSequence(t *testing.T) {
 	if eventOrder[len(eventOrder)-1] != "tts.stop" {
 		t.Fatalf("expected last event to be tts.stop, got: %v", eventOrder[len(eventOrder)-1])
 	}
-
-	_ = mu
-	_ = streamCreationOrder
 }
 
 func TestTTSPipeline_AbortClearsQueuesAndResets(t *testing.T) {

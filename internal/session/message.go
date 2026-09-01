@@ -24,9 +24,6 @@ const (
 	// MessageTypeAbort 中断相关消息类型。
 	MessageTypeAbort = "abort"
 
-	// MessageTypeMCP 模型上下文协议（MCP）消息类型。
-	MessageTypeMCP = "mcp"
-
 	// ListenStateStart listen 开始状态。
 	ListenStateStart = "start"
 
@@ -64,9 +61,6 @@ const (
 
 	// KindAbort 显式中断当前处理与播报消息。
 	KindAbort MessageKind = "abort"
-
-	// KindMCP 模型上下文协议（MCP）请求/响应消息。
-	KindMCP MessageKind = "mcp"
 
 	// KindUnknownExtension 未知扩展消息（合法的非核心扩展类型）。
 	KindUnknownExtension MessageKind = "unknown_extension"
@@ -121,9 +115,6 @@ type ClientMessage struct {
 
 	// AbortReason 中断原因（仅在 Kind == KindAbort 时有效）。
 	AbortReason string `json:"reason,omitempty"`
-
-	// MCPPayload MCP 载荷（仅在 Kind == KindMCP 时有效）。
-	MCPPayload json.RawMessage `json:"payload,omitempty"`
 
 	// RawType 未知扩展消息的原始 type 字段。
 	RawType string `json:"raw_type,omitempty"`
@@ -213,13 +204,6 @@ func ParseClientMessageWithLimit(data []byte, maxBytes int) (*ClientMessage, err
 
 	case MessageTypeAbort:
 		return parseAbortMessage(rawMap, msg)
-
-	case MessageTypeMCP:
-		msg.Kind = KindMCP
-		if rawPayload, ok := rawMap["payload"]; ok {
-			msg.MCPPayload = rawPayload
-		}
-		return msg, nil
 
 	default:
 		msg.Kind = KindUnknownExtension

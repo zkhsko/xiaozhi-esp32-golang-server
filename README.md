@@ -4,7 +4,7 @@
 
 ```text
 ESP32 (16kHz Opus) ──> 服务端解码 ──> 百炼 ASR (VAD) ──> 百炼 LLM (qwen3.7-flash)
-                                                               │ (支持 MCP / 工具调用)
+                                                               │ (支持工具调用)
 ESP32 播放 <── 编码 (24kHz Opus) <── 百炼 TTS (按句合成) <───────┘
 ```
 
@@ -14,7 +14,7 @@ ESP32 播放 <── 编码 (24kHz Opus) <── 百炼 TTS (按句合成) <─�
 
 - **双向实时语音**：百炼流式 ASR (VAD)、百炼流式 LLM (`qwen3.7-flash`)、百炼流式 TTS (`qwen-audio-3.0-tts-flash`) 与 Opus 实时下发。
 - **设备激活与绑定**：支持 OTA 配置发现、eFuse HMAC 硬件激活、6 位动态码用户绑定与每设备 Access Token 鉴权。
-- **扩展与工具调用**：支持设备端 JSON-RPC 2.0 MCP 工具（`tools/list` / `tools/call`）及内置服务端工具（时间查询、会话关闭）。
+- **扩展与工具调用**：支持内置服务端工具（时间查询、会话关闭）及 LLM 多轮工具编排。
 - **多数据库持久化**：原生支持 SQLite、MySQL 8 与 PostgreSQL，Goose 自动数据库迁移。
 - **并发与背压防护**：严格有界的 PCM / Opus 音频缓冲队列、FIFO 多轮对话淘汰与会话数硬上限。
 

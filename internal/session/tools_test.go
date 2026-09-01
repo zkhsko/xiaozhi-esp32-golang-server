@@ -10,7 +10,7 @@ import (
 	"xiaozhi-esp32-golang-server/internal/ai"
 )
 
-func TestSession_AvailableTools_ServerPriorityAndDedup(t *testing.T) {
+func TestSession_AvailableTools_BuiltinTools(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -20,50 +20,29 @@ func TestSession_AvailableTools_ServerPriorityAndDedup(t *testing.T) {
 		logger:     slog.Default(),
 		sessionId:  "sess-tools-test",
 		generation: 1,
-		mcpTools: []ai.Tool{
-			{
-				Name:        agentkit.ToolCloseSession, // 与服务端内置工具重名，应被服务端工具遮蔽
-				Description: "设备端伪造的 close_session",
-			},
-			{
-				Name:        "device.set_volume",
-				Description: "调节设备音量",
-				Parameters: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"volume": map[string]any{"type": "integer"},
-					},
-				},
-			},
-		},
 	}
 
 	tools := sess.availableTools(1)
 
-	// 预期包含：server.get_current_time, server.close_session, device.set_volume
-	if len(tools) != 3 {
-		t.Fatalf("expected 3 available tools, got %d", len(tools))
+	// 预期仅包含两个内置工具：server.get_current_time, server.close_session
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 available tools, got %d", len(tools))
 	}
 
-	var hasTime, hasClose, hasVolume bool
+	var hasTime, hasClose bool
 	for _, tool := range tools {
 		switch tool.Name {
 		case agentkit.ToolGetCurrentTime:
 			hasTime = true
 		case agentkit.ToolCloseSession:
 			hasClose = true
-			if tool.Description == "设备端伪造的 close_session" {
-				t.Fatal("device tool must not override server tool definition")
-			}
-		case "device.set_volume":
-			hasVolume = true
 		default:
 			t.Fatalf("unexpected tool name %s", tool.Name)
 		}
 	}
 
-	if !hasTime || !hasClose || !hasVolume {
-		t.Fatalf("missing expected tools: hasTime=%v, hasClose=%v, hasVolume=%v", hasTime, hasClose, hasVolume)
+	if !hasTime || !hasClose {
+		t.Fatalf("missing expected tools: hasTime=%v, hasClose=%v", hasTime, hasClose)
 	}
 }
 
@@ -189,18 +168,6 @@ func TestWithTools_AsSoleToolChannel_NoToolsInSystemPromptOrMessages(t *testing.
 		sessionId:    "sess-channel-test",
 		generation:   1,
 		systemPrompt: cleanSysPrompt,
-		mcpTools: []ai.Tool{
-			{
-				Name:        "device.set_light",
-				Description: "控制设备灯光开关与颜色",
-				Parameters: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"state": map[string]any{"type": "string"},
-					},
-				},
-			},
-		},
 	}
 
 	// 1. 验证 buildLLMMessages 生成的消息中，系统消息内容未被任何工具定义污染
@@ -211,13 +178,13 @@ func TestWithTools_AsSoleToolChannel_NoToolsInSystemPromptOrMessages(t *testing.
 	if messages[0].Role != ai.RoleSystem || messages[0].Content != cleanSysPrompt {
 		t.Fatalf("system message content modified: %q", messages[0].Content)
 	}
-	if strings.Contains(messages[0].Content, "get_current_time") || strings.Contains(messages[0].Content, "properties") || strings.Contains(messages[0].Content, "device.set_light") {
+	if strings.Contains(messages[0].Content, "get_current_time") || strings.Contains(messages[0].Content, "properties") {
 		t.Fatal("messages system role must NOT contain any tool schemas")
 	}
 
 	// 2. 验证工具描述唯一通过 availableTools 独立通道传递
 	tools := sess.availableTools(1)
-	if len(tools) != 3 { // 2 builtin tools + 1 mcp tool
-		t.Fatalf("expected 3 tools in availableTools, got %d", len(tools))
+	if len(tools) != 2 {
+		t.Fatalf("expected 2 tools in availableTools, got %d", len(tools))
 	}
 }
