@@ -31,7 +31,7 @@ func (d *dummySender) SendMCPPayload(ctx context.Context, payload json.RawMessag
 	return nil
 }
 
-func TestSession_AvailableTools_BuiltinToolsOnly(t *testing.T) {
+func TestSession_BuildToolSnapshot_BuiltinToolsOnly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -43,7 +43,7 @@ func TestSession_AvailableTools_BuiltinToolsOnly(t *testing.T) {
 		generation: 1,
 	}
 
-	tools := sess.availableTools(1)
+	tools := sess.buildToolSnapshot(ctx, 1)
 
 	// 预期仅包含两个内置工具：server.get_current_time, server.close_session
 	if len(tools) != 2 {
@@ -67,7 +67,7 @@ func TestSession_AvailableTools_BuiltinToolsOnly(t *testing.T) {
 	}
 }
 
-func TestSession_AvailableTools_ExecuteServerToolClosure(t *testing.T) {
+func TestSession_BuildToolSnapshot_ExecuteServerToolClosure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -79,7 +79,7 @@ func TestSession_AvailableTools_ExecuteServerToolClosure(t *testing.T) {
 		generation: 1,
 	}
 
-	tools := sess.availableTools(1)
+	tools := sess.buildToolSnapshot(ctx, 1)
 	var closeTool *ai.Tool
 	for i := range tools {
 		if tools[i].Name == agentkit.ToolCloseSession {
@@ -259,8 +259,8 @@ func TestWithTools_AsSoleToolChannel_NoToolsInSystemPromptOrMessages(t *testing.
 		t.Fatal("messages system role must NOT contain any tool schemas")
 	}
 
-	tools := sess.availableTools(1)
+	tools := sess.buildToolSnapshot(ctx, 1)
 	if len(tools) != 2 {
-		t.Fatalf("expected 2 tools in availableTools, got %d", len(tools))
+		t.Fatalf("expected 2 tools in buildToolSnapshot, got %d", len(tools))
 	}
 }

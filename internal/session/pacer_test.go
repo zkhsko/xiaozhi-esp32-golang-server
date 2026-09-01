@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+
+	"xiaozhi-esp32-golang-server/internal/ai"
 )
 
 type mockWSConn struct {
@@ -127,7 +129,9 @@ func TestDownlinkPacer_SendPacketAndFinishInput(t *testing.T) {
 		t.Fatal("expected TurnFinished event on session")
 	}
 
-	history := sess.History()
+	sess.mu.RLock()
+	history := append([]ai.Message(nil), sess.history...)
+	sess.mu.RUnlock()
 	if len(history) != 2 {
 		t.Fatalf("expected 2 history messages, got %d", len(history))
 	}
@@ -196,8 +200,11 @@ func TestDownlinkPacer_FinishInputEmpty(t *testing.T) {
 		t.Fatal("expected TurnFinished event on session")
 	}
 
-	if len(sess.History()) != 0 {
-		t.Fatalf("expected 0 history messages, got %d", len(sess.History()))
+	sess.mu.RLock()
+	historyLen := len(sess.history)
+	sess.mu.RUnlock()
+	if historyLen != 0 {
+		t.Fatalf("expected 0 history messages, got %d", historyLen)
 	}
 }
 
@@ -359,7 +366,14 @@ func TestDownlinkPacer_SentenceStartSyncOrder(t *testing.T) {
 		t.Fatal("expected TurnFinished event")
 	}
 
-	msgs := conn.getMessages()
+	var msgs []mockWSMessage
+	for i := 0; i < 50; i++ {
+		msgs = conn.getMessages()
+		if len(msgs) == 7 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if len(msgs) != 7 {
 		t.Fatalf("expected exactly 7 messages, got %d", len(msgs))
 	}

@@ -355,9 +355,9 @@ func TestSession_PostTurnFinished_ExplicitContract(t *testing.T) {
 		state:      StateSpeaking,
 	}
 
-	ok := sess.PostTurnFinished(2, "问题", "回答")
+	ok := sess.postTurnFinished(2, "问题", "回答")
 	if !ok {
-		t.Fatal("PostTurnFinished returned false")
+		t.Fatal("postTurnFinished returned false")
 	}
 
 	select {
@@ -389,9 +389,9 @@ func TestSession_PostTurnFinished_StaleGeneration(t *testing.T) {
 		state:      StateSpeaking,
 	}
 
-	ok := sess.PostTurnFinished(2, "旧问题", "旧回答")
+	ok := sess.postTurnFinished(2, "旧问题", "旧回答")
 	if !ok {
-		t.Fatal("PostTurnFinished returned false")
+		t.Fatal("postTurnFinished returned false")
 	}
 
 	select {
@@ -404,8 +404,11 @@ func TestSession_PostTurnFinished_StaleGeneration(t *testing.T) {
 	if sess.State() != StateSpeaking {
 		t.Fatalf("expected state StateSpeaking, got %v", sess.State())
 	}
-	if len(sess.History()) != 0 {
-		t.Fatalf("expected 0 history messages, got %d", len(sess.History()))
+	sess.mu.RLock()
+	historyLen := len(sess.history)
+	sess.mu.RUnlock()
+	if historyLen != 0 {
+		t.Fatalf("expected 0 history messages, got %d", historyLen)
 	}
 }
 
@@ -914,22 +917,32 @@ func TestTTSPipeline_AbortClearsQueuesAndResets(t *testing.T) {
 	}
 
 	// 验证 Pacer 已停止并清空
-	if sess.Pacer() != nil {
+	sess.mu.RLock()
+	pacerNil := sess.pacer == nil
+	sess.mu.RUnlock()
+	if !pacerNil {
 		t.Fatalf("expected pacer to be nil after abort")
 	}
 
 	// 验证下发了 tts.stop
-	msgs := conn.getMessages()
 	var hasStop bool
-	for _, m := range msgs {
-		if m.typ == websocket.MessageText {
-			var parsed map[string]any
-			if err := json.Unmarshal(m.payload, &parsed); err == nil {
-				if parsed["type"] == "tts" && parsed["state"] == "stop" {
-					hasStop = true
+	for i := 0; i < 20; i++ {
+		msgs := conn.getMessages()
+		for _, m := range msgs {
+			if m.typ == websocket.MessageText {
+				var parsed map[string]any
+				if err := json.Unmarshal(m.payload, &parsed); err == nil {
+					if parsed["type"] == "tts" && parsed["state"] == "stop" {
+						hasStop = true
+						break
+					}
 				}
 			}
 		}
+		if hasStop {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if !hasStop {
 		t.Fatal("expected tts.stop message sent on abort from speaking state")

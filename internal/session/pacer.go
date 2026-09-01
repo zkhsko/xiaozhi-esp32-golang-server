@@ -105,7 +105,7 @@ func NewDownlinkPacer(ctx context.Context, session *Session, gen uint64, queueCa
 	var w *Writer
 	var l *slog.Logger
 	if session != nil {
-		w = session.Writer()
+		w = session.writer
 		l = session.logger
 	}
 	if l == nil {
@@ -421,7 +421,7 @@ func (p *DownlinkPacer) sendPacket(pkt []byte) error {
 		if err := p.sendTTSStart(); err != nil {
 			p.logger.Warn("failed to send tts start", "error", err, "generation", p.gen)
 			if !errors.Is(err, context.Canceled) && p.session != nil {
-				p.session.PostError(p.gen, err, true)
+				p.session.postError(p.gen, err, true)
 			}
 			return err
 		}
@@ -436,7 +436,7 @@ func (p *DownlinkPacer) sendPacket(pkt []byte) error {
 			if !errors.Is(err, context.Canceled) {
 				p.logger.Warn("failed to send downlink opus binary", "error", err, "generation", p.gen)
 				if p.session != nil {
-					p.session.PostError(p.gen, err, true)
+					p.session.postError(p.gen, err, true)
 				}
 			}
 			return err
@@ -457,6 +457,6 @@ func (p *DownlinkPacer) finishTurn() {
 	p.mu.Unlock()
 
 	if p.session != nil {
-		p.session.PostTurnFinished(p.gen, uText, aText)
+		p.session.postTurnFinished(p.gen, uText, aText)
 	}
 }

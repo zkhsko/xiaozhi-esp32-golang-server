@@ -316,9 +316,6 @@ func TestSession_DeviceKey_SNIsUniqueIdentity(t *testing.T) {
 	if sess.DeviceKey() != "sn-unique-identity-001" {
 		t.Errorf("expected DeviceKey %q, got %q", "sn-unique-identity-001", sess.DeviceKey())
 	}
-	if sess.SerialNumber() != "sn-unique-identity-001" {
-		t.Errorf("expected SerialNumber %q, got %q", "sn-unique-identity-001", sess.SerialNumber())
-	}
 }
 
 func TestRegistry_SNBasedExclusion(t *testing.T) {

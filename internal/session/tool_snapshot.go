@@ -66,15 +66,6 @@ func (s *Session) buildToolSnapshot(ctx context.Context, gen uint64) []ai.Tool {
 	return tools
 }
 
-// availableTools 向后兼容现有测试与辅助入口，等价于基于当前上下文获取工具快照。
-func (s *Session) availableTools(gen uint64) []ai.Tool {
-	ctx := s.TurnContext()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return s.buildToolSnapshot(ctx, gen)
-}
-
 // executeSnapshotTool 执行快照工具的 Run 闭包，校验代次并根据内置/设备工具分别路由：
 // - 内置工具：直接在服务端当前进程执行，若为 close_session 则标记本轮结束后关闭连接；
 // - 设备工具：受单代次最多 8 次调用预算约束，通过 DeviceMCPClient 经由 WebSocket 串行下发给硬件。

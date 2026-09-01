@@ -78,14 +78,6 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*Database, error) {
 	}, nil
 }
 
-// DB 返回 GORM 实例供持久化组件使用。
-func (d *Database) DB() *gorm.DB {
-	if d == nil {
-		return nil
-	}
-	return d.gormDB
-}
-
 // Close 关闭底层数据库连接池。
 func (d *Database) Close() error {
 	if d == nil || d.sqlDB == nil {

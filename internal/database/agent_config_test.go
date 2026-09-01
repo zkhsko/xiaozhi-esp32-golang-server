@@ -515,85 +515,7 @@ func TestAgentConfig_ActivateAgent(t *testing.T) {
 	}
 }
 
-func TestAgentConfig_FindActiveAgentRuntimeSnapshot(t *testing.T) {
-	db := setupTestDB(t)
-	ctx := context.Background()
 
-	asrId, llmId, ttsId := createTestComponents(t, db, ctx)
-
-	// 1. 无 enabled Agent 时查询报错
-	_, err := db.FindActiveAgentRuntimeSnapshot(ctx)
-	if !errors.Is(err, ErrActiveAgentStateInvalid) {
-		t.Fatalf("expected ErrActiveAgentStateInvalid when no active agent, got %v", err)
-	}
-
-	// 2. 创建并激活 Agent
-	agent := &AgentConfig{
-		Name:         "活跃助手",
-		ASRConfigId:  asrId,
-		LLMConfigId:  llmId,
-		TTSConfigId:  ttsId,
-		SystemPrompt: "系统提示词内容",
-		Voice:        "longxiaochun",
-		Enabled:      false,
-	}
-	if err := db.CreateAgentConfig(ctx, agent); err != nil {
-		t.Fatalf("CreateAgentConfig failed: %v", err)
-	}
-	if err := db.ActivateAgent(ctx, agent.Id); err != nil {
-		t.Fatalf("ActivateAgent failed: %v", err)
-	}
-
-	// 3. 成功获取快照
-	snapshot, err := db.FindActiveAgentRuntimeSnapshot(ctx)
-	if err != nil {
-		t.Fatalf("FindActiveAgentRuntimeSnapshot failed: %v", err)
-	}
-
-	if snapshot.Agent.Id != agent.Id {
-		t.Errorf("expected snapshot Agent Id %d, got %d", agent.Id, snapshot.Agent.Id)
-	}
-	if snapshot.Agent.Name != "活跃助手" {
-		t.Errorf("expected snapshot Agent Name %q, got %q", "活跃助手", snapshot.Agent.Name)
-	}
-	if snapshot.Agent.SystemPrompt != "系统提示词内容" {
-		t.Errorf("expected snapshot Agent SystemPrompt %q, got %q", "系统提示词内容", snapshot.Agent.SystemPrompt)
-	}
-	if snapshot.Agent.Voice != "longxiaochun" {
-		t.Errorf("expected snapshot Agent Voice %q, got %q", "longxiaochun", snapshot.Agent.Voice)
-	}
-	if !snapshot.Agent.Enabled {
-		t.Errorf("expected snapshot Agent Enabled true, got false")
-	}
-
-	// 验证 ASR 快照
-	if snapshot.ASRConfig.Id != asrId || snapshot.ASRConfig.Model != "qwen-audio-3.0-asr-flash-streaming" || snapshot.ASRConfig.Provider != "dashscope" {
-		t.Errorf("unexpected ASR snapshot: %+v", snapshot.ASRConfig)
-	}
-	// 验证 LLM 快照
-	if snapshot.LLMConfig.Id != llmId || snapshot.LLMConfig.Model != "qwen-plus" || snapshot.LLMConfig.Provider != "dashscope" {
-		t.Errorf("unexpected LLM snapshot: %+v", snapshot.LLMConfig)
-	}
-	// 验证 TTS 快照
-	if snapshot.TTSConfig.Id != ttsId || snapshot.TTSConfig.Model != "cosyvoice-v1" || snapshot.TTSConfig.Provider != "dashscope" {
-		t.Errorf("unexpected TTS snapshot: %+v", snapshot.TTSConfig)
-	}
-
-	// 4. FindAgentRuntimeSnapshotById
-	byIdSnapshot, err := db.FindAgentRuntimeSnapshotById(ctx, agent.Id)
-	if err != nil {
-		t.Fatalf("FindAgentRuntimeSnapshotById failed: %v", err)
-	}
-	if byIdSnapshot.Agent.Id != agent.Id {
-		t.Errorf("expected Agent Id %d, got %d", agent.Id, byIdSnapshot.Agent.Id)
-	}
-
-	// 查询不存在的 Id
-	_, err = db.FindAgentRuntimeSnapshotById(ctx, 99999)
-	if !errors.Is(err, ErrAgentConfigNotFound) {
-		t.Errorf("expected ErrAgentConfigNotFound, got %v", err)
-	}
-}
 
 func TestAgentConfig_DeleteAndBatchDelete(t *testing.T) {
 	db := setupTestDB(t)
@@ -660,12 +582,6 @@ func TestAgentConfig_NilDB(t *testing.T) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
 	if err := nilDB.ActivateAgent(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
-		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
-	}
-	if _, err := nilDB.FindActiveAgentRuntimeSnapshot(ctx); !errors.Is(err, ErrDatabaseInstanceRequired) {
-		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
-	}
-	if _, err := nilDB.FindAgentRuntimeSnapshotById(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
 }

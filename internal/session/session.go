@@ -187,42 +187,6 @@ func NewSession(ctx context.Context, opts Options) *Session {
 	}
 }
 
-// ASRClient 返回当前关联的 ASR 客户端。
-func (s *Session) ASRClient() ai.ASRClient {
-	return s.asrClient
-}
-
-// LLMClient 返回当前关联的 LLM 客户端。
-func (s *Session) LLMClient() ai.LLMClient {
-	return s.llmClient
-}
-
-// TTSClient 返回当前关联的 TTS 客户端。
-func (s *Session) TTSClient() ai.TTSClient {
-	return s.ttsClient
-}
-
-// TTSStream 返回当前轮次的 TTS 流。
-func (s *Session) TTSStream() ai.TTSStream {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.ttsStream
-}
-
-// Pacer 返回当前轮次的下行节奏调度器。
-func (s *Session) Pacer() *DownlinkPacer {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.pacer
-}
-
-// SetTickerFactory 设置下行节奏器使用的定时器工厂，供可控时钟单元测试使用。
-func (s *Session) SetTickerFactory(factory func(time.Duration) Ticker) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.tickerFactory = factory
-}
-
 // stopPacer 停止并清空当前轮次的下行节奏调度器。
 func (s *Session) stopPacer() {
 	s.mu.Lock()
@@ -285,40 +249,8 @@ func (s *Session) DeviceKey() string {
 	return s.serialNumber
 }
 
-// SerialNumber 返回会话绑定的设备序列号（设备唯一身份）。
-func (s *Session) SerialNumber() string {
-	if s == nil {
-		return ""
-	}
-	return s.serialNumber
-}
-
-// Writer 返回当前关联的串行写流程对象。
-func (s *Session) Writer() *Writer {
-	return s.writer
-}
-
-// Decoder 返回当前会话的 Opus 解码器。
-func (s *Session) Decoder() *audio.Decoder {
-	return s.decoder
-}
-
-// SetOnEncodedOpus 设置单个 Opus 包编码完成后的回调。
-func (s *Session) SetOnEncodedOpus(cb func(gen uint64, packet []byte)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.onEncodedOpus = cb
-}
-
-// ASRQueue 返回当前轮次的 ASR 音频队列。
-func (s *Session) ASRQueue() *audio.ASRAudioQueue {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.asrQueue
-}
-
-// TurnContext 返回当前轮次上下文（随 abort 或轮次结束取消）。
-func (s *Session) TurnContext() context.Context {
+// turnContext 返回当前轮次上下文（随 abort 或轮次结束取消）。
+func (s *Session) turnContext() context.Context {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.turnCtx != nil {
@@ -327,51 +259,9 @@ func (s *Session) TurnContext() context.Context {
 	return s.ctx
 }
 
-// Done 返回会话完全关闭后的信号通道。
-func (s *Session) Done() <-chan struct{} {
-	return s.done
-}
-
-// PostClientText 投递客户端文本消息事件。
-func (s *Session) PostClientText(msg *ClientMessage) bool {
-	if msg == nil {
-		return false
-	}
-	return s.postEvent(event{
-		kind:      eventKindClientText,
-		clientMsg: msg,
-	})
-}
-
-// PostClientAudio 投递客户端 Opus 音频包事件。
-func (s *Session) PostClientAudio(data []byte) bool {
-	return s.postEvent(event{
-		kind:      eventKindClientAudio,
-		audioData: data,
-		isBinary:  true,
-	})
-}
-
-// PostASRFinal 投递指定代次的 ASR 最终识别文本事件。
-func (s *Session) PostASRFinal(generation uint64, text string) bool {
-	return s.postEvent(event{
-		kind:       eventKindASRFinal,
-		generation: generation,
-		text:       text,
-	})
-}
-
-// PostTTSStarted 投递指定代次的 TTS 首音频就绪/播报开始事件。
-func (s *Session) PostTTSStarted(generation uint64) bool {
-	return s.postEvent(event{
-		kind:       eventKindTTSStarted,
-		generation: generation,
-	})
-}
-
-// PostTurnFinished 投递指定代次的问答轮次结束事件。
+// postTurnFinished 投递指定代次的问答轮次结束事件。
 // userText 与 assistantText 为本轮完成的用户输入文本与完整助手回复；若无（如提示音）可传空字符串。
-func (s *Session) PostTurnFinished(generation uint64, userText, assistantText string) bool {
+func (s *Session) postTurnFinished(generation uint64, userText, assistantText string) bool {
 	return s.postEvent(event{
 		kind:          eventKindTurnFinished,
 		generation:    generation,
@@ -380,39 +270,13 @@ func (s *Session) PostTurnFinished(generation uint64, userText, assistantText st
 	})
 }
 
-// PostAbort 投递显式中断请求事件。
-func (s *Session) PostAbort(reason string) bool {
-	return s.postEvent(event{
-		kind: eventKindAbort,
-		text: reason,
-	})
-}
-
-// PostError 投递指定代次的错误事件。
-func (s *Session) PostError(generation uint64, err error, fatal bool) bool {
+// postError 投递指定代次的错误事件。
+func (s *Session) postError(generation uint64, err error, fatal bool) bool {
 	return s.postEvent(event{
 		kind:       eventKindError,
 		generation: generation,
 		err:        err,
 		fatal:      fatal,
-	})
-}
-
-// PostTimeout 投递指定代次的超时事件。
-func (s *Session) PostTimeout(generation uint64, reason string) bool {
-	return s.postEvent(event{
-		kind:       eventKindTimeout,
-		generation: generation,
-		text:       reason,
-	})
-}
-
-// PostClose 投递连接关闭事件。
-func (s *Session) PostClose(code websocket.StatusCode, reason string) bool {
-	return s.postEvent(event{
-		kind:      eventKindClose,
-		closeCode: code,
-		text:      reason,
 	})
 }
 
@@ -957,7 +821,7 @@ func (s *Session) handleTurnFinishedEvent(ev event) {
 
 	// 只有在 tts.stop 成功写出且本轮问答文本完整时，才正式提交至会话历史
 	if stopSucceeded && ev.userText != "" && ev.assistantText != "" {
-		s.AppendHistory(ev.userText, ev.assistantText)
+		s.appendHistory(ev.userText, ev.assistantText)
 	}
 
 	s.stopASR()
@@ -1409,7 +1273,7 @@ func (s *Session) playListenPrompt(gen uint64) {
 	factory := s.tickerFactory
 	s.mu.RUnlock()
 
-	pacer := NewDownlinkPacer(s.TurnContext(), s, gen, queueCap, factory)
+	pacer := NewDownlinkPacer(s.turnContext(), s, gen, queueCap, factory)
 	s.mu.Lock()
 	s.pacer = pacer
 	s.mu.Unlock()
@@ -1448,7 +1312,7 @@ func (s *Session) startASRStream(gen uint64, mode string) {
 		return
 	}
 
-	turnCtx := s.TurnContext()
+	turnCtx := s.turnContext()
 	stream, err := s.asrClient.CreateStream(turnCtx)
 	if err != nil {
 		s.logger.Error("failed to create asr stream",
@@ -1571,7 +1435,7 @@ func (s *Session) finishASR() {
 	if q != nil {
 		_ = q.Finish()
 	} else if stream != nil {
-		_ = stream.Finish(s.TurnContext())
+		_ = stream.Finish(s.turnContext())
 	}
 }
 
@@ -1618,18 +1482,4 @@ func (s *Session) initMCPClient() {
 			)
 		}
 	}()
-}
-
-// MCPClient 返回当前会话绑定的设备 MCP 客户端实例（若未启用则返回 nil）。
-func (s *Session) MCPClient() *agentkit.DeviceMCPClient {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.mcpClient
-}
-
-// SetMCPClient 显式设置设备 MCP 客户端（供测试或特定场景注入）。
-func (s *Session) SetMCPClient(client *agentkit.DeviceMCPClient) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.mcpClient = client
 }

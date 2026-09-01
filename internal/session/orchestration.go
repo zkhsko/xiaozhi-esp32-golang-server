@@ -43,8 +43,8 @@ func (s *Session) buildLLMMessages(userText string) []ai.Message {
 	return messages
 }
 
-// AppendHistory 将一轮成功的用户文本与助手完整回复追加至会话历史，并按上限滚动淘汰最旧轮次。
-func (s *Session) AppendHistory(userText, assistantText string) {
+// appendHistory 将一轮成功的用户文本与助手完整回复追加至会话历史，并按上限滚动淘汰最旧轮次。
+func (s *Session) appendHistory(userText, assistantText string) {
 	if userText == "" || assistantText == "" {
 		return
 	}
@@ -68,26 +68,6 @@ func (s *Session) AppendHistory(userText, assistantText string) {
 		copy(trimmed, s.history[len(s.history)-maxMessages:])
 		s.history = trimmed
 	}
-}
-
-// ClearHistory 清空当前会话的对话历史。
-func (s *Session) ClearHistory() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.history = nil
-}
-
-// History 返回当前会话的历史消息列表副本。
-func (s *Session) History() []ai.Message {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if len(s.history) == 0 {
-		return nil
-	}
-	copied := make([]ai.Message, len(s.history))
-	copy(copied, s.history)
-	return copied
 }
 
 // stopTTS 停止并清理当前轮次的 TTS 流。
