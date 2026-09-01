@@ -160,7 +160,16 @@ func TestBuildTool(t *testing.T) {
 		t.Fatalf("expected %s, got %s", ToolGetCurrentWeather, weatherTool.Name)
 	}
 
-	// 2. Current time tool
+	// 2. Weather forecast tool
+	forecastTool, err := BuildTool(ToolGetWeatherForecast, `{"api_key":"test-key","location":"WX4SUCU47R3T","days":5}`)
+	if err != nil {
+		t.Fatalf("BuildTool for weather forecast failed: %v", err)
+	}
+	if forecastTool.Name != ToolGetWeatherForecast {
+		t.Fatalf("expected %s, got %s", ToolGetWeatherForecast, forecastTool.Name)
+	}
+
+	// 3. Current time tool
 	timeTool, err := BuildTool(ToolGetCurrentTime, "")
 	if err != nil {
 		t.Fatalf("BuildTool for time failed: %v", err)
@@ -169,7 +178,7 @@ func TestBuildTool(t *testing.T) {
 		t.Fatalf("expected %s, got %s", ToolGetCurrentTime, timeTool.Name)
 	}
 
-	// 3. Close session tool
+	// 4. Close session tool
 	closeTool, err := BuildTool(ToolCloseSession, "")
 	if err != nil {
 		t.Fatalf("BuildTool for close session failed: %v", err)
@@ -178,7 +187,7 @@ func TestBuildTool(t *testing.T) {
 		t.Fatalf("expected %s, got %s", ToolCloseSession, closeTool.Name)
 	}
 
-	// 4. Unsupported tool
+	// 5. Unsupported tool
 	_, err = BuildTool("unsupported.tool", "")
 	if err == nil {
 		t.Fatal("expected error for unsupported tool, got nil")

@@ -53,6 +53,8 @@ func BuildTool(toolName, toolConfigJSON string) (ai.Tool, error) {
 	switch strings.TrimSpace(toolName) {
 	case ToolGetCurrentWeather:
 		return NewWeatherToolFromConfig(toolConfigJSON)
+	case ToolGetWeatherForecast:
+		return NewWeatherForecastToolFromConfig(toolConfigJSON)
 	case ToolGetCurrentTime:
 		return GetCurrentTimeTool(), nil
 	case ToolCloseSession:
