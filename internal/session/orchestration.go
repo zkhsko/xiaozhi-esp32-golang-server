@@ -283,6 +283,14 @@ func (s *Session) synthesizeSentence(ctx context.Context, gen uint64, sentence s
 		return nil
 	}
 
+	// 1. 合成前将文本做成上屏文本事件入 ws 帧发送队列
+	if pacer != nil {
+		if err := pacer.EnqueueSentenceStart(sentence); err != nil {
+			return err
+		}
+	}
+
+	// 2. 发起当前句的流式 TTS 语音合成
 	stream, err := s.ttsClient.CreateStream(ctx)
 	if err != nil {
 		return err
@@ -297,8 +305,7 @@ func (s *Session) synthesizeSentence(ctx context.Context, gen uint64, sentence s
 		return err
 	}
 
-	hasEnqueuedSentenceStart := false
-
+	// 3. 循环接收合成音频响应，将音频帧分帧编码后入队
 	for {
 		if ctx.Err() != nil || s.Generation() > gen {
 			return ctx.Err()
@@ -307,6 +314,7 @@ func (s *Session) synthesizeSentence(ctx context.Context, gen uint64, sentence s
 		pcmChunk, err := stream.NextPCM(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				// 本次语音合成结束，返回后由上层循环消费下一句文本
 				return nil
 			}
 			return err
@@ -314,15 +322,6 @@ func (s *Session) synthesizeSentence(ctx context.Context, gen uint64, sentence s
 
 		if len(pcmChunk) == 0 {
 			continue
-		}
-
-		if !hasEnqueuedSentenceStart {
-			if pacer != nil {
-				if err := pacer.EnqueueSentenceStart(sentence); err != nil {
-					return err
-				}
-			}
-			hasEnqueuedSentenceStart = true
 		}
 
 		packets, err := streamEncoder.Feed(pcmChunk)

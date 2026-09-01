@@ -7,11 +7,11 @@ import (
 
 // minSentenceRunes 定义单句最小字符（rune）数量常量。
 // 每次至少累积达到该字符数才允许按标点断句，减少高频细碎短句请求，除非流结束 Flush。
-const minSentenceRunes = 20
+const minSentenceRunes = 5
 
 // maxSentenceRunes 定义单句最大字符（rune）数量常量。
 // 当文本流长时间未出现句末标点时，达到该长度即强制切分输出，防止音频延迟过高或单句过长。
-const maxSentenceRunes = 60
+const maxSentenceRunes = 80
 
 // SentenceSplitter 实现轻量级增量文本分句器。
 // 消费大语言模型输出的流式文本增量，按最小字符阈值、中英文标点与最大长度切分为完整句子，流结束时刷新残余文本。

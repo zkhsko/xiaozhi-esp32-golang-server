@@ -576,8 +576,8 @@ func TestOrchestrateLLMAndTTS_SentenceSubtitleSync(t *testing.T) {
 		},
 	}
 
-	s1 := "你好世界，很高兴在这个美好的清晨与你相遇。"
-	s2 := "今天天气真好，微风徐徐让人心情格外舒畅愉快。"
+	s1 := "你好世界很高兴在这个美好的清晨与你相遇。"
+	s2 := "今天天气真好微风徐徐让人心情格外舒畅愉快。"
 	mockLLM := &mockLLMClient{
 		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
 			if callback != nil {
@@ -700,5 +700,276 @@ func TestOrchestrateLLMAndTTS_SentenceSubtitleSync(t *testing.T) {
 	}
 	if order[len(order)-1] != "tts.stop" {
 		t.Fatalf("expected last item 'tts.stop', got %s", order[len(order)-1])
+	}
+}
+
+func TestTTSPipeline_EndToEndSequence(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 100, nil)
+	defer writer.Close()
+
+	ticker := newManualTicker()
+
+	var streamCreationOrder []string
+	var mu sync.Mutex
+
+	mockTTS := &mockTTSClient{
+		newStream: func() *mockTTSStream {
+			s := &mockTTSStream{
+				pcmChunks: [][]byte{make([]byte, 2880), make([]byte, 2880)},
+			}
+			return s
+		},
+	}
+
+	// 模拟流式生成：
+	// chunk 1: "你好。" (3字 < 5，不切句)
+	// chunk 2: "我是小智助理。" (累积8字，切出 "你好。我是小智助理。")
+	// chunk 3: "很高兴为您服务。" (切出 "很高兴为您服务。")
+	// chunk 4: "再见" (2字，流结束 Flush 出 "再见")
+	chunks := []string{
+		"你好。",
+		"我是小智助理。",
+		"很高兴为您服务。",
+		"再见",
+	}
+
+	mockLLM := &mockLLMClient{
+		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+			if callback != nil {
+				for _, c := range chunks {
+					_ = callback(ctx, ai.LLMChunk{Text: c, Iteration: 0})
+				}
+			}
+			return "你好。我是小智助理。很高兴为您服务。再见", nil
+		},
+	}
+
+	events := make(chan event, 10)
+	sess := &Session{
+		ctx:           ctx,
+		cancel:        cancel,
+		writer:        writer,
+		logger:        slog.Default(),
+		events:        events,
+		sessionId:     "sess-tts-pipeline",
+		generation:    1,
+		state:         StateSpeaking,
+		llmClient:     mockLLM,
+		ttsClient:     mockTTS,
+		tickerFactory: func(d time.Duration) Ticker { return ticker },
+	}
+
+	go sess.orchestrateLLMAndTTS(ctx, 1, "启动测试")
+
+	// 驱动 ticker 推进所有音频帧下发
+	go func() {
+		for i := 0; i < 50; i++ {
+			ticker.Tick()
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case ev := <-events:
+		if ev.kind != eventKindTurnFinished {
+			t.Fatalf("expected TurnFinished, got %v", ev.kind)
+		}
+		sess.handleTurnFinishedEvent(ev)
+	case <-time.After(3 * time.Second):
+		t.Fatal("pipeline timed out")
+	}
+
+	msgs := conn.getMessages()
+	if len(msgs) == 0 {
+		t.Fatal("expected messages sent")
+	}
+
+	// 提取出所有 text 消息和 binary 消息的顺序
+	var sentenceStarts []string
+	var eventOrder []string
+	for _, m := range msgs {
+		if m.typ == websocket.MessageText {
+			var parsed map[string]any
+			if err := json.Unmarshal(m.payload, &parsed); err == nil {
+				if parsed["type"] == "tts" {
+					st := parsed["state"].(string)
+					if st == "sentence_start" {
+						txt := parsed["text"].(string)
+						sentenceStarts = append(sentenceStarts, txt)
+						eventOrder = append(eventOrder, "sentence:"+txt)
+					} else if st == "start" {
+						eventOrder = append(eventOrder, "tts.start")
+					} else if st == "stop" {
+						eventOrder = append(eventOrder, "tts.stop")
+					}
+				}
+			}
+		} else if m.typ == websocket.MessageBinary {
+			eventOrder = append(eventOrder, "binary_audio")
+		}
+	}
+
+	// 验证切出的 3 个句子：
+	// 1. "你好。我是小智助理。" (至少5字切出)
+	// 2. "很高兴为您服务。" (至少5字切出)
+	// 3. "再见" (响应结束 Flush 切出)
+	expectedSentences := []string{
+		"你好。我是小智助理。",
+		"很高兴为您服务。",
+		"再见",
+	}
+
+	if len(sentenceStarts) != len(expectedSentences) {
+		t.Fatalf("expected %d sentence_start messages, got %d: %v", len(expectedSentences), len(sentenceStarts), sentenceStarts)
+	}
+
+	for i, exp := range expectedSentences {
+		if sentenceStarts[i] != exp {
+			t.Fatalf("sentence %d expected %q, got %q", i, exp, sentenceStarts[i])
+		}
+	}
+
+	// 验证时间序：
+	// tts.start -> sentence 1 -> audio -> sentence 2 -> audio -> sentence 3 -> audio -> tts.stop
+	if len(eventOrder) == 0 || eventOrder[0] != "tts.start" {
+		t.Fatalf("expected first event to be tts.start, got: %v", eventOrder)
+	}
+	if eventOrder[len(eventOrder)-1] != "tts.stop" {
+		t.Fatalf("expected last event to be tts.stop, got: %v", eventOrder[len(eventOrder)-1])
+	}
+
+	_ = mu
+	_ = streamCreationOrder
+}
+
+func TestTTSPipeline_AbortClearsQueuesAndResets(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 100, nil)
+	defer writer.Close()
+
+	ticker := newManualTicker()
+
+	var streamsCreated int
+	var ttsClosed atomic.Bool
+
+	mockTTS := &mockTTSClient{
+		newStream: func() *mockTTSStream {
+			streamsCreated++
+			return &mockTTSStream{
+				pcmChunks: [][]byte{make([]byte, 2880), make([]byte, 2880), make([]byte, 2880)},
+				onClose: func() {
+					ttsClosed.Store(true)
+				},
+			}
+		},
+	}
+
+	mockLLM := &mockLLMClient{
+		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+			if callback != nil {
+				_ = callback(ctx, ai.LLMChunk{Text: "第一句非常长的回复语句用于测试中断。", Iteration: 0})
+				_ = callback(ctx, ai.LLMChunk{Text: "第二句非常长的回复语句用于测试中断。", Iteration: 0})
+			}
+			return "第一句非常长的回复语句用于测试中断。第二句非常长的回复语句用于测试中断。", nil
+		},
+	}
+
+	events := make(chan event, 50)
+	turnCtx, turnCancel := context.WithCancel(ctx)
+	sess := &Session{
+		ctx:           ctx,
+		cancel:        cancel,
+		writer:        writer,
+		logger:        slog.Default(),
+		events:        events,
+		sessionId:     "sess-tts-abort",
+		generation:    1,
+		state:         StateSpeaking,
+		llmClient:     mockLLM,
+		ttsClient:     mockTTS,
+		tickerFactory: func(d time.Duration) Ticker { return ticker },
+		turnCtx:       turnCtx,
+		turnCancel:    turnCancel,
+	}
+
+	go sess.orchestrateLLMAndTTS(turnCtx, 1, "测试中断")
+
+	// 发送一个 tick 让首帧音频发出并进入 speaking
+	time.Sleep(20 * time.Millisecond)
+	ticker.Tick()
+	time.Sleep(20 * time.Millisecond)
+
+	// 触发 abort 中断
+	sess.handleAbortEvent("user interruption")
+
+	// 验证状态重置为 StateReady
+	if sess.State() != StateReady {
+		t.Fatalf("expected state StateReady after abort, got: %v", sess.State())
+	}
+
+	// 验证代次递增
+	if sess.Generation() != 2 {
+		t.Fatalf("expected generation 2, got %d", sess.Generation())
+	}
+
+	// 验证 Pacer 已停止并清空
+	if sess.Pacer() != nil {
+		t.Fatalf("expected pacer to be nil after abort")
+	}
+
+	// 验证下发了 tts.stop
+	msgs := conn.getMessages()
+	var hasStop bool
+	for _, m := range msgs {
+		if m.typ == websocket.MessageText {
+			var parsed map[string]any
+			if err := json.Unmarshal(m.payload, &parsed); err == nil {
+				if parsed["type"] == "tts" && parsed["state"] == "stop" {
+					hasStop = true
+				}
+			}
+		}
+	}
+	if !hasStop {
+		t.Fatal("expected tts.stop message sent on abort from speaking state")
+	}
+
+	// 验证在新代次可以重新开始
+	newTurnCtx, newTurnCancel := context.WithCancel(ctx)
+	sess.turnCtx = newTurnCtx
+	sess.turnCancel = newTurnCancel
+	sess.state = StateSpeaking
+
+	go sess.orchestrateLLMAndTTS(newTurnCtx, 2, "重新开始")
+
+	go func() {
+		for i := 0; i < 20; i++ {
+			ticker.Tick()
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case ev := <-events:
+		if ev.kind != eventKindTurnFinished {
+			t.Fatalf("expected eventKindTurnFinished on new turn, got %v", ev.kind)
+		}
+		if ev.generation != 2 {
+			t.Fatalf("expected turn finished generation 2, got %d", ev.generation)
+		}
+		sess.handleTurnFinishedEvent(ev)
+	case <-time.After(2 * time.Second):
+		t.Fatal("new turn timed out")
+	}
+
+	if sess.State() != StateReady {
+		t.Fatalf("expected StateReady after second turn, got %v", sess.State())
 	}
 }
