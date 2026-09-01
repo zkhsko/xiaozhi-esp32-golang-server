@@ -38,6 +38,10 @@
           <el-icon><UserFilled /></el-icon>
           <span>智能体配置管理</span>
         </el-menu-item>
+        <el-menu-item index="/agentkit-configs">
+          <el-icon><Tools /></el-icon>
+          <span>内建工具管理</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -61,7 +65,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Cpu, Key, Connection, Microphone, ChatDotRound, Headset, UserFilled } from '@element-plus/icons-vue'
+import { Cpu, Key, Connection, Microphone, ChatDotRound, Headset, UserFilled, Tools } from '@element-plus/icons-vue'
 
 const route = useRoute()
 

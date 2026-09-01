@@ -16,6 +16,7 @@ type AdminHandler struct {
 	llmHandler        *AdminLLMHandler
 	ttsHandler        *AdminTTSHandler
 	agentHandler      *AdminAgentHandler
+	agentkitHandler   *AdminAgentKitHandler
 	deviceTypeHandler *AdminDeviceTypeHandler
 	logger            *slog.Logger
 }
@@ -32,6 +33,7 @@ func NewAdminHandler(cfg *config.Config, db *database.Database, l *slog.Logger) 
 	var llmStore LLMConfigStore
 	var ttsStore TTSConfigStore
 	var agentStore AgentConfigStore
+	var agentkitStore AgentKitConfigStore
 	var dtStore DeviceTypeStore
 
 	if db != nil {
@@ -41,6 +43,7 @@ func NewAdminHandler(cfg *config.Config, db *database.Database, l *slog.Logger) 
 		llmStore = db
 		ttsStore = db
 		agentStore = db
+		agentkitStore = db
 		dtStore = db
 	}
 
@@ -51,6 +54,7 @@ func NewAdminHandler(cfg *config.Config, db *database.Database, l *slog.Logger) 
 		llmHandler:        NewAdminLLMHandler(llmStore, l),
 		ttsHandler:        NewAdminTTSHandler(ttsStore, l),
 		agentHandler:      NewAdminAgentHandler(agentStore, l),
+		agentkitHandler:   NewAdminAgentKitHandler(agentkitStore, l),
 		deviceTypeHandler: NewAdminDeviceTypeHandler(dtStore, l),
 		logger:            l,
 	}

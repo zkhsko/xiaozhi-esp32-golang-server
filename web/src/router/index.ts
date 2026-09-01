@@ -6,6 +6,7 @@ import ASRConfigs from '../views/ASRConfigs.vue'
 import LLMConfigs from '../views/LLMConfigs.vue'
 import TTSConfigs from '../views/TTSConfigs.vue'
 import AgentConfigs from '../views/AgentConfigs.vue'
+import AgentKitConfigs from '../views/AgentKitConfigs.vue'
 
 const routes = [
   {
@@ -66,6 +67,14 @@ const routes = [
     component: AgentConfigs,
     meta: {
       title: '智能体配置管理',
+    },
+  },
+  {
+    path: '/agentkit-configs',
+    name: 'AgentKitConfigs',
+    component: AgentKitConfigs,
+    meta: {
+      title: '内建工具管理',
     },
   },
 ]

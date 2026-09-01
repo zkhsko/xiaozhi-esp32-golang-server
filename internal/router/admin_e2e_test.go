@@ -540,4 +540,65 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	if wSPA7.Code != http.StatusOK {
 		t.Fatalf("SPA route for device-types failed, code=%d", wSPA7.Code)
 	}
+
+	// 36. AgentKit 工具配置创建
+	createAKBody, _ := json.Marshal(SaveAgentKitConfigRequest{
+		ToolName:   "server.get_current_weather",
+		ToolConfig: `{"api_key":"test-key","location":"beijing"}`,
+		Enabled:    func(b bool) *bool { return &b }(true),
+	})
+	reqAKCreate := httptest.NewRequest(http.MethodPost, "/admin-api/agentkit-config/save", bytes.NewReader(createAKBody))
+	reqAKCreate.Header.Set("Content-Type", "application/json")
+	wAKCreate := httptest.NewRecorder()
+	r.ServeHTTP(wAKCreate, reqAKCreate)
+
+	if wAKCreate.Code != http.StatusOK {
+		t.Fatalf("create agentkit config failed: %s", wAKCreate.Body.String())
+	}
+	var akCreateResp struct {
+		Success bool               `json:"success"`
+		Data    AgentKitConfigItem `json:"data"`
+	}
+	_ = json.Unmarshal(wAKCreate.Body.Bytes(), &akCreateResp)
+	if !akCreateResp.Success || akCreateResp.Data.Id == 0 || akCreateResp.Data.ToolName != "server.get_current_weather" {
+		t.Fatalf("unexpected agentkit create resp: %+v", akCreateResp)
+	}
+	createdAKId := akCreateResp.Data.Id
+
+	// 37. AgentKit 工具配置列表查询
+	reqAKList := httptest.NewRequest(http.MethodGet, "/admin-api/agentkit-config?tool_name=weather", nil)
+	wAKList := httptest.NewRecorder()
+	r.ServeHTTP(wAKList, reqAKList)
+
+	if wAKList.Code != http.StatusOK {
+		t.Fatalf("list agentkit config failed: %s", wAKList.Body.String())
+	}
+	var akListResp struct {
+		Success bool                   `json:"success"`
+		Data    AgentKitConfigListData `json:"data"`
+	}
+	_ = json.Unmarshal(wAKList.Body.Bytes(), &akListResp)
+	if akListResp.Data.Total != 1 || len(akListResp.Data.Items) != 1 || akListResp.Data.Items[0].ToolName != "server.get_current_weather" {
+		t.Fatalf("expected 1 AgentKit config item, got %v", akListResp.Data.Items)
+	}
+
+	// 38. AgentKit 工具配置单条删除
+	delAKBody, _ := json.Marshal(DeleteAgentKitConfigRequest{Id: createdAKId})
+	reqDelAK := httptest.NewRequest(http.MethodPost, "/admin-api/agentkit-config/delete", bytes.NewReader(delAKBody))
+	reqDelAK.Header.Set("Content-Type", "application/json")
+	wDelAK := httptest.NewRecorder()
+	r.ServeHTTP(wDelAK, reqDelAK)
+
+	if wDelAK.Code != http.StatusOK {
+		t.Fatalf("delete agentkit config failed: %s", wDelAK.Body.String())
+	}
+
+	// 39. 访问 /admin/agentkit-configs 确保静态 SPA 路由可 fallback 到 index.html
+	reqSPA8 := httptest.NewRequest(http.MethodGet, "/admin/agentkit-configs", nil)
+	wSPA8 := httptest.NewRecorder()
+	r.ServeHTTP(wSPA8, reqSPA8)
+
+	if wSPA8.Code != http.StatusOK {
+		t.Fatalf("SPA route for agentkit-configs failed, code=%d", wSPA8.Code)
+	}
 }

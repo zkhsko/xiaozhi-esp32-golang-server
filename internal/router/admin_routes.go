@@ -70,6 +70,16 @@ func AdminRoutes(h *AdminHandler) http.Handler {
 		r.Post("/agent-config/activate", h.agentHandler.handleActivateAgentConfig)
 	}
 
+	// AgentKit Config 接口
+	if h.agentkitHandler != nil {
+		r.Get("/agentkit-config", h.agentkitHandler.handleListAgentKitConfigs)
+		r.Get("/agentkit-config/list", h.agentkitHandler.handleListAgentKitConfigs)
+		r.Post("/agentkit-config/save", h.agentkitHandler.handleSaveAgentKitConfig)
+		r.Post("/agentkit-config/update", h.agentkitHandler.handleSaveAgentKitConfig)
+		r.Post("/agentkit-config/delete", h.agentkitHandler.handleDeleteAgentKitConfig)
+		r.Post("/agentkit-config/batch-delete", h.agentkitHandler.handleBatchDeleteAgentKitConfigs)
+	}
+
 	// Device Type 接口
 	if h.deviceTypeHandler != nil {
 		r.Get("/device-type", h.deviceTypeHandler.handleListDeviceTypes)
