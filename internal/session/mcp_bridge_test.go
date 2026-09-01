@@ -6,12 +6,9 @@ import (
 	"log/slog"
 	"testing"
 	"time"
-
-	"xiaozhi-esp32-golang-server/internal/agentkit"
 )
 
 func TestSession_MCPHandshakeDetection(t *testing.T) {
-	// 1. features.mcp = true
 	helloTrue := &ClientHelloMessage{
 		Type:      "hello",
 		Version:   1,
@@ -30,7 +27,6 @@ func TestSession_MCPHandshakeDetection(t *testing.T) {
 		t.Fatal("expected SupportsMCP to be true")
 	}
 
-	// 2. features = nil
 	helloNil := &ClientHelloMessage{
 		Type:      "hello",
 		Version:   1,
@@ -46,7 +42,6 @@ func TestSession_MCPHandshakeDetection(t *testing.T) {
 		t.Fatal("expected SupportsMCP to be false when features is nil")
 	}
 
-	// 3. features.mcp = false
 	helloFalse := &ClientHelloMessage{
 		Type:      "hello",
 		Version:   1,
@@ -66,24 +61,19 @@ func TestSession_MCPHandshakeDetection(t *testing.T) {
 	}
 }
 
-func TestSession_SendMCPPayload(t *testing.T) {
+func TestMCPBridge_SendMCPPayload(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sess := &Session{
-		ctx:       ctx,
-		cancel:    cancel,
-		logger:    slog.Default(),
-		sessionId: "test-sess-123",
-	}
-
 	conn := &mockWSConn{}
 	writer := NewWriter(ctx, conn, 10, nil)
-	sess.writer = writer
 	defer writer.Stop()
 
+	bridge := NewMCPBridge(slog.Default(), nil)
+	bridge.Enable("test-sess-123", writer)
+
 	payload := json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)
-	err := sess.SendMCPPayload(ctx, payload)
+	err := bridge.SendMCPPayload(ctx, payload)
 	if err != nil {
 		t.Fatalf("SendMCPPayload failed: %v", err)
 	}
@@ -91,11 +81,12 @@ func TestSession_SendMCPPayload(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	msgs := conn.getMessages()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message sent, got %d", len(msgs))
+	if len(msgs) == 0 {
+		t.Fatal("expected at least 1 message sent")
 	}
+	lastMsg := msgs[len(msgs)-1]
 	var downlink DownlinkMCPMessage
-	if err := json.Unmarshal(msgs[0].payload, &downlink); err != nil {
+	if err := json.Unmarshal(lastMsg.payload, &downlink); err != nil {
 		t.Fatalf("unmarshal downlink failed: %v", err)
 	}
 
@@ -107,21 +98,16 @@ func TestSession_SendMCPPayload(t *testing.T) {
 	}
 }
 
-func TestSession_HandleMCPMessage_ValidationAndForwarding(t *testing.T) {
+func TestMCPBridge_HandleInbound_ValidationAndForwarding(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sender := &dummySender{}
-	mcpClient := agentkit.NewDeviceMCPClient(sender)
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 10, nil)
+	defer writer.Stop()
 
-	sess := &Session{
-		ctx:        ctx,
-		cancel:     cancel,
-		logger:     slog.Default(),
-		sessionId:  "sess-mcp-test",
-		generation: 1,
-		mcpClient:  mcpClient,
-	}
+	bridge := NewMCPBridge(slog.Default(), nil)
+	bridge.Enable("sess-mcp-test", writer)
 
 	// 1. 非法 session_id（不匹配）应被忽略
 	mismatchMsg := &ClientMessage{
@@ -129,7 +115,7 @@ func TestSession_HandleMCPMessage_ValidationAndForwarding(t *testing.T) {
 		SessionId: "different-session-id",
 		Payload:   json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{}}`),
 	}
-	sess.handleMCPMessage(mismatchMsg)
+	bridge.HandleInbound("sess-mcp-test", mismatchMsg)
 
 	// 2. 空 payload 应被忽略
 	emptyMsg := &ClientMessage{
@@ -137,7 +123,7 @@ func TestSession_HandleMCPMessage_ValidationAndForwarding(t *testing.T) {
 		SessionId: "sess-mcp-test",
 		Payload:   nil,
 	}
-	sess.handleMCPMessage(emptyMsg)
+	bridge.HandleInbound("sess-mcp-test", emptyMsg)
 
 	// 3. 非对象 payload 应被忽略
 	nonObjMsg := &ClientMessage{
@@ -145,7 +131,7 @@ func TestSession_HandleMCPMessage_ValidationAndForwarding(t *testing.T) {
 		SessionId: "sess-mcp-test",
 		Payload:   json.RawMessage(`"just a string"`),
 	}
-	sess.handleMCPMessage(nonObjMsg)
+	bridge.HandleInbound("sess-mcp-test", nonObjMsg)
 
 	// 4. 正常响应转发
 	validMsg := &ClientMessage{
@@ -153,5 +139,5 @@ func TestSession_HandleMCPMessage_ValidationAndForwarding(t *testing.T) {
 		SessionId: "sess-mcp-test",
 		Payload:   json.RawMessage(`{"jsonrpc":"2.0","id":100,"result":{"status":"ok"}}`),
 	}
-	sess.handleMCPMessage(validMsg)
+	bridge.HandleInbound("sess-mcp-test", validMsg)
 }

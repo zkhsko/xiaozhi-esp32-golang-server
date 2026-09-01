@@ -177,7 +177,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Conn:         conn,
 		SerialNumber: tok.SerialNumber,
 		SystemPrompt: snapshot.Agent.SystemPrompt,
-		Config:       h.cfg,
+		Config:       mapSessionConfig(h.cfg),
 		ASRClient:    asrClient,
 		LLMClient:    llmClient,
 		TTSClient:    ttsClient,
@@ -197,4 +197,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("websocket session closed",
 		"serial_number", logger.TruncateString(tok.SerialNumber),
 	)
+}
+
+// mapSessionConfig 将应用全局配置转换为会话运行所需的不可变 SessionConfig。
+func mapSessionConfig(cfg *config.Config) SessionConfig {
+	if cfg == nil {
+		return SessionConfig{}
+	}
+	return SessionConfig{
+		HelloTimeout:              cfg.Session.HelloTimeout,
+		MaxWSTextMessageBytes:     cfg.Session.MaxWSTextMessageBytes,
+		MaxOpusPacketBytes:        cfg.Session.MaxOpusPacketBytes,
+		MaxListeningDuration:      cfg.Session.MaxListeningDuration,
+		ASRResultTimeout:          cfg.Session.ASRResultTimeout,
+		ASRPCMQueueCapacity:       cfg.Session.ASRPCMQueueCapacity,
+		TTSPCMQueueCapacity:       cfg.Session.TTSPCMQueueCapacity,
+		DownlinkOpusQueueCapacity: cfg.Session.DownlinkOpusQueueCapacity,
+		MaxHistoryTurns:           cfg.Session.MaxHistoryTurns,
+		ListenPromptEnabled:       cfg.Session.ListenPromptEnabled,
+	}
 }
