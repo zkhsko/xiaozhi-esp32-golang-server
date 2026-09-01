@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS `device_hmac_credential` (
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_serial_number` (`serial_number`)
+    UNIQUE KEY `uk_device_hmac_credential_serial_number` (`serial_number`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='设备出厂与激活 HMAC 凭证表';
 -- +goose StatementEnd
 
@@ -27,8 +27,8 @@ CREATE TABLE IF NOT EXISTS `device_activation` (
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '记录创建时间',
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '记录最近更新时间',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_serial_number` (`serial_number`),
-    KEY `idx_device_id` (`device_id`)
+    UNIQUE KEY `uk_device_activation_serial_number` (`serial_number`),
+    KEY `idx_device_activation_device_id` (`device_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='设备激活关系表';
 -- +goose StatementEnd
 
@@ -41,8 +41,8 @@ CREATE TABLE IF NOT EXISTS `device_user_ref` (
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '绑定记录创建时间',
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '绑定关系最近更新时间',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_serial_number` (`serial_number`),
-    KEY `idx_user_id_serial_number` (`user_id`, `serial_number`)
+    UNIQUE KEY `uk_device_user_ref_serial_number` (`serial_number`),
+    KEY `idx_device_user_ref_user_id_serial_number` (`user_id`, `serial_number`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='设备与用户绑定关系表';
 -- +goose StatementEnd
 
@@ -60,8 +60,8 @@ CREATE TABLE IF NOT EXISTS `device_access_token` (
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '记录创建时间',
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '记录最近更新时间',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_serial_number` (`serial_number`),
-    UNIQUE KEY `uk_access_token` (`access_token`)
+    UNIQUE KEY `uk_device_access_token_serial_number` (`serial_number`),
+    UNIQUE KEY `uk_device_access_token_access_token` (`access_token`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='设备鉴权 Access Token 表';
 -- +goose StatementEnd
 
@@ -74,8 +74,8 @@ CREATE TABLE IF NOT EXISTS `device_type` (
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_device_type` (`device_type`),
-    KEY `idx_agent_config_id` (`agent_config_id`)
+    UNIQUE KEY `uk_device_type_device_type` (`device_type`),
+    KEY `idx_device_type_agent_config_id` (`agent_config_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='设备类型与 Agent 配置关联表';
 -- +goose StatementEnd
 
@@ -139,6 +139,20 @@ CREATE TABLE IF NOT EXISTS `tts_config` (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
+-- agentkit_config: 内建 Agent 工具配置表
+CREATE TABLE IF NOT EXISTS `agentkit_config` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '配置自增主键',
+    `tool_name` VARCHAR(128) NOT NULL COMMENT '内建工具稳定名称，全局业务唯一',
+    `tool_config` TEXT NOT NULL COMMENT '工具配置（JSON 格式，可能包含敏感信息）',
+    `enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用该内建工具',
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_agentkit_config_tool_name` (`tool_name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='内建 Agent 工具配置表';
+-- +goose StatementEnd
+
+-- +goose StatementBegin
 -- agent_config: AI Agent 配置表
 CREATE TABLE IF NOT EXISTS `agent_config` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'Agent 身份自增主键',
@@ -162,6 +176,9 @@ CREATE TABLE IF NOT EXISTS `agent_config` (
 -- +goose Down
 -- +goose StatementBegin
 DROP TABLE IF EXISTS `agent_config`;
+-- +goose StatementEnd
+-- +goose StatementBegin
+DROP TABLE IF EXISTS `agentkit_config`;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE IF EXISTS `tts_config`;

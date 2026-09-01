@@ -9,9 +9,13 @@ CREATE TABLE IF NOT EXISTS device_hmac_credential (
     hmac_key_ciphertext VARCHAR(64) NOT NULL,                      -- HMAC Key（统一字段名 hmac_key_ciphertext，64位十六进制字符，可直接写入 hmac_0）
     credential_status VARCHAR(16) NOT NULL DEFAULT 'enabled',      -- 凭证状态：enabled / activated / blocked / revoked
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 凭证创建时间
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 凭证最近更新时间
-    CONSTRAINT uk_serial_number UNIQUE (serial_number)
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 凭证最近更新时间
 );
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- uk_device_hmac_credential_serial_number: 设备序列号唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS uk_device_hmac_credential_serial_number ON device_hmac_credential(serial_number);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -24,14 +28,18 @@ CREATE TABLE IF NOT EXISTS device_activation (
     activation_status VARCHAR(16) NOT NULL DEFAULT 'active',       -- 激活状态：active / frozen / revoked
     activated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,     -- 首次激活时间
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 记录创建时间
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 记录最近更新时间
-    CONSTRAINT uk_serial_number UNIQUE (serial_number)
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 记录最近更新时间
 );
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_device_id: 后端设备标识普通索引
-CREATE INDEX IF NOT EXISTS idx_device_id ON device_activation(device_id);
+-- uk_device_activation_serial_number: 设备序列号唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS uk_device_activation_serial_number ON device_activation(serial_number);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- idx_device_activation_device_id: 后端设备标识普通索引
+CREATE INDEX IF NOT EXISTS idx_device_activation_device_id ON device_activation(device_id);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -41,14 +49,18 @@ CREATE TABLE IF NOT EXISTS device_user_ref (
     serial_number VARCHAR(64) NOT NULL,                            -- 设备序列号（全局业务唯一）
     user_id INTEGER NOT NULL,                                      -- 当前绑定的用户 Id
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 绑定记录创建时间
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 绑定关系最近更新时间
-    CONSTRAINT uk_serial_number UNIQUE (serial_number)
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 绑定关系最近更新时间
 );
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_user_id_serial_number: 用户设备绑定联合索引
-CREATE INDEX IF NOT EXISTS idx_user_id_serial_number ON device_user_ref(user_id, serial_number);
+-- uk_device_user_ref_serial_number: 设备序列号唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS uk_device_user_ref_serial_number ON device_user_ref(serial_number);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- idx_device_user_ref_user_id_serial_number: 用户设备绑定联合索引
+CREATE INDEX IF NOT EXISTS idx_device_user_ref_user_id_serial_number ON device_user_ref(user_id, serial_number);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -63,10 +75,18 @@ CREATE TABLE IF NOT EXISTS device_access_token (
     expires_at DATETIME DEFAULT NULL,                              -- Token 过期时间（为空表示无固定过期时间）
     revoked_at DATETIME DEFAULT NULL,                              -- Token 撤销时间（为空表示未撤销）
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 记录创建时间
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 记录最近更新时间
-    CONSTRAINT uk_serial_number UNIQUE (serial_number),
-    CONSTRAINT uk_access_token UNIQUE (access_token)
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 记录最近更新时间
 );
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- uk_device_access_token_serial_number: 设备序列号唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS uk_device_access_token_serial_number ON device_access_token(serial_number);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- uk_device_access_token_access_token: Access Token 唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS uk_device_access_token_access_token ON device_access_token(access_token);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -76,14 +96,18 @@ CREATE TABLE IF NOT EXISTS device_type (
     device_type VARCHAR(32) NOT NULL,                               -- 设备类型（全局业务唯一）
     agent_config_id INTEGER NOT NULL,                               -- 关联的 Agent 配置 Id
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 创建时间
-    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 最近更新时间
-    CONSTRAINT uk_device_type UNIQUE (device_type)
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 最近更新时间
 );
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_agent_config_id: Agent 配置 Id 普通索引
-CREATE INDEX IF NOT EXISTS idx_agent_config_id ON device_type(agent_config_id);
+-- uk_device_type_device_type: 设备类型唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS uk_device_type_device_type ON device_type(device_type);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- idx_device_type_agent_config_id: Agent 配置 Id 普通索引
+CREATE INDEX IF NOT EXISTS idx_device_type_agent_config_id ON device_type(agent_config_id);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -143,6 +167,23 @@ CREATE TABLE IF NOT EXISTS tts_config (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
+-- agentkit_config: 内建 Agent 工具配置表
+CREATE TABLE IF NOT EXISTS agentkit_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- 配置内部自增主键
+    tool_name VARCHAR(128) NOT NULL,                               -- 内建工具稳定名称（全局业务唯一）
+    tool_config TEXT NOT NULL,                                     -- 工具配置（JSON 格式，可能包含敏感信息）
+    enabled INTEGER NOT NULL DEFAULT 1,                            -- 是否启用该内建工具（0: 禁用, 1: 启用）
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 创建时间
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 更新时间
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- uk_agentkit_config_tool_name: 内建工具名称唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS uk_agentkit_config_tool_name ON agentkit_config(tool_name);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
 -- agent_config: AI Agent 配置表
 CREATE TABLE IF NOT EXISTS agent_config (
     id INTEGER PRIMARY KEY AUTOINCREMENT,                          -- Agent 身份自增主键
@@ -181,6 +222,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_config_enabled ON agent_config(enabled);
 -- +goose Down
 -- +goose StatementBegin
 DROP TABLE IF EXISTS agent_config;
+-- +goose StatementEnd
+-- +goose StatementBegin
+DROP TABLE IF EXISTS agentkit_config;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE IF EXISTS tts_config;

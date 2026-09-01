@@ -39,14 +39,14 @@ var (
 //
 // 字段约束与索引规范：
 // - id: 自增主键。
-// - device_type: 设备类型，全局业务唯一，唯一索引 uk_device_type。
-// - agent_config_id: 关联的 Agent 配置 Id，非空，普通索引 idx_agent_config_id。
+// - device_type: 设备类型，全局业务唯一，唯一索引 uk_device_type_device_type。
+// - agent_config_id: 关联的 Agent 配置 Id，非空，普通索引 idx_device_type_agent_config_id。
 // - created_at: 创建时间。
 // - updated_at: 记录最近更新时间。
 type DeviceType struct {
 	Id            uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	DeviceType    string    `gorm:"uniqueIndex:uk_device_type;column:device_type;size:32;not null" json:"device_type"`
-	AgentConfigId uint64    `gorm:"index:idx_agent_config_id;column:agent_config_id;not null" json:"agent_config_id"`
+	DeviceType    string    `gorm:"uniqueIndex:uk_device_type_device_type;column:device_type;size:32;not null" json:"device_type"`
+	AgentConfigId uint64    `gorm:"index:idx_device_type_agent_config_id;column:agent_config_id;not null" json:"agent_config_id"`
 	CreatedAt     time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
 	UpdatedAt     time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
 }

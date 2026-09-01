@@ -26,14 +26,14 @@ var (
 //
 // 字段约束与索引规范：
 // - id: 自增主键。
-// - serial_number: 设备序列号，全局业务唯一，唯一索引 uk_serial_number。
-// - user_id: 绑定的用户 Id，非空，联合索引 idx_user_id_serial_number。
+// - serial_number: 设备序列号，全局业务唯一，唯一索引 uk_device_user_ref_serial_number。
+// - user_id: 绑定的用户 Id，非空，与 serial_number 建立联合索引 idx_device_user_ref_user_id_serial_number。
 // - created_at: 创建时间（绑定时间）。
 // - updated_at: 记录最近更新时间。
 type DeviceUserRef struct {
 	Id           uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	SerialNumber string    `gorm:"uniqueIndex:uk_serial_number;column:serial_number;size:64;not null" json:"serial_number"`
-	UserId       uint64    `gorm:"index:idx_user_id_serial_number,priority:1;column:user_id;not null" json:"user_id"`
+	SerialNumber string    `gorm:"uniqueIndex:uk_device_user_ref_serial_number;index:idx_device_user_ref_user_id_serial_number,priority:2;column:serial_number;size:64;not null" json:"serial_number"`
+	UserId       uint64    `gorm:"index:idx_device_user_ref_user_id_serial_number,priority:1;column:user_id;not null" json:"user_id"`
 	CreatedAt    time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
 	UpdatedAt    time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
 }

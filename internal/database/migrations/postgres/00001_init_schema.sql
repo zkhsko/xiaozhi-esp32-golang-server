@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS device_hmac_credential (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE UNIQUE INDEX IF NOT EXISTS uk_serial_number ON device_hmac_credential(serial_number);
+-- uk_device_hmac_credential_serial_number: 设备序列号唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS uk_device_hmac_credential_serial_number ON device_hmac_credential(serial_number);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -36,8 +37,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_device_activation_serial_number ON device_a
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_device_id: 后端设备标识普通索引
-CREATE INDEX IF NOT EXISTS idx_device_id ON device_activation(device_id);
+-- idx_device_activation_device_id: 后端设备标识普通索引
+CREATE INDEX IF NOT EXISTS idx_device_activation_device_id ON device_activation(device_id);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -56,8 +57,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_device_user_ref_serial_number ON device_use
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_user_id_serial_number: 用户设备绑定联合索引
-CREATE INDEX IF NOT EXISTS idx_user_id_serial_number ON device_user_ref(user_id, serial_number);
+-- idx_device_user_ref_user_id_serial_number: 用户设备绑定联合索引
+CREATE INDEX IF NOT EXISTS idx_device_user_ref_user_id_serial_number ON device_user_ref(user_id, serial_number);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -82,8 +83,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_device_access_token_serial_number ON device
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- uk_access_token: 基于 Access Token 明文的唯一索引（WebSocket Bearer Token 鉴权入口）
-CREATE UNIQUE INDEX IF NOT EXISTS uk_access_token ON device_access_token(access_token);
+-- uk_device_access_token_access_token: 基于 Access Token 明文的唯一索引（WebSocket Bearer Token 鉴权入口）
+CREATE UNIQUE INDEX IF NOT EXISTS uk_device_access_token_access_token ON device_access_token(access_token);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -98,13 +99,13 @@ CREATE TABLE IF NOT EXISTS device_type (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- uk_device_type: 设备类型唯一索引
-CREATE UNIQUE INDEX IF NOT EXISTS uk_device_type ON device_type(device_type);
+-- uk_device_type_device_type: 设备类型唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS uk_device_type_device_type ON device_type(device_type);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_agent_config_id: Agent 配置 Id 普通索引
-CREATE INDEX IF NOT EXISTS idx_agent_config_id ON device_type(agent_config_id);
+-- idx_device_type_agent_config_id: Agent 配置 Id 普通索引
+CREATE INDEX IF NOT EXISTS idx_device_type_agent_config_id ON device_type(agent_config_id);
 -- +goose StatementEnd
 
 -- +goose StatementBegin
@@ -164,6 +165,23 @@ CREATE TABLE IF NOT EXISTS tts_config (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
+-- agentkit_config: 内建 Agent 工具配置表
+CREATE TABLE IF NOT EXISTS agentkit_config (
+    id BIGSERIAL PRIMARY KEY,                                      -- 配置内部自增主键
+    tool_name VARCHAR(128) NOT NULL,                               -- 内建工具稳定名称（全局业务唯一）
+    tool_config TEXT NOT NULL,                                     -- 工具配置（JSON 格式，可能包含敏感信息）
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,                         -- 是否启用该内建工具
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,     -- 创建时间
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP      -- 更新时间
+);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+-- uk_agentkit_config_tool_name: 内建工具名称唯一索引
+CREATE UNIQUE INDEX IF NOT EXISTS uk_agentkit_config_tool_name ON agentkit_config(tool_name);
+-- +goose StatementEnd
+
+-- +goose StatementBegin
 -- agent_config: AI Agent 配置表
 CREATE TABLE IF NOT EXISTS agent_config (
     id BIGSERIAL PRIMARY KEY,                                       -- Agent 身份自增主键
@@ -202,6 +220,9 @@ CREATE INDEX IF NOT EXISTS idx_agent_config_enabled ON agent_config(enabled);
 -- +goose Down
 -- +goose StatementBegin
 DROP TABLE IF EXISTS agent_config;
+-- +goose StatementEnd
+-- +goose StatementBegin
+DROP TABLE IF EXISTS agentkit_config;
 -- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE IF EXISTS tts_config;
