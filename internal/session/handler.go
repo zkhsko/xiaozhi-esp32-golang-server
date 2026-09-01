@@ -15,19 +15,21 @@ import (
 
 // Handler 处理 WebSocket 协议升级、设备智能体动态加载、会话准入控制与连接生命周期。
 type Handler struct {
-	cfg      *config.Config
-	db       DeviceAgentResolver
-	registry *Registry
-	logger   *slog.Logger
+	cfg           *config.Config
+	db            DeviceAgentResolver
+	agentKitStore AgentKitStore
+	registry      *Registry
+	logger        *slog.Logger
 }
 
 // HandlerOptions 聚合创建 WebSocket HTTP 升级处理器的依赖与配置。
 type HandlerOptions struct {
-	Config   *config.Config
-	DB       DeviceAgentResolver
-	Limiter  *SessionLimiter
-	Registry *Registry
-	Logger   *slog.Logger
+	Config        *config.Config
+	DB            DeviceAgentResolver
+	AgentKitStore AgentKitStore
+	Limiter       *SessionLimiter
+	Registry      *Registry
+	Logger        *slog.Logger
 }
 
 // NewHandler 使用具名选项创建配置就绪的 WebSocket HTTP 升级处理器。
@@ -50,11 +52,19 @@ func NewHandler(opts HandlerOptions) *Handler {
 		reg = NewRegistry(limiter, l)
 	}
 
+	agentKitStore := opts.AgentKitStore
+	if agentKitStore == nil {
+		if s, ok := opts.DB.(AgentKitStore); ok {
+			agentKitStore = s
+		}
+	}
+
 	return &Handler{
-		cfg:      opts.Config,
-		db:       opts.DB,
-		registry: reg,
-		logger:   l,
+		cfg:           opts.Config,
+		db:            opts.DB,
+		agentKitStore: agentKitStore,
+		registry:      reg,
+		logger:        l,
 	}
 }
 
@@ -174,14 +184,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 7. 构造专属 Session 并注册到会话注册表，统一注销与名额释放顺序
 	sess := NewSession(r.Context(), Options{
-		Conn:         conn,
-		SerialNumber: tok.SerialNumber,
-		SystemPrompt: snapshot.Agent.SystemPrompt,
-		Config:       mapSessionConfig(h.cfg),
-		ASRClient:    asrClient,
-		LLMClient:    llmClient,
-		TTSClient:    ttsClient,
-		Logger:       h.logger,
+		Conn:          conn,
+		SerialNumber:  tok.SerialNumber,
+		SystemPrompt:  snapshot.Agent.SystemPrompt,
+		Config:        mapSessionConfig(h.cfg),
+		ASRClient:     asrClient,
+		LLMClient:     llmClient,
+		TTSClient:     ttsClient,
+		AgentKitStore: h.agentKitStore,
+		Logger:        h.logger,
 	})
 	unregister, registered := h.registry.Register(sess, release)
 	if !registered {

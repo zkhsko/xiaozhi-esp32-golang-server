@@ -1,6 +1,9 @@
 package agentkit
 
 import (
+	"fmt"
+	"strings"
+
 	"xiaozhi-esp32-golang-server/internal/ai"
 )
 
@@ -14,6 +17,48 @@ func DefaultTools() []ai.Tool {
 	return []ai.Tool{
 		GetCurrentTimeTool(),
 		GetCloseSessionTool(),
+	}
+}
+
+// ToolConfigItem 抽象单个内建工具的名称、配置与启用状态。
+type ToolConfigItem struct {
+	ToolName   string
+	ToolConfig string
+	Enabled    bool
+}
+
+// BuildTools 根据工具配置项列表构建所有启用的 AgentKit 工具，并与默认基础工具进行聚合。
+func BuildTools(items []ToolConfigItem) []ai.Tool {
+	baseTools := DefaultTools()
+	if len(items) == 0 {
+		return baseTools
+	}
+
+	customTools := make([]ai.Tool, 0, len(items))
+	for _, item := range items {
+		if !item.Enabled {
+			continue
+		}
+		tool, err := BuildTool(item.ToolName, item.ToolConfig)
+		if err == nil {
+			customTools = append(customTools, tool)
+		}
+	}
+
+	return AggregateTools(baseTools, customTools)
+}
+
+// BuildTool 根据工具名称与 JSON 配置字符串构造对应的 AgentKit 内置工具。
+func BuildTool(toolName, toolConfigJSON string) (ai.Tool, error) {
+	switch strings.TrimSpace(toolName) {
+	case ToolGetCurrentWeather:
+		return NewWeatherToolFromConfig(toolConfigJSON)
+	case ToolGetCurrentTime:
+		return GetCurrentTimeTool(), nil
+	case ToolCloseSession:
+		return GetCloseSessionTool(), nil
+	default:
+		return ai.Tool{}, fmt.Errorf("unsupported agentkit tool: %s", toolName)
 	}
 }
 

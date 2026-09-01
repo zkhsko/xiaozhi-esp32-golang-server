@@ -11,6 +11,7 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/database"
 )
 
 type dummySender struct {
@@ -48,7 +49,7 @@ func TestToolProvider_BuildSnapshot_BuiltinToolsOnly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	provider := NewToolProvider(nil, slog.Default())
+	provider := NewToolProvider(nil, nil, slog.Default())
 	effects := &TurnEffects{}
 	tools := provider.BuildSnapshot(ctx, 1, "sess-tools-test", effects)
 
@@ -74,11 +75,60 @@ func TestToolProvider_BuildSnapshot_BuiltinToolsOnly(t *testing.T) {
 	}
 }
 
+type mockAgentKitStore struct {
+	configs []*database.AgentKitConfig
+	err     error
+}
+
+func (m *mockAgentKitStore) ListEnabledAgentKitConfigs(ctx context.Context) ([]*database.AgentKitConfig, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.configs, nil
+}
+
+func TestToolProvider_BuildSnapshot_WithCustomBuiltinTools(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := &mockAgentKitStore{
+		configs: []*database.AgentKitConfig{
+			{
+				ToolName:   agentkit.ToolGetCurrentWeather,
+				ToolConfig: `{"api_key":"test-key","location":"WX4SUCU47R3T"}`,
+				Enabled:    true,
+			},
+		},
+	}
+
+	provider := NewToolProvider(nil, store, slog.Default())
+	effects := &TurnEffects{}
+	tools := provider.BuildSnapshot(ctx, 1, "sess-custom-tools-test", effects)
+
+	if len(tools) != 3 {
+		t.Fatalf("expected 3 available tools, got %d", len(tools))
+	}
+
+	var hasWeather bool
+	for _, tool := range tools {
+		if tool.Name == agentkit.ToolGetCurrentWeather {
+			hasWeather = true
+			if tool.Run == nil {
+				t.Fatal("expected non-nil Run handler for weather tool")
+			}
+		}
+	}
+
+	if !hasWeather {
+		t.Fatal("expected weather tool in snapshot")
+	}
+}
+
 func TestToolProvider_BuildSnapshot_ExecuteServerToolClosure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	provider := NewToolProvider(nil, slog.Default())
+	provider := NewToolProvider(nil, nil, slog.Default())
 	effects := &TurnEffects{}
 	tools := provider.BuildSnapshot(ctx, 1, "sess-tool-closure-test", effects)
 
@@ -116,7 +166,7 @@ func TestToolProvider_WrapToolRun_CustomSessionCloserInterface(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	provider := NewToolProvider(nil, slog.Default())
+	provider := NewToolProvider(nil, nil, slog.Default())
 	effects := &TurnEffects{}
 
 	customTool := ai.Tool{
@@ -145,7 +195,7 @@ func TestToolProvider_ExecuteSnapshotTool_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // 立即取消
 
-	provider := NewToolProvider(nil, slog.Default())
+	provider := NewToolProvider(nil, nil, slog.Default())
 	effects := &TurnEffects{}
 	tools := provider.BuildSnapshot(context.Background(), 1, "sess-cancel-test", effects)
 	if len(tools) == 0 {
@@ -188,7 +238,7 @@ func TestToolProvider_DeviceToolCallLimit_8PerGeneration(t *testing.T) {
 	bridge.Enable("sess-limit-test", sender)
 	_ = bridge.WaitReady(ctx)
 
-	provider := NewToolProvider(bridge, slog.Default())
+	provider := NewToolProvider(bridge, nil, slog.Default())
 	effects := &TurnEffects{}
 	tools := provider.BuildSnapshot(ctx, 1, "sess-limit-test", effects)
 

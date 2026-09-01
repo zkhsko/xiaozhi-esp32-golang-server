@@ -10,6 +10,7 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/database"
 )
 
 // 每轮次设备工具调用的最大执行次数。
@@ -22,20 +23,27 @@ type TurnEffects struct {
 	CloseSession bool
 }
 
+// AgentKitStore 定义 ToolProvider 加载内建工具配置所需的窄接口。
+type AgentKitStore interface {
+	ListEnabledAgentKitConfigs(ctx context.Context) ([]*database.AgentKitConfig, error)
+}
+
 // ToolProvider 负责为单轮问答聚合服务端内置工具与设备 MCP 动态工具，并绑定代次隔离与副作用记录。
 type ToolProvider struct {
-	mcpBridge *MCPBridge
-	logger    *slog.Logger
+	agentKitStore AgentKitStore
+	mcpBridge     *MCPBridge
+	logger        *slog.Logger
 }
 
 // NewToolProvider 创建配置就绪的工具提供器。
-func NewToolProvider(bridge *MCPBridge, l *slog.Logger) *ToolProvider {
+func NewToolProvider(bridge *MCPBridge, store AgentKitStore, l *slog.Logger) *ToolProvider {
 	if l == nil {
 		l = slog.Default()
 	}
 	return &ToolProvider{
-		mcpBridge: bridge,
-		logger:    l,
+		agentKitStore: store,
+		mcpBridge:     bridge,
+		logger:        l,
 	}
 }
 
@@ -51,7 +59,7 @@ func (p *ToolProvider) BuildSnapshot(ctx context.Context, turnId uint64, session
 		deviceTools = p.mcpBridge.Tools()
 	}
 
-	builtinTools := agentkit.DefaultTools()
+	builtinTools := p.loadBuiltinTools(ctx)
 	mergedTools := agentkit.AggregateTools(builtinTools, deviceTools)
 
 	builtinMap := make(map[string]bool, len(builtinTools))
@@ -171,4 +179,32 @@ func (p *ToolProvider) wrapToolRun(
 
 		return result, nil
 	}
+}
+
+// loadBuiltinTools 从 AgentKitStore 加载启用的内建工具配置并组装内置工具列表。
+func (p *ToolProvider) loadBuiltinTools(ctx context.Context) []ai.Tool {
+	if p.agentKitStore == nil {
+		return agentkit.DefaultTools()
+	}
+
+	configs, err := p.agentKitStore.ListEnabledAgentKitConfigs(ctx)
+	if err != nil || len(configs) == 0 {
+		if err != nil {
+			p.logger.Warn("failed to load enabled agentkit configs from store", "error", err)
+		}
+		return agentkit.DefaultTools()
+	}
+
+	items := make([]agentkit.ToolConfigItem, 0, len(configs))
+	for _, cfg := range configs {
+		if cfg != nil {
+			items = append(items, agentkit.ToolConfigItem{
+				ToolName:   cfg.ToolName,
+				ToolConfig: cfg.ToolConfig,
+				Enabled:    cfg.Enabled,
+			})
+		}
+	}
+
+	return agentkit.BuildTools(items)
 }

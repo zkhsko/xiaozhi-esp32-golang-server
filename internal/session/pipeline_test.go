@@ -277,7 +277,7 @@ func TestTurnPipeline_MultiTurnTools_Success(t *testing.T) {
 	defer writer.Close()
 
 	events := make(chan turnEvent, 10)
-	toolProvider := NewToolProvider(nil, slog.Default())
+	toolProvider := NewToolProvider(nil, nil, slog.Default())
 	pipeline := NewTurnPipeline(PipelineOptions{
 		LLMClient:    mockLLM,
 		TTSClient:    mockTTS,

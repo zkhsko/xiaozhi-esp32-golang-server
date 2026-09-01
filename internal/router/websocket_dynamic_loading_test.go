@@ -240,4 +240,22 @@ func TestWebSocketDynamicLoading_EndToEnd(t *testing.T) {
 	if wDisabled.Code != http.StatusInternalServerError {
 		t.Errorf("expected HTTP 500 for disabled component, got %d", wDisabled.Code)
 	}
+
+	// 8. 验证 AgentKit 配置在数据库中的启停查询与动态加载
+	weatherCfg := &database.AgentKitConfig{
+		ToolName:   "server.get_current_weather",
+		ToolConfig: `{"api_key":"test-seniverse-key","location":"WX4SUCU47R3T"}`,
+		Enabled:    true,
+	}
+	if err := db.CreateAgentKitConfig(ctx, weatherCfg); err != nil {
+		t.Fatalf("create weather agentkit config: %v", err)
+	}
+
+	enabledTools, err := db.ListEnabledAgentKitConfigs(ctx)
+	if err != nil {
+		t.Fatalf("ListEnabledAgentKitConfigs failed: %v", err)
+	}
+	if len(enabledTools) != 1 || enabledTools[0].ToolName != "server.get_current_weather" {
+		t.Fatalf("expected enabled weather tool, got %+v", enabledTools)
+	}
 }

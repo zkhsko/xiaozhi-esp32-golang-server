@@ -83,6 +83,7 @@ type Options struct {
 	ASRClient     ai.ASRClient
 	LLMClient     ai.LLMClient
 	TTSClient     ai.TTSClient
+	AgentKitStore AgentKitStore
 	Logger        *slog.Logger
 	TickerFactory func(time.Duration) Ticker
 }
@@ -108,7 +109,7 @@ func NewSession(ctx context.Context, opts Options) *Session {
 	events := make(chan sessionEvent, DefaultEventChannelCapacity)
 	diagLimiter := logger.NewDiagRateLimiter()
 	mcpBridge := NewMCPBridge(l, diagLimiter)
-	toolProvider := NewToolProvider(mcpBridge, l)
+	toolProvider := NewToolProvider(mcpBridge, opts.AgentKitStore, l)
 	history := NewConversationHistory(cfg.MaxHistoryTurns)
 
 	pipeline := NewTurnPipeline(PipelineOptions{
