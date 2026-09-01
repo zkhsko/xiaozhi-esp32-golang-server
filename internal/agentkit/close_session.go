@@ -1,6 +1,7 @@
 package agentkit
 
 import (
+	"context"
 	"encoding/json"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
@@ -33,6 +34,12 @@ func GetCloseSessionTool() ai.Tool {
 					"description": "关闭会话的原因（可选）",
 				},
 			},
+		},
+		Run: func(ctx context.Context, input any) (any, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return ExecuteCloseSession(ParseCloseSessionInput(input))
 		},
 	}
 }

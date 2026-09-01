@@ -73,12 +73,24 @@ type ClientAudioParams struct {
 	FrameDuration int    `json:"frame_duration"`
 }
 
+// ClientFeatures 定义客户端声明的功能特性。
+type ClientFeatures struct {
+	MCP bool `json:"mcp,omitempty"`
+	AEC bool `json:"aec,omitempty"`
+}
+
 // ClientHelloMessage 定义客户端握手首包 hello 消息结构。
 type ClientHelloMessage struct {
 	Type        string            `json:"type"`
 	Version     int               `json:"version"`
+	Features    *ClientFeatures   `json:"features,omitempty"`
 	Transport   string            `json:"transport"`
 	AudioParams ClientAudioParams `json:"audio_params"`
+}
+
+// SupportsMCP 检查客户端是否显式声明支持 MCP。
+func (m *ClientHelloMessage) SupportsMCP() bool {
+	return m != nil && m.Features != nil && m.Features.MCP
 }
 
 // ServerAudioParams 定义服务端下行的音频参数。

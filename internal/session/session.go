@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/audio"
 	"xiaozhi-esp32-golang-server/internal/config"
@@ -91,6 +92,7 @@ type Session struct {
 	ttsStream     ai.TTSStream
 	pacer         *DownlinkPacer
 	tickerFactory func(time.Duration) Ticker
+	mcpClient     *agentkit.DeviceMCPClient
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -574,12 +576,18 @@ func (s *Session) handleHelloEvent(ev event) {
 	s.mu.Lock()
 	s.sessionId = sessionId
 	s.state = StateReady
+	mcpSupported := clientHello.SupportsMCP()
 	s.mu.Unlock()
 
 	s.logger.Info("websocket hello handshake succeeded",
 		"session_id", sessionId,
 		"serial_number", s.truncatedSerialNumber(),
+		"mcp_supported", mcpSupported,
 	)
+
+	if mcpSupported {
+		s.initMCPClient()
+	}
 }
 
 // handleClientTextEvent 处理客户端文本消息事件。
@@ -701,6 +709,9 @@ func (s *Session) handleClientTextEvent(ev event) {
 
 	case KindAbort:
 		s.handleAbortEvent(ev.clientMsg.AbortReason)
+
+	case KindMCP:
+		s.handleMCPMessage(ev.clientMsg)
 
 	case KindUnknownExtension:
 		s.logDiag("unknown extension message received",
@@ -1117,6 +1128,23 @@ func (s *Session) handleCloseEvent(ev event) {
 // closeWithReason 执行会话资源清理并安全关闭底层连接。
 func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 	s.closeOnce.Do(func() {
+		// 1. 取消当前 generation
+		s.mu.Lock()
+		if s.turnCancel != nil {
+			s.turnCancel()
+			s.turnCancel = nil
+		}
+
+		// 2. 关闭 DeviceMCPClient 并唤醒全部 pending 请求
+		mcpClient := s.mcpClient
+		s.mcpClient = nil
+		s.mu.Unlock()
+
+		if mcpClient != nil {
+			mcpClient.Close()
+		}
+
+		// 3. 停止音频资源
 		s.stopASR()
 		s.stopTTS()
 		s.stopPacer()
@@ -1571,4 +1599,37 @@ func (s *Session) logDiag(msg string, args ...any) {
 	}
 	allArgs := append([]any{"session_id", s.SessionId(), "serial_number", s.truncatedSerialNumber()}, args...)
 	s.logger.Warn(msg, allArgs...)
+}
+
+// initMCPClient 初始化设备 MCP 客户端并启动后台发现。
+func (s *Session) initMCPClient() {
+	client := agentkit.NewDeviceMCPClient(s)
+	s.mu.Lock()
+	s.mcpClient = client
+	s.mu.Unlock()
+
+	go func() {
+		discCtx, cancel := context.WithTimeout(s.ctx, agentkit.DefaultDiscoveryTimeout)
+		defer cancel()
+		if err := client.Discover(discCtx); err != nil {
+			s.logger.Warn("device mcp discovery failed, continuing with builtin tools only",
+				"session_id", s.SessionId(),
+				"error", err,
+			)
+		}
+	}()
+}
+
+// MCPClient 返回当前会话绑定的设备 MCP 客户端实例（若未启用则返回 nil）。
+func (s *Session) MCPClient() *agentkit.DeviceMCPClient {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mcpClient
+}
+
+// SetMCPClient 显式设置设备 MCP 客户端（供测试或特定场景注入）。
+func (s *Session) SetMCPClient(client *agentkit.DeviceMCPClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mcpClient = client
 }

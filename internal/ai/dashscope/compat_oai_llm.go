@@ -129,6 +129,9 @@ func (c *LLMClient) Generate(
 		}
 	}
 
+	// 统一工具适配：将中立的 ai.Tool 结构转换为 Genkit 原生的 ToolRef。
+	// 无论该工具是服务端内置函数还是远程 ESP32 硬件 MCP 外设，均通过统一的 WithInputSchema 声明参数契约，
+	// 并将执行体挂载到 tool.Run 闭包。在模型生成过程中，Genkit 统一负责多轮工具调用派发与 role=tool 回填。
 	genkitTools := make([]genkitai.ToolRef, 0, len(request.Tools))
 	for _, t := range request.Tools {
 		tool := t

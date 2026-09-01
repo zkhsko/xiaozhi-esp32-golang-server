@@ -22,16 +22,42 @@ func TestDefaultTools(t *testing.T) {
 	if !exists {
 		t.Fatalf("expected tool %s to exist", ToolGetCurrentTime)
 	}
-	if timeTool.Description == "" || timeTool.Parameters == nil {
-		t.Fatal("expected valid description and parameters for get_current_time tool")
+	if timeTool.Description == "" || timeTool.Parameters == nil || timeTool.Run == nil {
+		t.Fatal("expected valid description, parameters and Run handler for get_current_time tool")
 	}
 
 	closeTool, exists := toolMap[ToolCloseSession]
 	if !exists {
 		t.Fatalf("expected tool %s to exist", ToolCloseSession)
 	}
-	if closeTool.Description == "" || closeTool.Parameters == nil {
-		t.Fatal("expected valid description and parameters for close_session tool")
+	if closeTool.Description == "" || closeTool.Parameters == nil || closeTool.Run == nil {
+		t.Fatal("expected valid description, parameters and Run handler for close_session tool")
+	}
+}
+
+func TestAggregateTools(t *testing.T) {
+	builtin := []ai.Tool{
+		{Name: "tool.same", Description: "builtin version"},
+		{Name: "tool.builtin_only", Description: "builtin"},
+	}
+	device := []ai.Tool{
+		{Name: "tool.same", Description: "device duplicate"},
+		{Name: "tool.device_only", Description: "device"},
+	}
+
+	merged := AggregateTools(builtin, device)
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 merged tools, got %d", len(merged))
+	}
+
+	if merged[0].Name != "tool.same" || merged[0].Description != "builtin version" {
+		t.Fatalf("expected builtin same tool to take precedence, got %+v", merged[0])
+	}
+	if merged[1].Name != "tool.builtin_only" {
+		t.Fatalf("expected tool.builtin_only at idx 1, got %+v", merged[1])
+	}
+	if merged[2].Name != "tool.device_only" {
+		t.Fatalf("expected tool.device_only at idx 2, got %+v", merged[2])
 	}
 }
 

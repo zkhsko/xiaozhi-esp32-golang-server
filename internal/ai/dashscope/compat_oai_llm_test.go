@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/database"
 )
@@ -878,5 +879,233 @@ func TestLLMClient_Generate_TypedStructToolResult(t *testing.T) {
 	}
 	if !foundToolResult {
 		t.Fatalf("expected tool message with role=tool in req2, got: %v", req2Messages)
+	}
+}
+
+type mockDeviceSender struct {
+	mu     sync.Mutex
+	client *agentkit.DeviceMCPClient
+	calls  []map[string]any
+}
+
+func (m *mockDeviceSender) SendMCPPayload(ctx context.Context, payload json.RawMessage) error {
+	var req struct {
+		Id     int64           `json:"id"`
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return err
+	}
+
+	go func() {
+		switch req.Method {
+		case "initialize":
+			resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":"2024-11-05","capabilities":{}}}`, req.Id)
+			m.client.HandlePayload(json.RawMessage(resp))
+		case "tools/list":
+			resp := fmt.Sprintf(`{
+				"jsonrpc": "2.0",
+				"id": %d,
+				"result": {
+					"tools": [
+						{
+							"name": "self.audio_speaker.set_volume",
+							"description": "Set the volume of the audio speaker",
+							"inputSchema": {
+								"type": "object",
+								"properties": {
+									"volume": {
+										"type": "integer",
+										"minimum": 0,
+										"maximum": 100
+									}
+								},
+								"required": ["volume"]
+							}
+						}
+					]
+				}
+			}`, req.Id)
+			m.client.HandlePayload(json.RawMessage(resp))
+		case "tools/call":
+			var p map[string]any
+			_ = json.Unmarshal(req.Params, &p)
+			m.mu.Lock()
+			m.calls = append(m.calls, p)
+			m.mu.Unlock()
+
+			resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"true"}],"isError":false}}`, req.Id)
+			m.client.HandlePayload(json.RawMessage(resp))
+		}
+	}()
+
+	return nil
+}
+
+func TestLLMClient_Generate_DynamicDeviceMCPTool_EndToEnd(t *testing.T) {
+	// 1. 模拟设备工具发现
+	sender := &mockDeviceSender{}
+	mcpClient := agentkit.NewDeviceMCPClient(sender)
+	sender.client = mcpClient
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := mcpClient.Discover(ctx); err != nil {
+		t.Fatalf("DeviceMCPClient Discover failed: %v", err)
+	}
+
+	tools := mcpClient.Tools()
+	if len(tools) != 1 {
+		t.Fatalf("expected 1 device tool discovered, got %d", len(tools))
+	}
+	if tools[0].Name != "self.audio_speaker.set_volume" {
+		t.Fatalf("unexpected tool name %s", tools[0].Name)
+	}
+
+	// 2. 模拟 LLM 服务端（OpenAI SSE 协议）
+	var turn int32
+	var reqBodies []map[string]any
+	var reqBodiesMu sync.Mutex
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err == nil {
+			var parsed map[string]any
+			if err := json.Unmarshal(bodyBytes, &parsed); err == nil {
+				reqBodiesMu.Lock()
+				reqBodies = append(reqBodies, parsed)
+				reqBodiesMu.Unlock()
+			}
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected flusher")
+		}
+
+		currentTurn := atomic.AddInt32(&turn, 1)
+
+		if currentTurn == 1 {
+			// 第一轮：模型返回 tool call
+			chunks := []string{
+				`data: {"id":"chatcmpl-mcp-1","choices":[{"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_vol_1","type":"function","function":{"name":"self.audio_speaker.set_volume","arguments":"{\"volume\":80}"}}]},"index":0}]}` + "\n\n",
+				"data: [DONE]\n\n",
+			}
+			for _, c := range chunks {
+				_, _ = fmt.Fprint(w, c)
+				flusher.Flush()
+			}
+		} else if currentTurn == 2 {
+			// 第二轮：接收工具执行结果并返回最终回答
+			chunks := []string{
+				`data: {"id":"chatcmpl-mcp-2","choices":[{"delta":{"role":"assistant","content":"音量已调节为 80。"},"index":0}]}` + "\n\n",
+				"data: [DONE]\n\n",
+			}
+			for _, c := range chunks {
+				_, _ = fmt.Fprint(w, c)
+				flusher.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	cfg := &database.LLMConfig{
+		APIKey:              "test-key",
+		Endpoint:            server.URL,
+		Model:               "qwen-plus",
+		FirstTokenTimeoutMS: 5000,
+		OverallTimeoutMS:    10000,
+	}
+	llmClient, err := NewLLMClient(cfg)
+	if err != nil {
+		t.Fatalf("NewLLMClient failed: %v", err)
+	}
+
+	// 3. 执行流式 Generate
+	finalText, err := llmClient.Generate(
+		ctx,
+		ai.LLMRequest{
+			Messages: []ai.Message{
+				{Role: ai.RoleUser, Content: "请把音量调到 80"},
+			},
+			Tools:    tools,
+			MaxTurns: 8,
+		},
+		nil,
+	)
+
+	if err != nil {
+		t.Fatalf("llmClient.Generate failed: %v", err)
+	}
+
+	// 4. 校验最终生成的文本
+	if finalText != "音量已调节为 80。" {
+		t.Fatalf("expected final text '音量已调节为 80。', got %q", finalText)
+	}
+
+	// 5. 校验设备是否收到 tools/call 且参数为 volume: 80
+	sender.mu.Lock()
+	if len(sender.calls) != 1 {
+		t.Fatalf("expected 1 call to device, got %d", len(sender.calls))
+	}
+	call := sender.calls[0]
+	sender.mu.Unlock()
+
+	if call["name"] != "self.audio_speaker.set_volume" {
+		t.Fatalf("expected device call tool name self.audio_speaker.set_volume, got %v", call["name"])
+	}
+	args, ok := call["arguments"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map arguments, got %T (%+v)", call["arguments"], call["arguments"])
+	}
+	if args["volume"].(float64) != 80 {
+		t.Fatalf("expected volume 80, got %v", args["volume"])
+	}
+
+	// 6. 校验模型第一轮请求中 tools Schema 与设备上报一致
+	reqBodiesMu.Lock()
+	defer reqBodiesMu.Unlock()
+
+	if len(reqBodies) != 2 {
+		t.Fatalf("expected 2 turns of model requests, got %d", len(reqBodies))
+	}
+
+	req1Tools, ok := reqBodies[0]["tools"].([]any)
+	if !ok || len(req1Tools) != 1 {
+		t.Fatalf("expected 1 tool in req1 tools, got %v", reqBodies[0]["tools"])
+	}
+	tool0 := req1Tools[0].(map[string]any)
+	fn := tool0["function"].(map[string]any)
+	if fn["name"] != "self.audio_speaker.set_volume" {
+		t.Fatalf("expected tool name in schema self.audio_speaker.set_volume, got %v", fn["name"])
+	}
+
+	// 7. 校验模型第二轮请求中 messages 包含 role=tool 及其内容
+	req2Msgs, ok := reqBodies[1]["messages"].([]any)
+	if !ok || len(req2Msgs) < 2 {
+		t.Fatalf("expected messages in req2, got %v", reqBodies[1]["messages"])
+	}
+
+	var foundToolMessage bool
+	for _, m := range req2Msgs {
+		msgMap, ok := m.(map[string]any)
+		if ok && msgMap["role"] == "tool" {
+			foundToolMessage = true
+			if msgMap["tool_call_id"] != "call_vol_1" {
+				t.Fatalf("expected tool_call_id call_vol_1, got %v", msgMap["tool_call_id"])
+			}
+			contentStr, _ := msgMap["content"].(string)
+			if !strings.Contains(contentStr, "true") && !strings.Contains(contentStr, "content") {
+				t.Fatalf("expected tool response content in tool message, got %q", contentStr)
+			}
+		}
+	}
+	if !foundToolMessage {
+		t.Fatalf("expected role=tool message in second turn request, got: %v", req2Msgs)
 	}
 }

@@ -161,9 +161,12 @@ func (s *Session) orchestrateLLMAndTTS(ctx context.Context, gen uint64, userText
 	// 启动后台协程逐句消费分句通道并执行 TTS 与 Pacer 音字严格入队
 	go s.consumeSentencesTTS(ctx, gen, sentenceCh, pacer, pcmDone)
 
-	// 2. 构造上下文消息与工具列表并执行流式生成
+	// 2. 构造上下文消息与聚合后的当前代次专属工具快照
+	// buildToolSnapshot 聚合了服务端内置工具与设备动态 MCP 工具，并绑定带有代次和预算限制的 Run 闭包。
+	// 将快照传入 LLMRequest.Tools 后，由底层的 Genkit/DashScope 适配器全权负责模型侧的 Function Calling、
+	// 多轮工具触发、结果回填与上下文拼接，Session 层无需手写 Prompt 拼装或工具状态机。
 	messages := s.buildLLMMessages(userText)
-	tools := s.availableTools(gen)
+	tools := s.buildToolSnapshot(ctx, gen)
 	splitter := NewSentenceSplitter()
 	sessionId := s.SessionId()
 

@@ -1,6 +1,7 @@
 package agentkit
 
 import (
+	"context"
 	"time"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
@@ -30,6 +31,12 @@ func GetCurrentTimeTool() ai.Tool {
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
+		},
+		Run: func(ctx context.Context, input any) (any, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return ExecuteGetCurrentTime()
 		},
 	}
 }
