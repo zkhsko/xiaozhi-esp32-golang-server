@@ -21,6 +21,11 @@ type CloseSessionOutput struct {
 	Message string `json:"message"`
 }
 
+// ShouldCloseSession 实现 SessionCloser 接口，指示当前轮次结束后关闭会话。
+func (o *CloseSessionOutput) ShouldCloseSession() bool {
+	return o != nil && o.Status == "success"
+}
+
 // GetCloseSessionTool 返回关闭会话工具的描述与参数定义。
 func GetCloseSessionTool() ai.Tool {
 	return ai.Tool{

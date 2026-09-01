@@ -61,51 +61,53 @@ func TestAggregateTools(t *testing.T) {
 	}
 }
 
-func TestIsBuiltinTool(t *testing.T) {
-	if !IsBuiltinTool(ToolGetCurrentTime) {
-		t.Fatalf("expected %s to be builtin tool", ToolGetCurrentTime)
+func TestCloseSessionOutput_SessionCloser(t *testing.T) {
+	out := &CloseSessionOutput{Status: "success"}
+	var closer SessionCloser = out
+	if !closer.ShouldCloseSession() {
+		t.Fatal("expected ShouldCloseSession to return true for success status")
 	}
-	if !IsBuiltinTool(ToolCloseSession) {
-		t.Fatalf("expected %s to be builtin tool", ToolCloseSession)
+
+	failedOut := &CloseSessionOutput{Status: "failed"}
+	if failedOut.ShouldCloseSession() {
+		t.Fatal("expected ShouldCloseSession to return false for failed status")
 	}
-	if IsBuiltinTool("server.unknown_tool") {
-		t.Fatal("expected unknown tool not to be builtin tool")
+
+	var nilOut *CloseSessionOutput
+	if nilOut.ShouldCloseSession() {
+		t.Fatal("expected ShouldCloseSession to return false for nil pointer")
 	}
 }
 
-func TestExecute(t *testing.T) {
+func TestToolRun_DirectExecution(t *testing.T) {
 	ctx := context.Background()
 
-	// 1. 测试 ToolGetCurrentTime
-	timeRes, err := Execute(ctx, ToolGetCurrentTime, nil)
+	// 1. 测试 GetCurrentTimeTool 的 Run
+	timeTool := GetCurrentTimeTool()
+	timeRes, err := timeTool.Run(ctx, nil)
 	if err != nil {
-		t.Fatalf("Execute get_current_time failed: %v", err)
+		t.Fatalf("timeTool.Run failed: %v", err)
 	}
 	timeOut, ok := timeRes.(*GetCurrentTimeOutput)
 	if !ok || timeOut.DateTime == "" {
 		t.Fatalf("expected valid *GetCurrentTimeOutput, got %+v", timeRes)
 	}
 
-	// 2. 测试 ToolCloseSession
-	closeRes, err := Execute(ctx, ToolCloseSession, map[string]any{"reason": "退出"})
+	// 2. 测试 GetCloseSessionTool 的 Run
+	closeTool := GetCloseSessionTool()
+	closeRes, err := closeTool.Run(ctx, map[string]any{"reason": "退出"})
 	if err != nil {
-		t.Fatalf("Execute close_session failed: %v", err)
+		t.Fatalf("closeTool.Run failed: %v", err)
 	}
 	closeOut, ok := closeRes.(*CloseSessionOutput)
 	if !ok || closeOut.Status != "success" {
 		t.Fatalf("expected valid *CloseSessionOutput, got %+v", closeRes)
 	}
 
-	// 3. 测试未定义工具
-	_, err = Execute(ctx, "non_existent_tool", nil)
-	if err == nil {
-		t.Fatal("expected error for non existent tool, got nil")
-	}
-
-	// 4. 测试 Context Canceled
+	// 3. 测试 Context 取消
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = Execute(canceledCtx, ToolGetCurrentTime, nil)
+	_, err = timeTool.Run(canceledCtx, nil)
 	if err == nil {
 		t.Fatal("expected error on canceled context, got nil")
 	}

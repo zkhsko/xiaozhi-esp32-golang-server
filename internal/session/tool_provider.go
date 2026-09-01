@@ -51,152 +51,124 @@ func (p *ToolProvider) BuildSnapshot(ctx context.Context, turnId uint64, session
 		deviceTools = p.mcpBridge.Tools()
 	}
 
-	builtinDefs := agentkit.DefaultTools()
-	mergedDefs := agentkit.AggregateTools(builtinDefs, deviceTools)
+	builtinTools := agentkit.DefaultTools()
+	mergedTools := agentkit.AggregateTools(builtinTools, deviceTools)
+
+	builtinMap := make(map[string]bool, len(builtinTools))
+	for _, t := range builtinTools {
+		builtinMap[t.Name] = true
+	}
 
 	var deviceCallCount atomic.Int32
-	tools := make([]ai.Tool, 0, len(mergedDefs))
+	tools := make([]ai.Tool, 0, len(mergedTools))
 
-	for _, def := range mergedDefs {
-		toolDef := def
-		toolName := toolDef.Name
-		isBuiltin := agentkit.IsBuiltinTool(toolName)
+	for _, tool := range mergedTools {
+		rawTool := tool
+		isDevice := !builtinMap[rawTool.Name]
 
 		tools = append(tools, ai.Tool{
-			Name:        toolName,
-			Description: toolDef.Description,
-			Parameters:  toolDef.Parameters,
-			Run: func(toolCtx context.Context, input any) (any, error) {
-				return p.executeTool(toolCtx, turnId, sessionId, toolDef, isBuiltin, input, effects, &deviceCallCount)
-			},
+			Name:        rawTool.Name,
+			Description: rawTool.Description,
+			Parameters:  rawTool.Parameters,
+			Run:         p.wrapToolRun(sessionId, turnId, rawTool, isDevice, &deviceCallCount, effects),
 		})
 	}
 
 	return tools
 }
 
-// executeTool 执行单次工具调用。
-func (p *ToolProvider) executeTool(
-	ctx context.Context,
-	turnId uint64,
+// wrapToolRun 包装底层工具的唯一 Run 实现，负责代次上下文隔离、设备预算限制、日志打点与副作用提取。
+func (p *ToolProvider) wrapToolRun(
 	sessionId string,
-	toolDef ai.Tool,
-	isBuiltin bool,
-	input any,
-	effects *TurnEffects,
+	turnId uint64,
+	rawTool ai.Tool,
+	isDevice bool,
 	deviceCallCount *atomic.Int32,
-) (any, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	if isBuiltin {
-		p.logger.Info("executing server tool call",
-			"session_id", sessionId,
-			"turn_id", turnId,
-			"tool_name", toolDef.Name,
-		)
-
-		var result any
-		var err error
-		if toolDef.Run != nil {
-			result, err = toolDef.Run(ctx, input)
-		} else {
-			result, err = agentkit.Execute(ctx, toolDef.Name, input)
+	effects *TurnEffects,
+) ai.ToolFunc {
+	return func(ctx context.Context, input any) (any, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
+		if rawTool.Run == nil {
+			return nil, fmt.Errorf("tool %s has no run handler", rawTool.Name)
+		}
+
+		// 限制每轮大模型调用设备工具的最大次数，防止死循环冲垮 MCU
+		if isDevice && deviceCallCount != nil && deviceCallCount.Add(1) > MaxGenerationDeviceToolCalls {
+			p.logger.Warn("device tool call limit exceeded in current generation",
+				"session_id", sessionId,
+				"turn_id", turnId,
+				"tool_name", rawTool.Name,
+				"limit", MaxGenerationDeviceToolCalls,
+			)
+			return map[string]any{
+				"isError": true,
+				"content": []any{
+					map[string]any{
+						"type": "text",
+						"text": fmt.Sprintf("device tool call limit exceeded in current turn (max %d)", MaxGenerationDeviceToolCalls),
+					},
+				},
+			}, nil
+		}
+
+		toolType := "server"
+		if isDevice {
+			toolType = "device"
+		}
+
+		p.logger.Info("executing "+toolType+" tool call",
+			"session_id", sessionId,
+			"turn_id", turnId,
+			"tool_name", rawTool.Name,
+		)
+
+		result, err := rawTool.Run(ctx, input)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 				return nil, err
 			}
-			p.logger.Warn("server tool call failed",
+
+			p.logger.Warn(toolType+" tool call failed",
 				"session_id", sessionId,
 				"turn_id", turnId,
-				"tool_name", toolDef.Name,
+				"tool_name", rawTool.Name,
 				"error", err,
 			)
+
+			if isDevice {
+				return map[string]any{
+					"isError": true,
+					"content": []any{
+						map[string]any{
+							"type": "text",
+							"text": err.Error(),
+						},
+					},
+				}, nil
+			}
+
 			return map[string]any{
 				"status":  "error",
 				"message": err.Error(),
 			}, nil
 		}
 
-		// 若工具为 close_session 且执行成功，在当前轮次副作用中记录关闭意图
-		if toolDef.Name == agentkit.ToolCloseSession && effects != nil {
-			effects.CloseSession = true
+		// 检查工具返回值是否声明了会话关闭意图
+		if closer, ok := result.(agentkit.SessionCloser); ok && closer.ShouldCloseSession() {
+			if effects != nil {
+				effects.CloseSession = true
+			}
 		}
 
-		p.logger.Info("server tool call executed successfully",
+		p.logger.Info(toolType+" tool call executed successfully",
 			"session_id", sessionId,
 			"turn_id", turnId,
-			"tool_name", toolDef.Name,
+			"tool_name", rawTool.Name,
 		)
+
 		return result, nil
 	}
-
-	// 设备 MCP 工具调用
-	if p.mcpBridge == nil || !p.mcpBridge.IsEnabled() {
-		p.logger.Warn("device tool call rejected: mcp disabled or not configured",
-			"session_id", sessionId,
-			"turn_id", turnId,
-			"tool_name", toolDef.Name,
-		)
-		return map[string]any{
-			"isError": true,
-			"content": []any{
-				map[string]any{
-					"type": "text",
-					"text": fmt.Sprintf("tool %q is unavailable: device mcp disabled", toolDef.Name),
-				},
-			},
-		}, nil
-	}
-
-	if deviceCallCount != nil && deviceCallCount.Add(1) > MaxGenerationDeviceToolCalls {
-		p.logger.Warn("device tool call limit exceeded in current generation",
-			"session_id", sessionId,
-			"turn_id", turnId,
-			"tool_name", toolDef.Name,
-			"limit", MaxGenerationDeviceToolCalls,
-		)
-		return map[string]any{
-			"isError": true,
-			"content": []any{
-				map[string]any{
-					"type": "text",
-					"text": fmt.Sprintf("device tool call limit exceeded in current turn (max %d)", MaxGenerationDeviceToolCalls),
-				},
-			},
-		}, nil
-	}
-
-	p.logger.Info("executing device tool call",
-		"session_id", sessionId,
-		"turn_id", turnId,
-		"tool_name", toolDef.Name,
-	)
-
-	result, err := p.mcpBridge.CallTool(ctx, toolDef.Name, input)
-	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-			return nil, err
-		}
-		p.logger.Warn("device tool call failed with error",
-			"session_id", sessionId,
-			"turn_id", turnId,
-			"tool_name", toolDef.Name,
-			"error", err,
-		)
-		return map[string]any{
-			"isError": true,
-			"content": []any{
-				map[string]any{
-					"type": "text",
-					"text": err.Error(),
-				},
-			},
-		}, nil
-	}
-
-	return result, nil
 }

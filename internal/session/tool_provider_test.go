@@ -36,6 +36,14 @@ func (d *dummySender) SendBinary(ctx context.Context, payload []byte) error {
 	return nil
 }
 
+type customCloserResult struct {
+	closed bool
+}
+
+func (c *customCloserResult) ShouldCloseSession() bool {
+	return c != nil && c.closed
+}
+
 func TestToolProvider_BuildSnapshot_BuiltinToolsOnly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -101,6 +109,35 @@ func TestToolProvider_BuildSnapshot_ExecuteServerToolClosure(t *testing.T) {
 
 	if !effects.CloseSession {
 		t.Fatal("expected effects.CloseSession to be true after executing close_session")
+	}
+}
+
+func TestToolProvider_WrapToolRun_CustomSessionCloserInterface(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	provider := NewToolProvider(nil, slog.Default())
+	effects := &TurnEffects{}
+
+	customTool := ai.Tool{
+		Name:        "custom.power_off",
+		Description: "custom tool implementing SessionCloser",
+		Run: func(c context.Context, input any) (any, error) {
+			return &customCloserResult{closed: true}, nil
+		},
+	}
+
+	wrappedFunc := provider.wrapToolRun("sess-custom-closer", 1, customTool, false, nil, effects)
+	res, err := wrappedFunc(ctx, nil)
+	if err != nil {
+		t.Fatalf("wrappedFunc failed: %v", err)
+	}
+	closer, ok := res.(*customCloserResult)
+	if !ok || !closer.closed {
+		t.Fatalf("expected *customCloserResult with closed=true, got %+v", res)
+	}
+	if !effects.CloseSession {
+		t.Fatal("expected effects.CloseSession to be true after custom SessionCloser execution")
 	}
 }
 
