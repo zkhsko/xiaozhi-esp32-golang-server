@@ -33,9 +33,6 @@ var ErrStreamClosed = errors.New("tts stream is closed")
 // ErrStreamFailed 表示流式语音合成会话已发生不可恢复错误，连接不可继续使用。
 var ErrStreamFailed = errors.New("tts stream has failed")
 
-// ErrFirstAudioTimeout 表示等待首包有效音频数据超时。
-var ErrFirstAudioTimeout = errors.New("first audio timeout")
-
 // ErrSentenceTimeout 表示单句语音合成总耗时超时。
 var ErrSentenceTimeout = errors.New("sentence timeout")
 
@@ -44,14 +41,13 @@ var ErrNoAudioReceived = errors.New("no audio received")
 
 // TTSClient 实现基于 DashScope WebSocket 流式协议的语音合成客户端。
 type TTSClient struct {
-	endpoint          string
-	apiKey            string
-	model             string
-	voice             string
-	connectTimeout    time.Duration
-	firstAudioTimeout time.Duration
-	sentenceTimeout   time.Duration
-	httpClient        *http.Client
+	endpoint        string
+	apiKey          string
+	model           string
+	voice           string
+	connectTimeout  time.Duration
+	sentenceTimeout time.Duration
+	httpClient      *http.Client
 }
 
 // 确保 TTSClient 实现了 ai.TTSClient 接口。
@@ -87,10 +83,6 @@ func NewTTSClient(cfg *database.TTSConfig, voice string) (*TTSClient, error) {
 	if connectTimeout <= 0 {
 		connectTimeout = 5 * time.Second
 	}
-	firstAudioTimeout := time.Duration(cfg.FirstAudioTimeoutMS) * time.Millisecond
-	if firstAudioTimeout <= 0 {
-		firstAudioTimeout = 5 * time.Second
-	}
 	sentenceTimeout := time.Duration(cfg.SentenceTimeoutMS) * time.Millisecond
 	if sentenceTimeout <= 0 {
 		sentenceTimeout = 10 * time.Second
@@ -110,14 +102,13 @@ func NewTTSClient(cfg *database.TTSConfig, voice string) (*TTSClient, error) {
 	}
 
 	return &TTSClient{
-		endpoint:          endpoint,
-		apiKey:            apiKey,
-		model:             model,
-		voice:             v,
-		connectTimeout:    connectTimeout,
-		firstAudioTimeout: firstAudioTimeout,
-		sentenceTimeout:   sentenceTimeout,
-		httpClient:        httpClient,
+		endpoint:        endpoint,
+		apiKey:          apiKey,
+		model:           model,
+		voice:           v,
+		connectTimeout:  connectTimeout,
+		sentenceTimeout: sentenceTimeout,
+		httpClient:      httpClient,
 	}, nil
 }
 
@@ -296,17 +287,11 @@ func (s *TTSStream) SynthesizeSentence(
 	s.mu.Unlock()
 
 	var (
-		firstAudioReceived atomic.Bool
-		firstAudioTimedOut atomic.Bool
-		sentenceTimedOut   atomic.Bool
-		firstAudioTimer    *time.Timer
+		sentenceTimedOut atomic.Bool
 	)
 
 	// 退出时统一清理状态；若经历过取消，连接必须关闭且禁止复用
 	defer func() {
-		if firstAudioTimer != nil {
-			firstAudioTimer.Stop()
-		}
 		s.mu.Lock()
 		if s.cleanupTimer != nil {
 			s.cleanupTimer.Stop()
@@ -561,14 +546,6 @@ func (s *TTSStream) SynthesizeSentence(
 				return fmt.Errorf("write continue-task: %w", err)
 			}
 
-			// continue-task 成功写出后，启动首音频超时定时器
-			firstAudioTimer = time.AfterFunc(s.client.firstAudioTimeout, func() {
-				if !firstAudioReceived.Load() {
-					firstAudioTimedOut.Store(true)
-					_ = s.triggerCancel(ErrFirstAudioTimeout)
-				}
-			})
-
 			// 检查是否在 continue-task 写出后已被取消或收到终态
 			s.mu.Lock()
 			cancelling = (s.state == stateCancelling || s.state == stateClosed || s.terminalReceived || s.cancelFinishSent)
@@ -616,15 +593,10 @@ func (s *TTSStream) SynthesizeSentence(
 				continue
 			}
 			if len(data) == 0 {
-				// 空二进制消息忽略，不视为有效音频，不停止首音频计时器
+				// 空二进制消息忽略，不视为有效音频
 				continue
 			}
 
-			if firstAudioReceived.CompareAndSwap(false, true) {
-				if firstAudioTimer != nil {
-					firstAudioTimer.Stop()
-				}
-			}
 			nonEmptyAudioCount++
 
 			if err := onPCM(ctx, data); err != nil {

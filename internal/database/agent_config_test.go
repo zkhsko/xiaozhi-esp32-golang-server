@@ -40,16 +40,15 @@ func createTestComponents(t *testing.T, db *Database, ctx context.Context) (asrI
 	}
 
 	tts := &TTSConfig{
-		Name:                "测试TTS",
-		Provider:            "dashscope",
-		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
-		APIKey:              "sk-test-tts-key",
-		Model:               "cosyvoice-v1",
-		Voices:              `["longanlingxi","longxiaochun"]`,
-		ConnectTimeoutMS:    5000,
-		FirstAudioTimeoutMS: 5000,
-		SentenceTimeoutMS:   10000,
-		Enabled:             true,
+		Name:              "测试TTS",
+		Provider:          "dashscope",
+		Endpoint:          "wss://dashscope.aliyuncs.com/api-v1/ws",
+		APIKey:            "sk-test-tts-key",
+		Model:             "cosyvoice-v1",
+		Voices:            `["longanlingxi","longxiaochun"]`,
+		ConnectTimeoutMS:  5000,
+		SentenceTimeoutMS: 10000,
+		Enabled:           true,
 	}
 	if err := db.CreateTTSConfig(ctx, tts); err != nil {
 		t.Fatalf("create test tts failed: %v", err)
@@ -514,8 +513,6 @@ func TestAgentConfig_ActivateAgent(t *testing.T) {
 		t.Errorf("expected ErrInvalidAgentConfigId, got %v", err)
 	}
 }
-
-
 
 func TestAgentConfig_DeleteAndBatchDelete(t *testing.T) {
 	db := setupTestDB(t)

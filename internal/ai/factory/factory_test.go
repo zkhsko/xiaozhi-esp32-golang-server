@@ -115,14 +115,13 @@ func TestFactory_CreateTTSClient(t *testing.T) {
 		}
 		for _, p := range validProviders {
 			cfg := &database.TTSConfig{
-				Provider:            p,
-				Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
-				APIKey:              "test-api-key",
-				Model:               "qwen-audio-3.0-tts-flash",
-				ConnectTimeoutMS:    5000,
-				FirstAudioTimeoutMS: 5000,
-				SentenceTimeoutMS:   10000,
-				ProxyURL:            "http://127.0.0.1:8080",
+				Provider:          p,
+				Endpoint:          "wss://dashscope.aliyuncs.com/api-v1/ws",
+				APIKey:            "test-api-key",
+				Model:             "qwen-audio-3.0-tts-flash",
+				ConnectTimeoutMS:  5000,
+				SentenceTimeoutMS: 10000,
+				ProxyURL:          "http://127.0.0.1:8080",
 			}
 			client, err := CreateTTSClient(cfg, "longxiaochun")
 			if err != nil {

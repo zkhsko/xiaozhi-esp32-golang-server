@@ -25,20 +25,19 @@ type TTSConfigStore interface {
 
 // TTSConfigItem 表示单条 TTS 配置 DTO。
 type TTSConfigItem struct {
-	Id                  uint64    `json:"id"`
-	Name                string    `json:"name"`
-	Provider            string    `json:"provider"`
-	Endpoint            string    `json:"endpoint"`
-	HasAPIKey           bool      `json:"has_api_key"` // 是否已配置 API Key（脱敏，不输出明文）
-	Model               string    `json:"model"`
-	Voices              string    `json:"voices"`
-	ProxyURL            string    `json:"proxy_url"`
-	ConnectTimeoutMS    int64     `json:"connect_timeout_ms"`
-	FirstAudioTimeoutMS int64     `json:"first_audio_timeout_ms"`
-	SentenceTimeoutMS   int64     `json:"sentence_timeout_ms"`
-	Enabled             bool      `json:"enabled"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	Id                uint64    `json:"id"`
+	Name              string    `json:"name"`
+	Provider          string    `json:"provider"`
+	Endpoint          string    `json:"endpoint"`
+	HasAPIKey         bool      `json:"has_api_key"` // 是否已配置 API Key（脱敏，不输出明文）
+	Model             string    `json:"model"`
+	Voices            string    `json:"voices"`
+	ProxyURL          string    `json:"proxy_url"`
+	ConnectTimeoutMS  int64     `json:"connect_timeout_ms"`
+	SentenceTimeoutMS int64     `json:"sentence_timeout_ms"`
+	Enabled           bool      `json:"enabled"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // TTSConfigListData TTS 配置列表响应数据。
@@ -51,18 +50,17 @@ type TTSConfigListData struct {
 
 // SaveTTSConfigRequest 保存或更新 TTS 配置请求体。
 type SaveTTSConfigRequest struct {
-	Id                  uint64 `json:"id"`
-	Name                string `json:"name"`
-	Provider            string `json:"provider"`
-	Endpoint            string `json:"endpoint"`
-	APIKey              string `json:"api_key"` // write-only；更新时留空表示保留原 Key
-	Model               string `json:"model"`
-	Voices              string `json:"voices"`
-	ProxyURL            string `json:"proxy_url"`
-	ConnectTimeoutMS    int64  `json:"connect_timeout_ms"`
-	FirstAudioTimeoutMS int64  `json:"first_audio_timeout_ms"`
-	SentenceTimeoutMS   int64  `json:"sentence_timeout_ms"`
-	Enabled             *bool  `json:"enabled"`
+	Id                uint64 `json:"id"`
+	Name              string `json:"name"`
+	Provider          string `json:"provider"`
+	Endpoint          string `json:"endpoint"`
+	APIKey            string `json:"api_key"` // write-only；更新时留空表示保留原 Key
+	Model             string `json:"model"`
+	Voices            string `json:"voices"`
+	ProxyURL          string `json:"proxy_url"`
+	ConnectTimeoutMS  int64  `json:"connect_timeout_ms"`
+	SentenceTimeoutMS int64  `json:"sentence_timeout_ms"`
+	Enabled           *bool  `json:"enabled"`
 }
 
 // DeleteTTSConfigRequest 删除单条 TTS 配置请求体。
@@ -126,20 +124,19 @@ func (h *AdminTTSHandler) handleListTTSConfigs(w http.ResponseWriter, r *http.Re
 	items := make([]TTSConfigItem, 0, len(configs))
 	for _, cfg := range configs {
 		items = append(items, TTSConfigItem{
-			Id:                  cfg.Id,
-			Name:                cfg.Name,
-			Provider:            cfg.Provider,
-			Endpoint:            cfg.Endpoint,
-			HasAPIKey:           len(strings.TrimSpace(cfg.APIKey)) > 0,
-			Model:               cfg.Model,
-			Voices:              cfg.Voices,
-			ProxyURL:            cfg.ProxyURL,
-			ConnectTimeoutMS:    cfg.ConnectTimeoutMS,
-			FirstAudioTimeoutMS: cfg.FirstAudioTimeoutMS,
-			SentenceTimeoutMS:   cfg.SentenceTimeoutMS,
-			Enabled:             cfg.Enabled,
-			CreatedAt:           cfg.CreatedAt,
-			UpdatedAt:           cfg.UpdatedAt,
+			Id:                cfg.Id,
+			Name:              cfg.Name,
+			Provider:          cfg.Provider,
+			Endpoint:          cfg.Endpoint,
+			HasAPIKey:         len(strings.TrimSpace(cfg.APIKey)) > 0,
+			Model:             cfg.Model,
+			Voices:            cfg.Voices,
+			ProxyURL:          cfg.ProxyURL,
+			ConnectTimeoutMS:  cfg.ConnectTimeoutMS,
+			SentenceTimeoutMS: cfg.SentenceTimeoutMS,
+			Enabled:           cfg.Enabled,
+			CreatedAt:         cfg.CreatedAt,
+			UpdatedAt:         cfg.UpdatedAt,
 		})
 	}
 
@@ -172,11 +169,6 @@ func (h *AdminTTSHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Req
 		connectTimeout = 5000
 	}
 
-	firstAudioTimeout := req.FirstAudioTimeoutMS
-	if firstAudioTimeout == 0 {
-		firstAudioTimeout = 5000
-	}
-
 	sentenceTimeout := req.SentenceTimeoutMS
 	if sentenceTimeout == 0 {
 		sentenceTimeout = 10000
@@ -197,17 +189,16 @@ func (h *AdminTTSHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Req
 	if req.Id == 0 {
 		// 创建新配置
 		cfg := &database.TTSConfig{
-			Name:                strings.TrimSpace(req.Name),
-			Provider:            provider,
-			Endpoint:            strings.TrimSpace(req.Endpoint),
-			APIKey:              strings.TrimSpace(req.APIKey),
-			Model:               strings.TrimSpace(req.Model),
-			Voices:              voices,
-			ProxyURL:            strings.TrimSpace(req.ProxyURL),
-			ConnectTimeoutMS:    connectTimeout,
-			FirstAudioTimeoutMS: firstAudioTimeout,
-			SentenceTimeoutMS:   sentenceTimeout,
-			Enabled:             enabled,
+			Name:              strings.TrimSpace(req.Name),
+			Provider:          provider,
+			Endpoint:          strings.TrimSpace(req.Endpoint),
+			APIKey:            strings.TrimSpace(req.APIKey),
+			Model:             strings.TrimSpace(req.Model),
+			Voices:            voices,
+			ProxyURL:          strings.TrimSpace(req.ProxyURL),
+			ConnectTimeoutMS:  connectTimeout,
+			SentenceTimeoutMS: sentenceTimeout,
+			Enabled:           enabled,
 		}
 
 		if err := h.store.CreateTTSConfig(r.Context(), cfg); err != nil {
@@ -219,20 +210,19 @@ func (h *AdminTTSHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Req
 			Success: true,
 			Message: "TTS 配置创建成功",
 			Data: TTSConfigItem{
-				Id:                  cfg.Id,
-				Name:                cfg.Name,
-				Provider:            cfg.Provider,
-				Endpoint:            cfg.Endpoint,
-				HasAPIKey:           len(cfg.APIKey) > 0,
-				Model:               cfg.Model,
-				Voices:              cfg.Voices,
-				ProxyURL:            cfg.ProxyURL,
-				ConnectTimeoutMS:    cfg.ConnectTimeoutMS,
-				FirstAudioTimeoutMS: cfg.FirstAudioTimeoutMS,
-				SentenceTimeoutMS:   cfg.SentenceTimeoutMS,
-				Enabled:             cfg.Enabled,
-				CreatedAt:           cfg.CreatedAt,
-				UpdatedAt:           cfg.UpdatedAt,
+				Id:                cfg.Id,
+				Name:              cfg.Name,
+				Provider:          cfg.Provider,
+				Endpoint:          cfg.Endpoint,
+				HasAPIKey:         len(cfg.APIKey) > 0,
+				Model:             cfg.Model,
+				Voices:            cfg.Voices,
+				ProxyURL:          cfg.ProxyURL,
+				ConnectTimeoutMS:  cfg.ConnectTimeoutMS,
+				SentenceTimeoutMS: cfg.SentenceTimeoutMS,
+				Enabled:           cfg.Enabled,
+				CreatedAt:         cfg.CreatedAt,
+				UpdatedAt:         cfg.UpdatedAt,
 			},
 		})
 		return
@@ -267,18 +257,17 @@ func (h *AdminTTSHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Req
 	}
 
 	updatedCfg := &database.TTSConfig{
-		Id:                  req.Id,
-		Name:                strings.TrimSpace(req.Name),
-		Provider:            provider,
-		Endpoint:            strings.TrimSpace(req.Endpoint),
-		APIKey:              apiKey,
-		Model:               strings.TrimSpace(req.Model),
-		Voices:              voices,
-		ProxyURL:            strings.TrimSpace(req.ProxyURL),
-		ConnectTimeoutMS:    connectTimeout,
-		FirstAudioTimeoutMS: firstAudioTimeout,
-		SentenceTimeoutMS:   sentenceTimeout,
-		Enabled:             enabled,
+		Id:                req.Id,
+		Name:              strings.TrimSpace(req.Name),
+		Provider:          provider,
+		Endpoint:          strings.TrimSpace(req.Endpoint),
+		APIKey:            apiKey,
+		Model:             strings.TrimSpace(req.Model),
+		Voices:            voices,
+		ProxyURL:          strings.TrimSpace(req.ProxyURL),
+		ConnectTimeoutMS:  connectTimeout,
+		SentenceTimeoutMS: sentenceTimeout,
+		Enabled:           enabled,
 	}
 
 	if err := h.store.UpdateTTSConfigById(r.Context(), updatedCfg); err != nil {
@@ -290,19 +279,18 @@ func (h *AdminTTSHandler) handleSaveTTSConfig(w http.ResponseWriter, r *http.Req
 		Success: true,
 		Message: "TTS 配置更新成功",
 		Data: TTSConfigItem{
-			Id:                  updatedCfg.Id,
-			Name:                updatedCfg.Name,
-			Provider:            updatedCfg.Provider,
-			Endpoint:            updatedCfg.Endpoint,
-			HasAPIKey:           len(apiKey) > 0,
-			Model:               updatedCfg.Model,
-			Voices:              updatedCfg.Voices,
-			ProxyURL:            updatedCfg.ProxyURL,
-			ConnectTimeoutMS:    updatedCfg.ConnectTimeoutMS,
-			FirstAudioTimeoutMS: updatedCfg.FirstAudioTimeoutMS,
-			SentenceTimeoutMS:   updatedCfg.SentenceTimeoutMS,
-			Enabled:             updatedCfg.Enabled,
-			UpdatedAt:           time.Now(),
+			Id:                updatedCfg.Id,
+			Name:              updatedCfg.Name,
+			Provider:          updatedCfg.Provider,
+			Endpoint:          updatedCfg.Endpoint,
+			HasAPIKey:         len(apiKey) > 0,
+			Model:             updatedCfg.Model,
+			Voices:            updatedCfg.Voices,
+			ProxyURL:          updatedCfg.ProxyURL,
+			ConnectTimeoutMS:  updatedCfg.ConnectTimeoutMS,
+			SentenceTimeoutMS: updatedCfg.SentenceTimeoutMS,
+			Enabled:           updatedCfg.Enabled,
+			UpdatedAt:         time.Now(),
 		},
 	})
 }

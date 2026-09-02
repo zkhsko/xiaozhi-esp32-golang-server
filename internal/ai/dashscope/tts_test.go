@@ -1,6 +1,7 @@
 package dashscope
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -113,13 +114,12 @@ func TestNewTTSClient_Validation(t *testing.T) {
 		{
 			name: "valid config with custom values and proxy",
 			cfg: &database.TTSConfig{
-				Endpoint:            "wss://test.maas.aliyuncs.com/api-ws/v1/inference",
-				APIKey:              "sk-test",
-				Model:               "qwen-audio-3.0-tts-flash",
-				ProxyURL:            "http://127.0.0.1:8080",
-				ConnectTimeoutMS:    3000,
-				FirstAudioTimeoutMS: 4000,
-				SentenceTimeoutMS:   8000,
+				Endpoint:          "wss://test.maas.aliyuncs.com/api-ws/v1/inference",
+				APIKey:            "sk-test",
+				Model:             "qwen-audio-3.0-tts-flash",
+				ProxyURL:          "http://127.0.0.1:8080",
+				ConnectTimeoutMS:  3000,
+				SentenceTimeoutMS: 8000,
 			},
 			voice: "longxiaochun",
 		},
@@ -152,9 +152,6 @@ func TestNewTTSClient_Validation(t *testing.T) {
 			}
 			if client.connectTimeout <= 0 {
 				t.Errorf("expected positive connect timeout, got %v", client.connectTimeout)
-			}
-			if client.firstAudioTimeout <= 0 {
-				t.Errorf("expected positive first audio timeout, got %v", client.firstAudioTimeout)
 			}
 			if client.sentenceTimeout <= 0 {
 				t.Errorf("expected positive sentence timeout, got %v", client.sentenceTimeout)
@@ -1722,11 +1719,8 @@ func TestTTSStream_ProtocolErrorsAndTaskFailed(t *testing.T) {
 	}
 }
 
-func TestTTSStream_Timeout_FirstAudioTimeout(t *testing.T) {
-	var (
-		cancelReceived atomic.Bool
-		serverDone     = make(chan struct{})
-	)
+func TestTTSStream_DelayedFirstAudio_Success(t *testing.T) {
+	serverDone := make(chan struct{})
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
@@ -1761,42 +1755,39 @@ func TestTTSStream_Timeout_FirstAudioTimeout(t *testing.T) {
 			return
 		}
 
-		// 故意不发送 PCM 音频数据，持续读取直到客户端超时后发送取消指令或断开连接
-		for {
-			msgType, data, err := conn.Read(ctx)
-			if err != nil {
-				return
-			}
-			if msgType == websocket.MessageText {
-				var finishMsg ttsFinishTaskMessage
-				if err := json.Unmarshal(data, &finishMsg); err == nil {
-					if finishMsg.Payload.Input.Directive == "cancel" {
-						cancelReceived.Store(true)
-						finishedResp := map[string]any{
-							"header": map[string]any{
-								"action":  "task-finished",
-								"task_id": taskId,
-								"event":   "task-finished",
-							},
-							"payload": map[string]any{},
-						}
-						finishedBytes, _ := json.Marshal(finishedResp)
-						_ = conn.Write(ctx, websocket.MessageText, finishedBytes)
-						return
-					}
-				}
-			}
+		// 延迟返回首包非空 PCM 音频，模拟首包音频延迟但未超过单句总超时的场景
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-ctx.Done():
+			return
 		}
+
+		if err := conn.Write(ctx, websocket.MessageBinary, []byte{0x01, 0x02}); err != nil {
+			return
+		}
+		if err := conn.Write(ctx, websocket.MessageBinary, []byte{0x03, 0x04}); err != nil {
+			return
+		}
+
+		finishedResp := map[string]any{
+			"header": map[string]any{
+				"action":  "task-finished",
+				"task_id": taskId,
+				"event":   "task-finished",
+			},
+			"payload": map[string]any{},
+		}
+		finishedBytes, _ := json.Marshal(finishedResp)
+		_ = conn.Write(ctx, websocket.MessageText, finishedBytes)
 	}))
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &database.TTSConfig{
-		Endpoint:            wsURL,
-		APIKey:              "sk-test-timeout",
-		Model:               "qwen-audio-3.0-tts-flash",
-		FirstAudioTimeoutMS: 50,
-		SentenceTimeoutMS:   2000,
+		Endpoint:          wsURL,
+		APIKey:            "sk-test-delayed-first-audio",
+		Model:             "qwen-audio-3.0-tts-flash",
+		SentenceTimeoutMS: 2000,
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -1810,42 +1801,25 @@ func TestTTSStream_Timeout_FirstAudioTimeout(t *testing.T) {
 	}
 	defer stream.Close()
 
-	err = stream.SynthesizeSentence(context.Background(), "测试首音频超时", func(ctx context.Context, pcm []byte) error {
+	var receivedData []byte
+	err = stream.SynthesizeSentence(context.Background(), "测试延迟首音频仍可成功合成", func(ctx context.Context, pcm []byte) error {
+		receivedData = append(receivedData, pcm...)
 		return nil
 	})
 
-	if !errors.Is(err, ErrFirstAudioTimeout) {
-		t.Fatalf("expected ErrFirstAudioTimeout, got: %v", err)
+	if err != nil {
+		t.Fatalf("expected successful synthesis with delayed first audio, got: %v", err)
 	}
 
-	ttsStream, ok := stream.(*TTSStream)
-	if !ok {
-		t.Fatalf("expected *TTSStream instance, got %T", stream)
-	}
-
-	ttsStream.mu.Lock()
-	stateVal := ttsStream.state
-	ttsStream.mu.Unlock()
-	if stateVal != stateFailed {
-		t.Errorf("expected stateFailed, got %v", stateVal)
-	}
-
-	// 验证失败后后续调用被拒绝
-	nextErr := stream.SynthesizeSentence(context.Background(), "后续调用应拒绝", func(ctx context.Context, pcm []byte) error {
-		return nil
-	})
-	if !errors.Is(nextErr, ErrStreamFailed) {
-		t.Fatalf("expected ErrStreamFailed on subsequent call, got: %v", nextErr)
+	expectedBytes := []byte{0x01, 0x02, 0x03, 0x04}
+	if !bytes.Equal(receivedData, expectedBytes) {
+		t.Fatalf("expected pcm %v, got %v", expectedBytes, receivedData)
 	}
 
 	select {
 	case <-serverDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for server handler to complete")
-	}
-
-	if !cancelReceived.Load() {
-		t.Error("expected server to receive cancel finish-task directive")
 	}
 }
 
@@ -1924,11 +1898,10 @@ func TestTTSStream_Timeout_SentenceTimeout(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	cfg := &database.TTSConfig{
-		Endpoint:            wsURL,
-		APIKey:              "sk-test-timeout",
-		Model:               "qwen-audio-3.0-tts-flash",
-		FirstAudioTimeoutMS: 500,
-		SentenceTimeoutMS:   60,
+		Endpoint:          wsURL,
+		APIKey:            "sk-test-timeout",
+		Model:             "qwen-audio-3.0-tts-flash",
+		SentenceTimeoutMS: 60,
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")

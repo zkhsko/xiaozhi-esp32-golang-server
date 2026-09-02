@@ -654,7 +654,6 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 		"voices": "[\"longanlingxi\", \"longxiaochun\"]",
 		"proxy_url": "http://127.0.0.1:7890",
 		"connect_timeout_ms": 6000,
-		"first_audio_timeout_ms": 6000,
 		"sentence_timeout_ms": 12000,
 		"enabled": true
 	}`)
@@ -721,7 +720,6 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 		"voices": "[\"longanlingxi\", \"longxiaochun\", \"new_voice\"]",
 		"proxy_url": "socks5://127.0.0.1:1080",
 		"connect_timeout_ms": 8000,
-		"first_audio_timeout_ms": 7000,
 		"sentence_timeout_ms": 15000,
 		"enabled": false
 	}`, ttsId))
@@ -763,8 +761,8 @@ func TestAdminTTSConfigEndpoints(t *testing.T) {
 	}
 
 	// 5. Batch Delete
-	cfgA := &database.TTSConfig{Name: "A", Endpoint: "ws://localhost/a", Model: "m1", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
-	cfgB := &database.TTSConfig{Name: "B", Endpoint: "ws://localhost/b", Model: "m2", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	cfgA := &database.TTSConfig{Name: "A", Endpoint: "ws://localhost/a", Model: "m1", Voices: "[]", ConnectTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	cfgB := &database.TTSConfig{Name: "B", Endpoint: "ws://localhost/b", Model: "m2", Voices: "[]", ConnectTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
 	_ = db.CreateTTSConfig(context.Background(), cfgA)
 	_ = db.CreateTTSConfig(context.Background(), cfgB)
 
@@ -796,7 +794,7 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 	_ = db.CreateASRConfig(ctx, asr)
 	llm := &database.LLMConfig{Name: "默认LLM", Provider: "dashscope", Endpoint: "https://llm.example.com", Model: "qwen-turbo", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
 	_ = db.CreateLLMConfig(ctx, llm)
-	tts := &database.TTSConfig{Name: "默认TTS", Provider: "dashscope", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["voice1"]`, ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	tts := &database.TTSConfig{Name: "默认TTS", Provider: "dashscope", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["voice1"]`, ConnectTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
 	_ = db.CreateTTSConfig(ctx, tts)
 
 	// 1. Create Agent Config via /agent-config/save
@@ -944,7 +942,7 @@ func TestAdminDeviceTypeEndpoints(t *testing.T) {
 	_ = db.CreateASRConfig(ctx, asr)
 	llm := &database.LLMConfig{Name: "LLM-1", Provider: "dashscope", Endpoint: "https://llm.example.com", Model: "qwen-turbo", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
 	_ = db.CreateLLMConfig(ctx, llm)
-	tts := &database.TTSConfig{Name: "TTS-1", Provider: "dashscope", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["v1"]`, ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	tts := &database.TTSConfig{Name: "TTS-1", Provider: "dashscope", Endpoint: "wss://tts.example.com", Model: "tts-v1", Voices: `["v1"]`, ConnectTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
 	_ = db.CreateTTSConfig(ctx, tts)
 
 	agent1 := &database.AgentConfig{Name: "Agent-A", ASRConfigId: asr.Id, LLMConfigId: llm.Id, TTSConfigId: tts.Id, SystemPrompt: "prompt A", Voice: "v1", Enabled: true}

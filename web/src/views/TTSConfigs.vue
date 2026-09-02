@@ -182,12 +182,6 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="first_audio_timeout_ms" label="首音频超时" width="110" align="center">
-          <template #default="{ row }">
-            <span>{{ row.first_audio_timeout_ms }} ms</span>
-          </template>
-        </el-table-column>
-
         <el-table-column prop="sentence_timeout_ms" label="单句超时" width="110" align="center">
           <template #default="{ row }">
             <span>{{ row.sentence_timeout_ms }} ms</span>
@@ -356,18 +350,6 @@
           <div class="form-item-tip">WebSocket 建立连接的最大超时时间（3000 ~ 30000 毫秒）</div>
         </el-form-item>
 
-        <el-form-item label="首音频超时" prop="first_audio_timeout_ms">
-          <el-input-number
-            v-model="configDialog.form.first_audio_timeout_ms"
-            :min="3000"
-            :max="30000"
-            :step="500"
-            style="width: 200px;"
-          />
-          <span style="margin-left: 8px; color: #909399;">毫秒 (ms)</span>
-          <div class="form-item-tip">等待首包音频返回的最大超时时间（3000 ~ 30000 毫秒）</div>
-        </el-form-item>
-
         <el-form-item label="单句超时" prop="sentence_timeout_ms">
           <el-input-number
             v-model="configDialog.form.sentence_timeout_ms"
@@ -482,7 +464,6 @@ const configDialog = reactive({
     api_key: '',
     voices: '[]',
     connect_timeout_ms: 5000,
-    first_audio_timeout_ms: 5000,
     sentence_timeout_ms: 10000,
     enabled: true,
   },
@@ -554,9 +535,6 @@ const configRules: FormRules = {
   ],
   connect_timeout_ms: [
     { required: true, message: '请输入连接超时时间', trigger: 'blur' },
-  ],
-  first_audio_timeout_ms: [
-    { required: true, message: '请输入首音频超时时间', trigger: 'blur' },
   ],
   sentence_timeout_ms: [
     { required: true, message: '请输入单句超时时间', trigger: 'blur' },
@@ -641,7 +619,6 @@ function openCreateDialog() {
     api_key: '',
     voices: '[]',
     connect_timeout_ms: 5000,
-    first_audio_timeout_ms: 5000,
     sentence_timeout_ms: 10000,
     enabled: true,
   }
@@ -669,7 +646,6 @@ function openEditDialog(row: TTSConfigItem) {
     api_key: '', // 编辑时默认留空
     voices: formattedVoices,
     connect_timeout_ms: row.connect_timeout_ms || 5000,
-    first_audio_timeout_ms: row.first_audio_timeout_ms || 5000,
     sentence_timeout_ms: row.sentence_timeout_ms || 10000,
     enabled: row.enabled,
   }
@@ -708,7 +684,6 @@ async function submitConfig() {
         api_key: configDialog.form.api_key.trim() || undefined,
         voices: configDialog.form.voices,
         connect_timeout_ms: configDialog.form.connect_timeout_ms,
-        first_audio_timeout_ms: configDialog.form.first_audio_timeout_ms,
         sentence_timeout_ms: configDialog.form.sentence_timeout_ms,
         enabled: configDialog.form.enabled,
       }
@@ -741,7 +716,6 @@ async function handleToggleEnabled(row: TTSConfigItem & { _switchLoading?: boole
       model: row.model,
       voices: row.voices,
       connect_timeout_ms: row.connect_timeout_ms,
-      first_audio_timeout_ms: row.first_audio_timeout_ms,
       sentence_timeout_ms: row.sentence_timeout_ms,
       enabled: targetVal,
     })
