@@ -487,7 +487,9 @@ func (s *Session) handleClientText(st *runtimeState, msg *ClientMessage) {
 			}
 
 		case StateListening:
-			s.logDiag(st.sessionId, "duplicate listen.start ignored in listening state",
+			s.logger.Debug("duplicate listen.start ignored in listening state",
+				"session_id", st.sessionId,
+				"serial_number", s.truncatedSerialNumber(),
 				"turn_id", st.currentTurnId,
 			)
 

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/audio"
@@ -406,7 +407,15 @@ func (t *voiceStreamTurn) processSentence(job sentenceJob) error {
 	})
 	if synthErr != nil {
 		if !errors.Is(synthErr, context.Canceled) && !t.canceled.Load() && t.ctx.Err() == nil {
-			t.logger.Warn("failed to synthesize sentence", "turnId", t.turnId, "error", synthErr)
+			t.logger.Warn("failed to synthesize sentence",
+				"turnId", t.turnId,
+				"sequence", job.sequence,
+				"text_bytes", len(job.text),
+				"text_runes", utf8.RuneCountInString(job.text),
+				"text", job.text,
+				"error", synthErr,
+				"tts_error", synthErr,
+			)
 			t.emit(VoiceStreamEvent{TurnId: t.turnId, Kind: VoiceStreamEventFailed, Err: synthErr})
 		}
 		t.cancel()
