@@ -129,6 +129,10 @@ type voiceStreamTurn struct {
 	turnFinished  bool
 	activeWorkers atomic.Int32
 
+	// 终态保护：确保每个轮次的终态事件（Success 或 Failed）在整轮中全局单次发射
+	terminalOnce sync.Once
+	terminated   atomic.Bool
+
 	// 仅由句子工作协程独占访问的资源（保证无并发竞争）
 	ttsStream    ai.TTSStream
 	startedSent  bool
@@ -185,11 +189,19 @@ func (t *voiceStreamTurn) start() {
 	go t.downlinkWorker()
 }
 
-// emit 向外部投递语音流生命周期事件。
+// emit 向外部投递语音流生命周期事件，保证终态事件（Success 或 Failed）在整轮中全局单次发射。
 func (t *voiceStreamTurn) emit(ev VoiceStreamEvent) {
-	if t.onEvent != nil {
-		t.onEvent(ev)
+	if t.onEvent == nil {
+		return
 	}
+	if ev.Kind == VoiceStreamEventSuccess || ev.Kind == VoiceStreamEventFailed {
+		t.terminalOnce.Do(func() {
+			t.terminated.Store(true)
+			t.onEvent(ev)
+		})
+		return
+	}
+	t.onEvent(ev)
 }
 
 // sentenceWorker 句子工作协程：唯一消费文本句队列，唯一持有 TTSStream，驱动流式语音合成。
@@ -357,12 +369,14 @@ func (t *voiceStreamTurn) processSentence(job sentenceJob) error {
 func (t *voiceStreamTurn) handleTextEnd() {
 	if !t.hasSentences {
 		// 整轮无文本时无需建连与下发协议帧，直接报告成功并结束
-		t.emit(VoiceStreamEvent{TurnId: t.turnId, Kind: VoiceStreamEventSuccess})
+		if t.ctx.Err() == nil {
+			t.emit(VoiceStreamEvent{TurnId: t.turnId, Kind: VoiceStreamEventSuccess})
+		}
 		t.cancel()
 		return
 	}
 
-	// 所有句子合成完成，幂等关闭本轮 TTSStream
+	// 所有句子合成完成，幂等关闭本轮 TTSStream（握手关闭错误仅记录日志，不推翻已完成的句子）
 	if t.ttsStream != nil {
 		if err := t.ttsStream.Close(); err != nil {
 			t.logger.Warn("failed to close tts stream after all sentences", "turnId", t.turnId, "error", err)
@@ -418,6 +432,11 @@ func (t *voiceStreamTurn) handleTextEnd() {
 				return
 			}
 		}
+	}
+
+	// 校验上下文未被取消，方可确认轮次成功
+	if t.ctx.Err() != nil {
+		return
 	}
 
 	// 真实写出确认成功，投递轮次成功事件并退出

@@ -1253,3 +1253,751 @@ func TestVoiceStream_GoroutineLeak_MultiTurnLoop(t *testing.T) {
 		t.Fatalf("possible goroutine leak: base=%d, final=%d", baseGoroutines, finalGoroutines)
 	}
 }
+
+// TestVoiceStream_SingleSentence_CompletionBarrier 验证单句完成屏障：
+// 必须同时满足 task-finished、PCM 已交付、句末 Flush 完成且全部 Opus 帧已进入下行队列，
+// 下一句才能开始 TTS 任务；句末 Flush 出错时屏障失败并终止轮次。
+func TestVoiceStream_SingleSentence_CompletionBarrier(t *testing.T) {
+	t.Run("NormalFlushBarrierSequential", func(t *testing.T) {
+		var mu sync.Mutex
+		trace := make([]string, 0)
+
+		stream := newMockTTSStream()
+		stream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+			mu.Lock()
+			trace = append(trace, "synth_start:"+text)
+			mu.Unlock()
+
+			// 交付单帧 PCM
+			pcm := make([]byte, audio.DownlinkBytesPerFrame)
+			if err := onPCM(ctx, pcm); err != nil {
+				return err
+			}
+
+			mu.Lock()
+			trace = append(trace, "synth_pcm_delivered:"+text)
+			mu.Unlock()
+			return nil
+		}
+
+		ttsClient := newMockTTSClient(stream)
+		writer := newMockVoiceWriter()
+		writer.sendTextFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+			var msg map[string]any
+			_ = json.Unmarshal(payload, &msg)
+			state, _ := msg["state"].(string)
+			text, _ := msg["text"].(string)
+			mu.Lock()
+			if text != "" {
+				trace = append(trace, "downlink:"+state+":"+text)
+			} else {
+				trace = append(trace, "downlink:"+state)
+			}
+			mu.Unlock()
+			return nil
+		}
+		writer.sendBinaryFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+			mu.Lock()
+			trace = append(trace, "downlink:opus")
+			mu.Unlock()
+			return nil
+		}
+
+		events := make(chan VoiceStreamEvent, 10)
+		vs := NewVoiceStream(VoiceStreamOptions{
+			SessionId: "sess-single-barrier",
+			TTSClient: ttsClient,
+			Writer:    writer,
+			OnEvent: func(ev VoiceStreamEvent) {
+				events <- ev
+			},
+		})
+		defer vs.Close()
+
+		ctx := context.Background()
+		turnId := uint64(101)
+		if err := vs.StartTurn(ctx, turnId); err != nil {
+			t.Fatalf("StartTurn failed: %v", err)
+		}
+
+		_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第一句屏障测试文本。", Iteration: 0})
+		_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第二句屏障测试文本。", Iteration: 0})
+		if err := vs.Finish(ctx, turnId); err != nil {
+			t.Fatalf("Finish failed: %v", err)
+		}
+
+		// 等待最终成功事件
+		select {
+		case ev := <-events:
+			if ev.Kind != VoiceStreamEventSpeaking {
+				t.Fatalf("expected speaking event first, got %v", ev)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("timeout waiting for speaking event")
+		}
+
+		select {
+		case ev := <-events:
+			if ev.Kind != VoiceStreamEventSuccess {
+				t.Fatalf("expected success event, got %v", ev)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("timeout waiting for success event")
+		}
+
+		mu.Lock()
+		snapshot := append([]string(nil), trace...)
+		mu.Unlock()
+
+		// 验证第一句的 synth_start 必须早于第二句的 synth_start
+		var firstSynthStart, secondSynthStart int
+		for i, item := range snapshot {
+			if item == "synth_start:第一句屏障测试文本。" {
+				firstSynthStart = i
+			}
+			if item == "synth_start:第二句屏障测试文本。" {
+				secondSynthStart = i
+			}
+		}
+		if firstSynthStart >= secondSynthStart {
+			t.Fatalf("sentence 1 must start synthesize before sentence 2: trace=%v", snapshot)
+		}
+
+		// 验证下行队列顺序：第二句 sentence_start 必须严格在第一句全部 opus 之后
+		var firstSentenceStart, firstSentenceOpus, secondSentenceStart int
+		for i, item := range snapshot {
+			if item == "downlink:sentence_start:第一句屏障测试文本。" {
+				firstSentenceStart = i
+			}
+			if item == "downlink:opus" && firstSentenceOpus == 0 {
+				firstSentenceOpus = i
+			}
+			if item == "downlink:sentence_start:第二句屏障测试文本。" {
+				secondSentenceStart = i
+			}
+		}
+
+		if firstSentenceStart >= firstSentenceOpus {
+			t.Fatalf("first sentence opus must follow its sentence_start: trace=%v", snapshot)
+		}
+		if firstSentenceOpus >= secondSentenceStart {
+			t.Fatalf("second sentence_start must not overtake first sentence opus: trace=%v", snapshot)
+		}
+	})
+
+	t.Run("FlushErrorTerminatesTurn", func(t *testing.T) {
+		stream := newMockTTSStream()
+		secondSentenceStarted := make(chan struct{})
+		stream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+			if text == "第二句绝不会被执行。" {
+				close(secondSentenceStarted)
+				return nil
+			}
+			return errors.New("dashscope task finished with error")
+		}
+
+		ttsClient := newMockTTSClient(stream)
+		writer := newMockVoiceWriter()
+		events := make(chan VoiceStreamEvent, 10)
+
+		vs := NewVoiceStream(VoiceStreamOptions{
+			SessionId: "sess-barrier-err",
+			TTSClient: ttsClient,
+			Writer:    writer,
+			OnEvent: func(ev VoiceStreamEvent) {
+				events <- ev
+			},
+		})
+		defer vs.Close()
+
+		ctx := context.Background()
+		turnId := uint64(102)
+		if err := vs.StartTurn(ctx, turnId); err != nil {
+			t.Fatalf("StartTurn failed: %v", err)
+		}
+
+		_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第一句合成将失败。", Iteration: 0})
+		_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第二句绝不会被执行。", Iteration: 0})
+		_ = vs.Finish(ctx, turnId)
+
+		select {
+		case ev := <-events:
+			if ev.Kind == VoiceStreamEventSpeaking {
+				select {
+				case ev2 := <-events:
+					if ev2.Kind != VoiceStreamEventFailed {
+						t.Fatalf("expected failed event, got %v", ev2)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("timeout waiting for failed event")
+				}
+			} else if ev.Kind != VoiceStreamEventFailed {
+				t.Fatalf("expected failed event, got %v", ev)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for event")
+		}
+
+		select {
+		case <-secondSentenceStarted:
+			t.Fatal("sentence 2 synthesize should never be called when sentence 1 fails")
+		default:
+		}
+	})
+}
+
+// TestVoiceStream_MultiSentence_TurnEndClose 验证多句轮末先关闭 TTSStream，再排入 tts/stop 和 Writer 屏障。
+func TestVoiceStream_MultiSentence_TurnEndClose(t *testing.T) {
+	var mu sync.Mutex
+	actionOrder := make([]string, 0)
+
+	stream := newMockTTSStream()
+	stream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+		mu.Lock()
+		actionOrder = append(actionOrder, "synth:"+text)
+		mu.Unlock()
+		return onPCM(ctx, make([]byte, audio.DownlinkBytesPerFrame))
+	}
+	stream.closeFn = func() error {
+		mu.Lock()
+		actionOrder = append(actionOrder, "tts_stream_close")
+		mu.Unlock()
+		return nil
+	}
+
+	ttsClient := newMockTTSClient(stream)
+	writer := newMockVoiceWriter()
+	writer.sendTextFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+		var msg map[string]any
+		_ = json.Unmarshal(payload, &msg)
+		state, _ := msg["state"].(string)
+		msgType, _ := msg["type"].(string)
+		mu.Lock()
+		actionOrder = append(actionOrder, "writer_text:"+msgType+"/"+state)
+		mu.Unlock()
+		return nil
+	}
+	writer.enqueueBarrierFn = func(ctx context.Context, turnId uint64) error {
+		mu.Lock()
+		actionOrder = append(actionOrder, "writer_barrier")
+		mu.Unlock()
+		return nil
+	}
+
+	events := make(chan VoiceStreamEvent, 10)
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-multi-close",
+		TTSClient: ttsClient,
+		Writer:    writer,
+		OnEvent: func(ev VoiceStreamEvent) {
+			events <- ev
+		},
+	})
+	defer vs.Close()
+
+	ctx := context.Background()
+	turnId := uint64(201)
+	if err := vs.StartTurn(ctx, turnId); err != nil {
+		t.Fatalf("StartTurn failed: %v", err)
+	}
+
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第一句多句轮末测试文本。", Iteration: 0})
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第二句多句轮末测试文本。", Iteration: 0})
+	if err := vs.Finish(ctx, turnId); err != nil {
+		t.Fatalf("Finish failed: %v", err)
+	}
+
+	successReceived := false
+	for !successReceived {
+		select {
+		case ev := <-events:
+			if ev.Kind == VoiceStreamEventSuccess {
+				successReceived = true
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("timeout waiting for VoiceStreamEventSuccess")
+		}
+	}
+
+	mu.Lock()
+	seq := append([]string(nil), actionOrder...)
+	mu.Unlock()
+
+	var idxSynth1, idxSynth2, idxClose, idxStop, idxBarrier int
+	for i, item := range seq {
+		switch item {
+		case "synth:第一句多句轮末测试文本。":
+			idxSynth1 = i
+		case "synth:第二句多句轮末测试文本。":
+			idxSynth2 = i
+		case "tts_stream_close":
+			idxClose = i
+		case "writer_text:tts/stop":
+			idxStop = i
+		case "writer_barrier":
+			idxBarrier = i
+		}
+	}
+
+	if idxSynth1 >= idxSynth2 {
+		t.Fatalf("sentence 1 should be synthesized before sentence 2: seq=%v", seq)
+	}
+	if idxSynth2 >= idxClose {
+		t.Fatalf("all sentences must finish before tts_stream_close: seq=%v", seq)
+	}
+	if idxClose >= idxStop {
+		t.Fatalf("tts_stream_close must occur before tts/stop: seq=%v", seq)
+	}
+	if idxStop >= idxBarrier {
+		t.Fatalf("tts/stop must be sent before writer_barrier: seq=%v", seq)
+	}
+}
+
+// TestVoiceStream_Stop_NotCompletedBeforeBarrierWritten 验证在 Writer 屏障确认写出前，轮次不得完成。
+func TestVoiceStream_Stop_NotCompletedBeforeBarrierWritten(t *testing.T) {
+	barrierStarted := make(chan struct{})
+	barrierRelease := make(chan struct{})
+
+	stream := newMockTTSStream()
+	ttsClient := newMockTTSClient(stream)
+	writer := newMockVoiceWriter()
+
+	writer.enqueueBarrierFn = func(ctx context.Context, turnId uint64) error {
+		close(barrierStarted)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-barrierRelease:
+			return nil
+		}
+	}
+
+	events := make(chan VoiceStreamEvent, 10)
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-stop-barrier-wait",
+		TTSClient: ttsClient,
+		Writer:    writer,
+		OnEvent: func(ev VoiceStreamEvent) {
+			events <- ev
+		},
+	})
+	defer vs.Close()
+
+	ctx := context.Background()
+	turnId := uint64(301)
+	if err := vs.StartTurn(ctx, turnId); err != nil {
+		t.Fatalf("StartTurn failed: %v", err)
+	}
+
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "这是一句用于测试屏障阻塞的文本。", Iteration: 0})
+	if err := vs.Finish(ctx, turnId); err != nil {
+		t.Fatalf("Finish failed: %v", err)
+	}
+
+	select {
+	case <-barrierStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for EnqueueBarrierWait to be called")
+	}
+
+	hasSpeaking := false
+	drainLoop:
+	for {
+		select {
+		case ev := <-events:
+			if ev.Kind == VoiceStreamEventSpeaking {
+				hasSpeaking = true
+			} else if ev.Kind == VoiceStreamEventSuccess {
+				t.Fatal("received VoiceStreamEventSuccess prematurely before barrier written confirmation")
+			}
+		default:
+			break drainLoop
+		}
+	}
+
+	if !hasSpeaking {
+		t.Fatal("expected speaking event to be delivered before barrier")
+	}
+
+	close(barrierRelease)
+
+	select {
+	case ev := <-events:
+		if ev.Kind != VoiceStreamEventSuccess {
+			t.Fatalf("expected VoiceStreamEventSuccess after barrier released, got %v", ev)
+		}
+		if ev.TurnId != turnId {
+			t.Fatalf("expected turnId %d, got %d", turnId, ev.TurnId)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for VoiceStreamEventSuccess after barrier release")
+	}
+}
+
+// TestVoiceStream_Stop_WriteFailure_CannotSucceed 验证 stop 写失败或屏障失败时绝不能报告成功，且终态事件只发射一次。
+func TestVoiceStream_Stop_WriteFailure_CannotSucceed(t *testing.T) {
+	t.Run("BarrierFailure_CannotSucceed", func(t *testing.T) {
+		stream := newMockTTSStream()
+		ttsClient := newMockTTSClient(stream)
+		writer := newMockVoiceWriter()
+
+		barrierErr := errors.New("underlying socket barrier failure")
+		writer.enqueueBarrierFn = func(ctx context.Context, turnId uint64) error {
+			return barrierErr
+		}
+
+		events := make(chan VoiceStreamEvent, 10)
+		vs := NewVoiceStream(VoiceStreamOptions{
+			SessionId: "sess-barrier-fail",
+			TTSClient: ttsClient,
+			Writer:    writer,
+			OnEvent: func(ev VoiceStreamEvent) {
+				events <- ev
+			},
+		})
+		defer vs.Close()
+
+		ctx := context.Background()
+		turnId := uint64(401)
+		if err := vs.StartTurn(ctx, turnId); err != nil {
+			t.Fatalf("StartTurn failed: %v", err)
+		}
+
+		_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "测试屏障失败时绝不能成功。", Iteration: 0})
+		if err := vs.Finish(ctx, turnId); err != nil {
+			t.Fatalf("Finish failed: %v", err)
+		}
+
+		var failedCount, successCount int
+		var terminalErr error
+
+		// 等待终态 Failed 事件
+		select {
+		case ev := <-events:
+			if ev.Kind == VoiceStreamEventSpeaking {
+				select {
+				case ev2 := <-events:
+					if ev2.Kind == VoiceStreamEventFailed {
+						failedCount++
+						terminalErr = ev2.Err
+					} else if ev2.Kind == VoiceStreamEventSuccess {
+						successCount++
+					}
+				case <-time.After(1 * time.Second):
+					t.Fatal("timeout waiting for terminal event after speaking")
+				}
+			} else if ev.Kind == VoiceStreamEventFailed {
+				failedCount++
+				terminalErr = ev.Err
+			} else if ev.Kind == VoiceStreamEventSuccess {
+				successCount++
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("timeout waiting for terminal event")
+		}
+
+		// 排空事件队列，确认无 Success 到达
+		time.Sleep(20 * time.Millisecond)
+		drainLoop1:
+		for {
+			select {
+			case ev := <-events:
+				if ev.Kind == VoiceStreamEventFailed {
+					failedCount++
+				} else if ev.Kind == VoiceStreamEventSuccess {
+					successCount++
+				}
+			default:
+				break drainLoop1
+			}
+		}
+
+		if successCount > 0 {
+			t.Fatalf("must not succeed on barrier failure, got %d success events", successCount)
+		}
+		if failedCount != 1 {
+			t.Fatalf("expected exactly 1 failed event, got %d", failedCount)
+		}
+		if !errors.Is(terminalErr, barrierErr) {
+			t.Fatalf("expected error %v, got %v", barrierErr, terminalErr)
+		}
+	})
+
+	t.Run("StopTextFrameFailure_CannotSucceed", func(t *testing.T) {
+		stream := newMockTTSStream()
+		ttsClient := newMockTTSClient(stream)
+		writer := newMockVoiceWriter()
+
+		stopSendErr := errors.New("network broken when sending tts/stop")
+		writer.sendTextFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+			var msg map[string]any
+			_ = json.Unmarshal(payload, &msg)
+			if msg["type"] == "tts" && msg["state"] == "stop" {
+				return stopSendErr
+			}
+			return nil
+		}
+
+		events := make(chan VoiceStreamEvent, 10)
+		vs := NewVoiceStream(VoiceStreamOptions{
+			SessionId: "sess-stop-text-fail",
+			TTSClient: ttsClient,
+			Writer:    writer,
+			OnEvent: func(ev VoiceStreamEvent) {
+				events <- ev
+			},
+		})
+		defer vs.Close()
+
+		ctx := context.Background()
+		turnId := uint64(402)
+		if err := vs.StartTurn(ctx, turnId); err != nil {
+			t.Fatalf("StartTurn failed: %v", err)
+		}
+
+		_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "测试发送 stop 失败时绝不成功。", Iteration: 0})
+		if err := vs.Finish(ctx, turnId); err != nil {
+			t.Fatalf("Finish failed: %v", err)
+		}
+
+		var failedCount, successCount int
+		var terminalErr error
+
+		// 等待终态 Failed 事件
+		select {
+		case ev := <-events:
+			if ev.Kind == VoiceStreamEventSpeaking {
+				select {
+				case ev2 := <-events:
+					if ev2.Kind == VoiceStreamEventFailed {
+						failedCount++
+						terminalErr = ev2.Err
+					} else if ev2.Kind == VoiceStreamEventSuccess {
+						successCount++
+					}
+				case <-time.After(1 * time.Second):
+					t.Fatal("timeout waiting for terminal event after speaking")
+				}
+			} else if ev.Kind == VoiceStreamEventFailed {
+				failedCount++
+				terminalErr = ev.Err
+			} else if ev.Kind == VoiceStreamEventSuccess {
+				successCount++
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("timeout waiting for terminal event")
+		}
+
+		// 排空事件队列，确认无 Success 到达
+		time.Sleep(20 * time.Millisecond)
+		drainLoop2:
+		for {
+			select {
+			case ev := <-events:
+				if ev.Kind == VoiceStreamEventFailed {
+					failedCount++
+				} else if ev.Kind == VoiceStreamEventSuccess {
+					successCount++
+				}
+			default:
+				break drainLoop2
+			}
+		}
+
+		if successCount > 0 {
+			t.Fatalf("must not succeed on stop frame write failure, got %d success events", successCount)
+		}
+		if failedCount != 1 {
+			t.Fatalf("expected exactly 1 failed event, got %d", failedCount)
+		}
+		if !errors.Is(terminalErr, stopSendErr) {
+			t.Fatalf("expected error %v, got %v", stopSendErr, terminalErr)
+		}
+	})
+}
+
+// TestVoiceStream_TTS_CloseError_DoesNotAffectSuccess 验证多句场景下 TTS 关闭错误仅打日志，不影响最终轮次成功。
+func TestVoiceStream_TTS_CloseError_DoesNotAffectSuccess(t *testing.T) {
+	stream := newMockTTSStream()
+	ttsCloseErr := errors.New("websocket close handshake connection reset by peer")
+	stream.closeFn = func() error {
+		return ttsCloseErr
+	}
+
+	ttsClient := newMockTTSClient(stream)
+	writer := newMockVoiceWriter()
+
+	events := make(chan VoiceStreamEvent, 10)
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-tts-close-err",
+		TTSClient: ttsClient,
+		Writer:    writer,
+		OnEvent: func(ev VoiceStreamEvent) {
+			events <- ev
+		},
+	})
+	defer vs.Close()
+
+	ctx := context.Background()
+	turnId := uint64(501)
+	if err := vs.StartTurn(ctx, turnId); err != nil {
+		t.Fatalf("StartTurn failed: %v", err)
+	}
+
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第一句关闭异常测试文本。", Iteration: 0})
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第二句关闭异常测试文本。", Iteration: 0})
+	if err := vs.Finish(ctx, turnId); err != nil {
+		t.Fatalf("Finish failed: %v", err)
+	}
+
+	var hasSpeaking, hasSuccess, hasFailed bool
+	deadline := time.After(3 * time.Second)
+
+	drainLoop:
+	for {
+		select {
+		case ev := <-events:
+			switch ev.Kind {
+			case VoiceStreamEventSpeaking:
+				hasSpeaking = true
+			case VoiceStreamEventSuccess:
+				hasSuccess = true
+			case VoiceStreamEventFailed:
+				hasFailed = true
+			}
+		case <-deadline:
+			break drainLoop
+		}
+		if hasSuccess {
+			break drainLoop
+		}
+	}
+
+	if !hasSpeaking {
+		t.Error("expected speaking event")
+	}
+	if !hasSuccess {
+		t.Error("expected success event even if tts close failed")
+	}
+	if hasFailed {
+		t.Error("tts close handshake error should not trigger failure event")
+	}
+
+	if stream.closeCalls != 1 {
+		t.Fatalf("expected close calls 1, got %d", stream.closeCalls)
+	}
+	if writer.barrierCalls != 1 {
+		t.Fatalf("expected barrier calls 1, got %d", writer.barrierCalls)
+	}
+}
+
+// TestVoiceStream_NoText_DirectSuccess 验证整轮无文本直接发射 VoiceStreamEventSuccess，不建连且不下发控制帧。
+func TestVoiceStream_NoText_DirectSuccess(t *testing.T) {
+	t.Run("DirectFinishWithoutFeed", func(t *testing.T) {
+		stream := newMockTTSStream()
+		ttsClient := newMockTTSClient(stream)
+		writer := newMockVoiceWriter()
+
+		events := make(chan VoiceStreamEvent, 10)
+		vs := NewVoiceStream(VoiceStreamOptions{
+			SessionId: "sess-no-text-1",
+			TTSClient: ttsClient,
+			Writer:    writer,
+			OnEvent: func(ev VoiceStreamEvent) {
+				events <- ev
+			},
+		})
+		defer vs.Close()
+
+		ctx := context.Background()
+		turnId := uint64(601)
+		if err := vs.StartTurn(ctx, turnId); err != nil {
+			t.Fatalf("StartTurn failed: %v", err)
+		}
+
+		if err := vs.FinishText(ctx, turnId); err != nil {
+			t.Fatalf("FinishText failed: %v", err)
+		}
+
+		select {
+		case ev := <-events:
+			if ev.Kind != VoiceStreamEventSuccess {
+				t.Fatalf("expected success event, got %v", ev)
+			}
+			if ev.TurnId != turnId {
+				t.Fatalf("expected turnId %d, got %d", turnId, ev.TurnId)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for success event")
+		}
+
+		select {
+		case ev := <-events:
+			t.Fatalf("unexpected extra event: %v", ev)
+		default:
+		}
+
+		if ttsClient.createCalls != 0 {
+			t.Fatalf("expected 0 tts client CreateStream calls, got %d", ttsClient.createCalls)
+		}
+		if len(writer.textFrames) != 0 {
+			t.Fatalf("expected 0 writer text frames, got %d", len(writer.textFrames))
+		}
+		if len(writer.binaryFrames) != 0 {
+			t.Fatalf("expected 0 writer binary frames, got %d", len(writer.binaryFrames))
+		}
+		if writer.barrierCalls != 0 {
+			t.Fatalf("expected 0 writer barrier calls, got %d", writer.barrierCalls)
+		}
+
+		time.Sleep(20 * time.Millisecond)
+		if workers := vs.ActiveWorkers(); workers != 0 {
+			t.Fatalf("expected 0 active workers, got %d", workers)
+		}
+	})
+
+	t.Run("OnlyWhitespaceFeedDirectSuccess", func(t *testing.T) {
+		stream := newMockTTSStream()
+		ttsClient := newMockTTSClient(stream)
+		writer := newMockVoiceWriter()
+
+		events := make(chan VoiceStreamEvent, 10)
+		vs := NewVoiceStream(VoiceStreamOptions{
+			SessionId: "sess-no-text-2",
+			TTSClient: ttsClient,
+			Writer:    writer,
+			OnEvent: func(ev VoiceStreamEvent) {
+				events <- ev
+			},
+		})
+		defer vs.Close()
+
+		ctx := context.Background()
+		turnId := uint64(602)
+		if err := vs.StartTurn(ctx, turnId); err != nil {
+			t.Fatalf("StartTurn failed: %v", err)
+		}
+
+		_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "    \n\t   ", Iteration: 0})
+		if err := vs.Finish(ctx, turnId); err != nil {
+			t.Fatalf("Finish failed: %v", err)
+		}
+
+		select {
+		case ev := <-events:
+			if ev.Kind != VoiceStreamEventSuccess {
+				t.Fatalf("expected success event, got %v", ev)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for success event")
+		}
+
+		if ttsClient.createCalls != 0 {
+			t.Fatalf("expected 0 tts create calls, got %d", ttsClient.createCalls)
+		}
+		if len(writer.textFrames) != 0 || writer.barrierCalls != 0 {
+			t.Fatalf("expected 0 frames sent, got %d text frames, %d barrier calls", len(writer.textFrames), writer.barrierCalls)
+		}
+	})
+}
+
