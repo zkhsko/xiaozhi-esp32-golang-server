@@ -57,6 +57,7 @@ type writeMessage struct {
 type Writer struct {
 	conn      WSConn
 	queue     chan writeMessage
+	parentCtx context.Context
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -65,6 +66,7 @@ type Writer struct {
 
 	mu                    sync.RWMutex
 	closed                bool
+	stopped               bool
 	lastErr               error
 	invalidatedVoiceTurns map[uint64]struct{}
 }
@@ -89,6 +91,7 @@ func NewWriter(ctx context.Context, conn WSConn, queueCapacity int, l *slog.Logg
 	w := &Writer{
 		conn:                  conn,
 		queue:                 make(chan writeMessage, queueCapacity),
+		parentCtx:             ctx,
 		ctx:                   writeCtx,
 		cancel:                cancel,
 		done:                  make(chan struct{}),
@@ -125,7 +128,40 @@ func (w *Writer) SendVoiceBinary(ctx context.Context, turnId uint64, payload []b
 	return w.enqueue(ctx, messageSourceVoice, turnId, websocket.MessageBinary, payload)
 }
 
-// enqueue 执行跨异步边界的数据独立深拷贝，并尝试将消息放入有界队列；队列满时返回 ErrWriteQueueFull。
+// SendVoiceTextWait 复制语音文本负载并排入串行写队列，携带语音轮次元数据；若队列已满则阻塞等待空间可用、上下文取消或 Writer 关闭。
+func (w *Writer) SendVoiceTextWait(ctx context.Context, turnId uint64, payload []byte) error {
+	return w.enqueueWait(ctx, messageSourceVoice, turnId, websocket.MessageText, payload)
+}
+
+// SendVoiceBinaryWait 复制语音二进制负载并排入串行写队列，携带语音轮次元数据；若队列已满则阻塞等待空间可用、上下文取消或 Writer 关闭。
+func (w *Writer) SendVoiceBinaryWait(ctx context.Context, turnId uint64, payload []byte) error {
+	return w.enqueueWait(ctx, messageSourceVoice, turnId, websocket.MessageBinary, payload)
+}
+
+// SendTextWait 复制文本负载并排入串行写队列；若队列已满则阻塞等待空间可用。
+func (w *Writer) SendTextWait(ctx context.Context, payload []byte) error {
+	return w.enqueueWait(ctx, messageSourceControl, 0, websocket.MessageText, payload)
+}
+
+// SendBinaryWait 复制二进制负载并排入串行写队列；若队列已满则阻塞等待空间可用。
+func (w *Writer) SendBinaryWait(ctx context.Context, payload []byte) error {
+	return w.enqueueWait(ctx, messageSourceControl, 0, websocket.MessageBinary, payload)
+}
+
+// copyPayload 跨异步边界独立深拷贝数据，避免外部调用方修改底层切片。
+func copyPayload(payload []byte) []byte {
+	if len(payload) > 0 {
+		copied := make([]byte, len(payload))
+		copy(copied, payload)
+		return copied
+	}
+	if payload != nil {
+		return []byte{}
+	}
+	return nil
+}
+
+// enqueue 执行跨异步边界的数据独立深拷贝，并尝试将消息放入有界队列；队列满时立即返回 ErrWriteQueueFull。
 func (w *Writer) enqueue(ctx context.Context, source messageSource, turnId uint64, msgType websocket.MessageType, payload []byte) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -139,27 +175,18 @@ func (w *Writer) enqueue(ctx context.Context, source messageSource, turnId uint6
 	default:
 	}
 
-	// 跨异步边界独立深拷贝数据，避免外部调用方修改底层切片
-	var copied []byte
-	if len(payload) > 0 {
-		copied = make([]byte, len(payload))
-		copy(copied, payload)
-	} else if payload != nil {
-		copied = []byte{}
+	w.mu.RLock()
+	if w.closed {
+		w.mu.RUnlock()
+		return ErrWriterClosed
 	}
+	w.mu.RUnlock()
 
 	item := writeMessage{
 		msgType: msgType,
-		payload: copied,
+		payload: copyPayload(payload),
 		source:  source,
 		turnId:  turnId,
-	}
-
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
-	if w.closed {
-		return ErrWriterClosed
 	}
 
 	select {
@@ -174,6 +201,44 @@ func (w *Writer) enqueue(ctx context.Context, source messageSource, turnId uint6
 	}
 }
 
+// enqueueWait 执行跨异步边界的数据独立深拷贝，并将消息放入有界队列；若队列已满则阻塞等待队列空间可用、上下文取消或 Writer 关闭。
+func (w *Writer) enqueueWait(ctx context.Context, source messageSource, turnId uint64, msgType websocket.MessageType, payload []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	select {
+	case <-w.ctx.Done():
+		return ErrWriterClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	w.mu.RLock()
+	if w.closed {
+		w.mu.RUnlock()
+		return ErrWriterClosed
+	}
+	w.mu.RUnlock()
+
+	item := writeMessage{
+		msgType: msgType,
+		payload: copyPayload(payload),
+		source:  source,
+		turnId:  turnId,
+	}
+
+	select {
+	case <-w.ctx.Done():
+		return ErrWriterClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	case w.queue <- item:
+		return nil
+	}
+}
+
 // writeLoop 单专属 goroutine 循环，负责从有界队列取出消息并串行写入底层 WebSocket 连接。
 func (w *Writer) writeLoop() {
 	defer func() {
@@ -181,21 +246,49 @@ func (w *Writer) writeLoop() {
 		w.closeOnce.Do(func() {
 			w.mu.Lock()
 			w.closed = true
-			close(w.queue)
 			w.mu.Unlock()
 		})
-		w.drainQueue()
 		close(w.done)
 	}()
 
 	for {
 		select {
 		case <-w.ctx.Done():
-			return
-		case msg, ok := <-w.queue:
-			if !ok {
+			w.mu.RLock()
+			stopped := w.stopped
+			lastErr := w.lastErr
+			w.mu.RUnlock()
+
+			if stopped || lastErr != nil || (w.parentCtx != nil && w.parentCtx.Err() != nil) {
+				w.drainQueue()
 				return
 			}
+
+			// 优雅关闭：排空并写出队列中已入队的所有有效消息
+			for {
+				select {
+				case msg := <-w.queue:
+					if msg.source == messageSourceVoice && w.isVoiceTurnInvalidated(msg.turnId) {
+						continue
+					}
+					writeCtx := w.parentCtx
+					if writeCtx == nil {
+						writeCtx = context.Background()
+					}
+					if err := w.conn.Write(writeCtx, msg.msgType, msg.payload); err != nil {
+						w.setErr(err)
+						if !errors.Is(err, context.Canceled) {
+							w.logger.Warn("websocket writer write failed during graceful close", "error", err)
+						}
+						w.drainQueue()
+						return
+					}
+				default:
+					return
+				}
+			}
+
+		case msg := <-w.queue:
 			if msg.source == messageSourceVoice && w.isVoiceTurnInvalidated(msg.turnId) {
 				continue
 			}
@@ -204,6 +297,13 @@ func (w *Writer) writeLoop() {
 				if !errors.Is(err, context.Canceled) {
 					w.logger.Warn("websocket writer write failed", "error", err)
 				}
+				w.cancel()
+				w.closeOnce.Do(func() {
+					w.mu.Lock()
+					w.closed = true
+					w.mu.Unlock()
+				})
+				w.drainQueue()
 				return
 			}
 		}
@@ -250,8 +350,8 @@ func (w *Writer) Close() error {
 	w.closeOnce.Do(func() {
 		w.mu.Lock()
 		w.closed = true
-		close(w.queue)
 		w.mu.Unlock()
+		w.cancel()
 	})
 	<-w.done
 	return w.Err()
@@ -286,18 +386,16 @@ func (w *Writer) isVoiceTurnInvalidated(turnId uint64) bool {
 	return ok
 }
 
-// Stop 立即取消串行写流程、关闭队列并排空未发送消息。
+// Stop 立即取消串行写流程并排空丢弃未发送消息。
 func (w *Writer) Stop() {
 	if w == nil {
 		return
 	}
+	w.mu.Lock()
+	w.stopped = true
+	w.closed = true
+	w.mu.Unlock()
 	w.cancel()
-	w.closeOnce.Do(func() {
-		w.mu.Lock()
-		w.closed = true
-		close(w.queue)
-		w.mu.Unlock()
-	})
 	w.drainQueue()
 }
 

@@ -598,3 +598,443 @@ func TestWriter_InvalidateVoiceTurn_ZeroTurnIdAndNilSafety(t *testing.T) {
 		t.Errorf("expected 'valid-control', got %q", string(messages[1].payload))
 	}
 }
+
+// TestWriter_SendVoiceWait_Success_WhenQueueHasSpace 验证队列有空间时 SendVoiceTextWait 与 SendVoiceBinaryWait 正常排入写队列。
+func TestWriter_SendVoiceWait_Success_WhenQueueHasSpace(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 10, nil)
+
+	const turnId = uint64(101)
+	if err := writer.SendVoiceTextWait(ctx, turnId, []byte(`{"type":"tts","state":"start"}`)); err != nil {
+		t.Fatalf("SendVoiceTextWait failed: %v", err)
+	}
+	if err := writer.SendVoiceBinaryWait(ctx, turnId, []byte{0x01, 0x02, 0x03}); err != nil {
+		t.Fatalf("SendVoiceBinaryWait failed: %v", err)
+	}
+	if err := writer.SendTextWait(ctx, []byte("ctrl-wait-text")); err != nil {
+		t.Fatalf("SendTextWait failed: %v", err)
+	}
+	if err := writer.SendBinaryWait(ctx, []byte{0x04, 0x05}); err != nil {
+		t.Fatalf("SendBinaryWait failed: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	msgs := conn.getMessages()
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	}
+	if msgs[0].typ != websocket.MessageText || string(msgs[0].payload) != `{"type":"tts","state":"start"}` {
+		t.Errorf("msg[0] mismatch: %v", msgs[0])
+	}
+	if msgs[1].typ != websocket.MessageBinary || !bytes.Equal(msgs[1].payload, []byte{0x01, 0x02, 0x03}) {
+		t.Errorf("msg[1] mismatch: %v", msgs[1])
+	}
+	if msgs[2].typ != websocket.MessageText || string(msgs[2].payload) != "ctrl-wait-text" {
+		t.Errorf("msg[2] mismatch: %v", msgs[2])
+	}
+	if msgs[3].typ != websocket.MessageBinary || !bytes.Equal(msgs[3].payload, []byte{0x04, 0x05}) {
+		t.Errorf("msg[3] mismatch: %v", msgs[3])
+	}
+}
+
+// TestWriter_SendVoiceWait_BlocksWhenQueueFull_ResumesWhenSpaceAvailable 验证队列满时阻塞等待，出现空间后被唤醒继续写入，无丢帧或重复。
+func TestWriter_SendVoiceWait_BlocksWhenQueueFull_ResumesWhenSpaceAvailable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 阻塞写入的 mock 连接：由 channel 控制每次 Write 允许通过
+	allowWriteCh := make(chan struct{})
+	writeStartedCh := make(chan struct{}, 10)
+
+	conn := &mockWSConn{
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			writeStartedCh <- struct{}{}
+			<-allowWriteCh
+		},
+	}
+
+	// 队列容量为 2
+	writer := NewWriter(ctx, conn, 2, nil)
+
+	// 先排入第 1 条消息（写循环会立即从队列取走并卡在 mockWSConn.Write 中）
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("msg-1")); err != nil {
+		t.Fatalf("SendVoiceTextWait 1 failed: %v", err)
+	}
+
+	// 等待第 1 条消息进入 Write 挂钩
+	<-writeStartedCh
+
+	// 此时写循环已经取走了 msg-1，queue 当前空出 1 个位置，我们放入 msg-2 和 msg-3 填满队列 (容量 2)
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("msg-2")); err != nil {
+		t.Fatalf("SendVoiceTextWait 2 failed: %v", err)
+	}
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("msg-3")); err != nil {
+		t.Fatalf("SendVoiceTextWait 3 failed: %v", err)
+	}
+
+	// 此时 queue 已经满载 (msg-2, msg-3 都在队列中)，非阻塞发送应当立即返回 ErrWriteQueueFull
+	if err := writer.SendVoiceText(ctx, 1, []byte("msg-overflow")); !errors.Is(err, ErrWriteQueueFull) {
+		t.Fatalf("expected ErrWriteQueueFull, got %v", err)
+	}
+
+	// 启动一个 goroutine 调用 SendVoiceTextWait 发送第 4 条消息，它必须阻塞等待队列空间
+	sendWaitDoneCh := make(chan error, 1)
+	go func() {
+		sendWaitDoneCh <- writer.SendVoiceTextWait(ctx, 1, []byte("msg-4"))
+	}()
+
+	// 验证在未释放空间前，SendVoiceTextWait 保持阻塞状态
+	select {
+	case err := <-sendWaitDoneCh:
+		t.Fatalf("expected SendVoiceTextWait to block, but returned early: %v", err)
+	case <-time.After(30 * time.Millisecond):
+		// 正常保持阻塞
+	}
+
+	// 释放第 1 条消息的写入
+	allowWriteCh <- struct{}{}
+
+	// 等待第 2 条消息进入 Write 挂钩（说明 msg-2 从队列被取走，队列腾出了空间）
+	<-writeStartedCh
+
+	// 验证阻塞等待的 SendVoiceTextWait 被唤醒并成功返回 nil
+	select {
+	case err := <-sendWaitDoneCh:
+		if err != nil {
+			t.Fatalf("SendVoiceTextWait failed after space available: %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for SendVoiceTextWait to resume")
+	}
+
+	// 依次释放剩余所有消息的写入
+	allowWriteCh <- struct{}{} // 允许 msg-2 完成
+	<-writeStartedCh           // msg-3 进入
+	allowWriteCh <- struct{}{} // 允许 msg-3 完成
+	<-writeStartedCh           // msg-4 进入
+	allowWriteCh <- struct{}{} // 允许 msg-4 完成
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	msgs := conn.getMessages()
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 written messages, got %d", len(msgs))
+	}
+	expected := []string{"msg-1", "msg-2", "msg-3", "msg-4"}
+	for i, want := range expected {
+		if string(msgs[i].payload) != want {
+			t.Errorf("msg[%d] expected %q, got %q", i, want, string(msgs[i].payload))
+		}
+	}
+}
+
+// TestWriter_SendVoiceWait_CallerCanceledContext_Unblocks 验证调用方 Context 取消能及时解除队列等待并返回 context.Canceled。
+func TestWriter_SendVoiceWait_CallerCanceledContext_Unblocks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	holdWriteCh := make(chan struct{})
+	defer close(holdWriteCh)
+
+	writeStartedCh := make(chan struct{}, 10)
+	conn := &mockWSConn{
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			writeStartedCh <- struct{}{}
+			<-holdWriteCh
+		},
+	}
+
+	writer := NewWriter(ctx, conn, 2, nil)
+
+	// 填满队列
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("hold-1")); err != nil {
+		t.Fatalf("SendVoiceTextWait hold-1 failed: %v", err)
+	}
+	<-writeStartedCh
+
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("hold-2")); err != nil {
+		t.Fatalf("SendVoiceTextWait hold-2 failed: %v", err)
+	}
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("hold-3")); err != nil {
+		t.Fatalf("SendVoiceTextWait hold-3 failed: %v", err)
+	}
+
+	// 创建可取消的调用方 context
+	callerCtx, callerCancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- writer.SendVoiceBinaryWait(callerCtx, 1, []byte("should-cancel"))
+	}()
+
+	// 确保处于阻塞状态
+	select {
+	case err := <-errCh:
+		t.Fatalf("expected goroutine to block, got %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	// 取消调用方 Context
+	callerCancel()
+
+	// 验证等待被解除并返回 context.Canceled
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for caller context cancel to unblock")
+	}
+
+	writer.Stop()
+}
+
+// TestWriter_SendVoiceWait_WriterClose_Unblocks 验证 Writer.Close 能够解除全部正在等待队列空间的 goroutine 并返回 ErrWriterClosed。
+func TestWriter_SendVoiceWait_WriterClose_Unblocks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	holdWriteCh := make(chan struct{})
+	defer close(holdWriteCh)
+
+	writeStartedCh := make(chan struct{}, 10)
+	conn := &mockWSConn{
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			writeStartedCh <- struct{}{}
+			<-holdWriteCh
+		},
+	}
+
+	writer := NewWriter(ctx, conn, 2, nil)
+
+	// 填满队列
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("hold-1")); err != nil {
+		t.Fatalf("SendVoiceTextWait hold-1 failed: %v", err)
+	}
+	<-writeStartedCh
+
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("hold-2")); err != nil {
+		t.Fatalf("SendVoiceTextWait hold-2 failed: %v", err)
+	}
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("hold-3")); err != nil {
+		t.Fatalf("SendVoiceTextWait hold-3 failed: %v", err)
+	}
+
+	// 启动 3 个并发等待者
+	const waiterCount = 3
+	var wg sync.WaitGroup
+	errs := make([]error, waiterCount)
+
+	for i := 0; i < waiterCount; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			errs[idx] = writer.SendVoiceTextWait(ctx, 1, []byte("waiter-msg"))
+		}(i)
+	}
+
+	// 确保等待者均已进入阻塞
+	time.Sleep(30 * time.Millisecond)
+
+	// 关闭 Writer 流程
+	closeDoneCh := make(chan error, 1)
+	go func() {
+		closeDoneCh <- writer.Close()
+	}()
+
+	// 释放底层写入以允许 Close 完成排空
+	// 注意 hold-1, hold-2, hold-3 会被逐一写出
+	// 但 3 个 waiter 不会入队，而是收到 ErrWriterClosed
+	wg.Wait()
+
+	for i, err := range errs {
+		if !errors.Is(err, ErrWriterClosed) {
+			t.Errorf("waiter[%d] expected ErrWriterClosed, got %v", i, err)
+		}
+	}
+}
+
+// TestWriter_SendVoiceWait_WriterStop_Unblocks 验证 Writer.Stop 能够立即解除等待并丢弃残留。
+func TestWriter_SendVoiceWait_WriterStop_Unblocks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	holdWriteCh := make(chan struct{})
+	defer close(holdWriteCh)
+
+	writeStartedCh := make(chan struct{}, 10)
+	conn := &mockWSConn{
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			writeStartedCh <- struct{}{}
+			<-holdWriteCh
+		},
+	}
+
+	writer := NewWriter(ctx, conn, 2, nil)
+
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("hold-1")); err != nil {
+		t.Fatalf("SendVoiceTextWait hold-1 failed: %v", err)
+	}
+	<-writeStartedCh
+
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("hold-2")); err != nil {
+		t.Fatalf("SendVoiceTextWait hold-2 failed: %v", err)
+	}
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("hold-3")); err != nil {
+		t.Fatalf("SendVoiceTextWait hold-3 failed: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- writer.SendVoiceBinaryWait(ctx, 1, []byte("waiter-msg"))
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+
+	// 调用 Stop 立即中止
+	writer.Stop()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, ErrWriterClosed) {
+			t.Fatalf("expected ErrWriterClosed after Stop, got %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for Stop to unblock waiter")
+	}
+}
+
+// TestWriter_SendVoiceWait_WriteError_Unblocks 验证底层 WebSocket 写入失败时写循环退出并解除全部正在阻塞等待的 goroutine。
+func TestWriter_SendVoiceWait_WriteError_Unblocks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	allowWriteCh := make(chan struct{})
+	writeStartedCh := make(chan struct{}, 10)
+	expectedErr := errors.New("underlying write broke")
+	conn := &mockWSConn{
+		writeErr: expectedErr,
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			writeStartedCh <- struct{}{}
+			<-allowWriteCh
+		},
+	}
+
+	// 队列容量 1
+	writer := NewWriter(ctx, conn, 1, nil)
+
+	// 排入首条消息，写循环取走后卡在 Write 中
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("msg-err-1")); err != nil {
+		t.Fatalf("SendVoiceTextWait 1 failed: %v", err)
+	}
+	<-writeStartedCh
+
+	// 填满队列 (容量 1，放入 msg-err-2)
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("msg-err-2")); err != nil {
+		t.Fatalf("SendVoiceTextWait 2 failed: %v", err)
+	}
+
+	// 启动等待者尝试发送第 3 条消息，此时队列已满，必定阻塞
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- writer.SendVoiceTextWait(ctx, 1, []byte("msg-err-3-waiter"))
+	}()
+
+	// 确保等待者已进入阻塞等待
+	time.Sleep(30 * time.Millisecond)
+
+	// 允许首条消息写入并返回错误
+	allowWriteCh <- struct{}{}
+
+	// 验证阻塞等待中的 goroutine 被写循环退出的 cancel 解除并返回 ErrWriterClosed
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, ErrWriterClosed) {
+			t.Fatalf("expected ErrWriterClosed after write error, got %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for write error to unblock waiter")
+	}
+
+	// 等待写循环完全退出
+	<-writer.Done()
+
+	if err := writer.Err(); !errors.Is(err, expectedErr) {
+		t.Fatalf("expected Err to be expectedErr, got %v", err)
+	}
+
+	// 写流程退出后，新的入队也立即被拒绝
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("msg-after-exit")); !errors.Is(err, ErrWriterClosed) {
+		t.Fatalf("expected ErrWriterClosed after exit, got %v", err)
+	}
+}
+
+// TestWriter_SendVoiceWait_ConcurrentSenders_NoFrameLoss 验证并发多协程在满载背压等待下无帧丢失、无重复、数据一致且无竞态。
+func TestWriter_SendVoiceWait_ConcurrentSenders_NoFrameLoss(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	// 容量设小以高频触发队列满等待背压
+	writer := NewWriter(ctx, conn, 3, nil)
+
+	const totalSenders = 10
+	const msgsPerSender = 10
+	const expectedTotal = totalSenders * msgsPerSender
+
+	var wg sync.WaitGroup
+	for s := 0; s < totalSenders; s++ {
+		wg.Add(1)
+		go func(senderId int) {
+			defer wg.Done()
+			for m := 0; m < msgsPerSender; m++ {
+				payload := []byte{byte(senderId), byte(m)}
+				if err := writer.SendVoiceBinaryWait(ctx, uint64(senderId+1), payload); err != nil {
+					t.Errorf("sender %d send msg %d failed: %v", senderId, m, err)
+					return
+				}
+			}
+		}(s)
+	}
+
+	wg.Wait()
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	messages := conn.getMessages()
+	if len(messages) != expectedTotal {
+		t.Fatalf("expected %d total messages, got %d", expectedTotal, len(messages))
+	}
+
+	// 统计并校验每个 sender 发送的消息是否完整无缺且单 sender 内保序
+	receivedCount := make(map[int]int)
+	for _, msg := range messages {
+		if msg.typ != websocket.MessageBinary {
+			t.Errorf("expected binary message, got %v", msg.typ)
+		}
+		senderId := int(msg.payload[0])
+		seq := int(msg.payload[1])
+		expectedSeq := receivedCount[senderId]
+		if seq != expectedSeq {
+			t.Errorf("sender %d sequence mismatch: expected %d, got %d", senderId, expectedSeq, seq)
+		}
+		receivedCount[senderId]++
+	}
+
+	for s := 0; s < totalSenders; s++ {
+		if receivedCount[s] != msgsPerSender {
+			t.Errorf("sender %d expected %d messages, got %d", s, msgsPerSender, receivedCount[s])
+		}
+	}
+}
