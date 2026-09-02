@@ -58,7 +58,7 @@ func CreateLLMClient(cfg *database.LLMConfig) (ai.LLMClient, error) {
 }
 
 // CreateTTSClient 根据数据库 TTS 配置和指定音色创建对应的流式语音合成客户端。
-func CreateTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (ai.TTSClient, error) {
+func CreateTTSClient(cfg *database.TTSConfig, voice string) (ai.TTSClient, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("tts config is nil")
 	}

@@ -16,7 +16,7 @@ func TestFactory_CreateClients(t *testing.T) {
 	if _, err := CreateLLMClient(nil); err == nil {
 		t.Error("expected error for nil llm config, got nil")
 	}
-	if _, err := CreateTTSClient(nil, "voice", 100); err == nil {
+	if _, err := CreateTTSClient(nil, "voice"); err == nil {
 		t.Error("expected error for nil tts config, got nil")
 	}
 
@@ -30,7 +30,7 @@ func TestFactory_CreateClients(t *testing.T) {
 		t.Error("expected error for unsupported llm provider")
 	}
 	unsupportedTTS := &database.TTSConfig{Provider: "unsupported", Endpoint: "ws://example.com", APIKey: "key", Model: "m"}
-	if _, err := CreateTTSClient(unsupportedTTS, "voice", 100); err == nil {
+	if _, err := CreateTTSClient(unsupportedTTS, "voice"); err == nil {
 		t.Error("expected error for unsupported tts provider")
 	}
 
