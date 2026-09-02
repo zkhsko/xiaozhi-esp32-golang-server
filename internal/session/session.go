@@ -45,7 +45,6 @@ type runtimeState struct {
 	sessionId      string
 	mode           string
 	currentTurnId  uint64
-	promptPlayed   bool
 	helloTimer     *time.Timer
 	listeningTimer *time.Timer
 	asrResultTimer *time.Timer
@@ -82,10 +81,8 @@ type Options struct {
 	Config        SessionConfig
 	ASRClient     ai.ASRClient
 	LLMClient     ai.LLMClient
-	TTSClient     ai.TTSClient
 	AgentKitStore AgentKitStore
 	Logger        *slog.Logger
-	TickerFactory func(time.Duration) Ticker
 }
 
 // NewSession 使用具名选项创建配置就绪的 WebSocket 会话对象。
@@ -113,15 +110,13 @@ func NewSession(ctx context.Context, opts Options) *Session {
 	history := NewConversationHistory(cfg.MaxHistoryTurns)
 
 	pipeline := NewTurnPipeline(PipelineOptions{
-		ASRClient:     opts.ASRClient,
-		LLMClient:     opts.LLMClient,
-		TTSClient:     opts.TTSClient,
-		SystemPrompt:  opts.SystemPrompt,
-		Config:        cfg,
-		History:       history,
-		ToolProvider:  toolProvider,
-		Logger:        l,
-		TickerFactory: opts.TickerFactory,
+		ASRClient:    opts.ASRClient,
+		LLMClient:    opts.LLMClient,
+		SystemPrompt: opts.SystemPrompt,
+		Config:       cfg,
+		History:      history,
+		ToolProvider: toolProvider,
+		Logger:       l,
 		PostEvent: func(ev turnEvent) {
 			select {
 			case <-sessionCtx.Done():
@@ -385,7 +380,7 @@ func (s *Session) handleClientAudio(st *runtimeState, data []byte) {
 	}
 
 	if st.state != StateListening {
-		// 非 Listening 状态（如 Ready、Processing、Speaking）上行音频直接丢弃
+		// 非 Listening 状态上行音频直接丢弃
 		return
 	}
 
@@ -425,35 +420,21 @@ func (s *Session) handleClientText(st *runtimeState, msg *ClientMessage) {
 			st.currentTurnId++
 			turnId := st.currentTurnId
 
-			if mode == ListenModeAuto && s.cfg.ListenPromptEnabled && !st.promptPlayed {
-				st.promptPlayed = true
-				s.setState(st, StateSpeaking)
-				st.mode = mode
+			s.setState(st, StateListening)
+			st.mode = mode
 
-				s.logger.Info("session playing listen prompt",
-					"session_id", st.sessionId,
-					"turn_id", turnId,
-					"mode", mode,
-				)
-				_ = s.pipeline.PlayListenPrompt(s.ctx, turnId, st.sessionId, s.writer)
-			} else {
-				st.promptPlayed = false
-				s.setState(st, StateListening)
-				st.mode = mode
-
-				s.startListeningTimer(st, turnId)
-				if err := s.pipeline.StartListening(s.ctx, turnId, st.sessionId, mode); err != nil {
-					s.logger.Error("failed to start listening", "error", err, "session_id", st.sessionId)
-					s.setState(st, StateClosed)
-					s.closeWithReason(websocket.StatusInternalError, err.Error())
-					return
-				}
-				s.logger.Info("session entered listening state",
-					"session_id", st.sessionId,
-					"turn_id", turnId,
-					"mode", mode,
-				)
+			s.startListeningTimer(st, turnId)
+			if err := s.pipeline.StartListening(s.ctx, turnId, st.sessionId, mode); err != nil {
+				s.logger.Error("failed to start listening", "error", err, "session_id", st.sessionId)
+				s.setState(st, StateClosed)
+				s.closeWithReason(websocket.StatusInternalError, err.Error())
+				return
 			}
+			s.logger.Info("session entered listening state",
+				"session_id", st.sessionId,
+				"turn_id", turnId,
+				"mode", mode,
+			)
 
 		case StateListening:
 			s.logDiag(st.sessionId, "duplicate listen.start ignored in listening state",
@@ -557,24 +538,11 @@ func (s *Session) handleTurnEvent(st *runtimeState, ev turnEvent) {
 			"session_id", st.sessionId,
 			"turn_id", ev.turnId,
 		)
-		_ = s.pipeline.StartResponse(ev.turnId, st.sessionId, ev.text, s.writer)
-
-	case turnEventPlaybackStarted:
-		if st.state == StateProcessing {
-			s.setState(st, StateSpeaking)
-			s.logger.Info("session entered speaking state",
-				"session_id", st.sessionId,
-				"turn_id", ev.turnId,
-			)
-		}
+		_ = s.pipeline.StartResponse(ev.turnId, st.sessionId, ev.text)
 
 	case turnEventTurnCompleted:
 		if st.state != StateSpeaking && st.state != StateProcessing {
 			return
-		}
-
-		if st.mode == ListenModeAuto && s.cfg.ListenPromptEnabled {
-			st.promptPlayed = true
 		}
 
 		s.setState(st, StateReady)
@@ -614,8 +582,6 @@ func (s *Session) handleAbort(st *runtimeState, reason string) {
 	}
 
 	st.currentTurnId++
-	wasSpeaking := (st.state == StateSpeaking)
-	st.promptPlayed = false
 	s.setState(st, StateReady)
 
 	s.stopListeningTimer(st)
@@ -626,18 +592,10 @@ func (s *Session) handleAbort(st *runtimeState, reason string) {
 		s.writer.DrainPending()
 	}
 
-	if wasSpeaking {
-		stopBytes, err := EncodeTTSStopMessage(st.sessionId)
-		if err == nil {
-			_ = s.sendTextMessage(stopBytes)
-		}
-	}
-
 	s.logger.Info("session aborted and reset to ready",
 		"session_id", st.sessionId,
 		"new_turn_id", st.currentTurnId,
 		"reason", logger.TruncateString(reason),
-		"was_speaking", wasSpeaking,
 	)
 }
 

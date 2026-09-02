@@ -29,6 +29,11 @@ type WSConn interface {
 	Write(ctx context.Context, typ websocket.MessageType, p []byte) error
 }
 
+// DownlinkSender 定义下行发送接口。
+type DownlinkSender interface {
+	SendText(ctx context.Context, payload []byte) error
+}
+
 // writeMessage 封装待写入 WebSocket 的单条消息载荷与类型。
 type writeMessage struct {
 	msgType websocket.MessageType

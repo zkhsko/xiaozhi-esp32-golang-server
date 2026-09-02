@@ -8,9 +8,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
 )
+
+type mockWSMsg struct {
+	typ     websocket.MessageType
+	payload []byte
+}
+
+type mockWSConn struct {
+	mu       sync.Mutex
+	messages []mockWSMsg
+	writeErr error
+}
+
+func (m *mockWSConn) Write(ctx context.Context, typ websocket.MessageType, p []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.writeErr != nil {
+		return m.writeErr
+	}
+	cp := make([]byte, len(p))
+	copy(cp, p)
+	m.messages = append(m.messages, mockWSMsg{typ: typ, payload: cp})
+	return nil
+}
+
+func (m *mockWSConn) getMessages() []mockWSMsg {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := make([]mockWSMsg, len(m.messages))
+	copy(res, m.messages)
+	return res
+}
 
 type mockASRStream struct {
 	mu     sync.Mutex
@@ -253,7 +286,6 @@ func TestSession_CloseTool_ClosesSessionAfterTurn(t *testing.T) {
 	writer := NewWriter(ctx, conn, 10, nil)
 	defer writer.Close()
 
-	mockTTS := &mockTTSClient{}
 	mockLLM := &mockLLMClient{
 		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
 			for _, tool := range req.Tools {
@@ -272,7 +304,6 @@ func TestSession_CloseTool_ClosesSessionAfterTurn(t *testing.T) {
 		Writer:       writer,
 		SerialNumber: "SN-12345678",
 		LLMClient:    mockLLM,
-		TTSClient:    mockTTS,
 		Logger:       slog.Default(),
 	})
 

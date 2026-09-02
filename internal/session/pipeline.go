@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"sync"
-	"time"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/audio"
@@ -20,10 +18,7 @@ const (
 	// turnEventASRFinal 表示 ASR 最终识别文本产出。
 	turnEventASRFinal turnEventType = iota
 
-	// turnEventPlaybackStarted 表示下行播放开始（首包音频/首句字幕下发）。
-	turnEventPlaybackStarted
-
-	// turnEventTurnCompleted 表示当前问答或提示音播放已完整结束。
+	// turnEventTurnCompleted 表示当前问答处理已完整结束。
 	turnEventTurnCompleted
 
 	// turnEventTurnFailed 表示当前轮次出现致命或不可恢复错误。
@@ -53,37 +48,30 @@ type activeTurn struct {
 	decoder   *audio.Decoder
 	asrStream ai.ASRStream
 	asrQueue  *audio.ASRAudioQueue
-
-	// 下行播放阶段
-	pacer *DownlinkPacer
 }
 
 // PipelineOptions 聚合构造 TurnPipeline 的依赖与配置。
 type PipelineOptions struct {
-	ASRClient     ai.ASRClient
-	LLMClient     ai.LLMClient
-	TTSClient     ai.TTSClient
-	SystemPrompt  string
-	Config        SessionConfig
-	History       *ConversationHistory
-	ToolProvider  *ToolProvider
-	Logger        *slog.Logger
-	TickerFactory func(time.Duration) Ticker
-	PostEvent     func(turnEvent)
+	ASRClient    ai.ASRClient
+	LLMClient    ai.LLMClient
+	SystemPrompt string
+	Config       SessionConfig
+	History      *ConversationHistory
+	ToolProvider *ToolProvider
+	Logger       *slog.Logger
+	PostEvent    func(turnEvent)
 }
 
 // TurnPipeline 负责会话级 AI 客户端与语音轮次流水线调度，将每轮运行时隔离在 activeTurn 中。
 type TurnPipeline struct {
-	asrClient     ai.ASRClient
-	llmClient     ai.LLMClient
-	ttsClient     ai.TTSClient
-	systemPrompt  string
-	cfg           SessionConfig
-	history       *ConversationHistory
-	toolProvider  *ToolProvider
-	logger        *slog.Logger
-	tickerFactory func(time.Duration) Ticker
-	postEvent     func(turnEvent)
+	asrClient    ai.ASRClient
+	llmClient    ai.LLMClient
+	systemPrompt string
+	cfg          SessionConfig
+	history      *ConversationHistory
+	toolProvider *ToolProvider
+	logger       *slog.Logger
+	postEvent    func(turnEvent)
 
 	mu         sync.Mutex
 	activeTurn *activeTurn
@@ -102,16 +90,14 @@ func NewTurnPipeline(opts PipelineOptions) *TurnPipeline {
 	}
 
 	return &TurnPipeline{
-		asrClient:     opts.ASRClient,
-		llmClient:     opts.LLMClient,
-		ttsClient:     opts.TTSClient,
-		systemPrompt:  opts.SystemPrompt,
-		cfg:           opts.Config,
-		history:       hist,
-		toolProvider:  opts.ToolProvider,
-		logger:        l,
-		tickerFactory: opts.TickerFactory,
-		postEvent:     opts.PostEvent,
+		asrClient:    opts.ASRClient,
+		llmClient:    opts.LLMClient,
+		systemPrompt: opts.SystemPrompt,
+		cfg:          opts.Config,
+		history:      hist,
+		toolProvider: opts.ToolProvider,
+		logger:       l,
+		postEvent:    opts.PostEvent,
 	}
 }
 
@@ -232,8 +218,8 @@ func (p *TurnPipeline) FinishListening(turnId uint64, sessionId string) error {
 	return nil
 }
 
-// StartResponse 启动 LLM 增量生成、逐句 TTS 与 60ms 下行节奏器协同流水线。
-func (p *TurnPipeline) StartResponse(turnId uint64, sessionId string, userText string, sender DownlinkSender) error {
+// StartResponse 启动 LLM 增量生成与多轮工具编排响应。
+func (p *TurnPipeline) StartResponse(turnId uint64, sessionId string, userText string) error {
 	p.mu.Lock()
 	turn := p.activeTurn
 	if turn == nil || turn.turnId != turnId {
@@ -251,134 +237,19 @@ func (p *TurnPipeline) StartResponse(turnId uint64, sessionId string, userText s
 		turn.asrStream = nil
 	}
 
-	turnCtx := turn.ctx
-	effects := turn.effects
-
-	if p.llmClient == nil || p.ttsClient == nil {
+	if p.llmClient == nil {
 		p.mu.Unlock()
 		p.emit(turnEvent{
 			turnId: turnId,
 			typ:    turnEventTurnFailed,
-			err:    errors.New("ai clients not configured"),
+			err:    errors.New("llm client not configured"),
 			fatal:  true,
 		})
 		return nil
 	}
-
-	pacer := NewDownlinkPacer(turnCtx, DownlinkPacerOptions{
-		SessionId:     sessionId,
-		Sender:        sender,
-		QueueCap:      p.cfg.DownlinkOpusQueueCapacity,
-		TickerFactory: p.tickerFactory,
-		Logger:        p.logger,
-		Callbacks: PacerCallbacks{
-			OnStarted: func() {
-				p.emit(turnEvent{
-					turnId: turnId,
-					typ:    turnEventPlaybackStarted,
-				})
-			},
-			OnCompleted: func() {
-				p.emit(turnEvent{
-					turnId:       turnId,
-					typ:          turnEventTurnCompleted,
-					closeSession: effects.CloseSession,
-				})
-			},
-			OnError: func(err error) {
-				p.emit(turnEvent{
-					turnId: turnId,
-					typ:    turnEventTurnFailed,
-					err:    err,
-					fatal:  true,
-				})
-			},
-		},
-	})
-	turn.pacer = pacer
 	p.mu.Unlock()
 
-	go pacer.Run()
-	go p.orchestrateLLMAndTTS(turn, sessionId, userText, sender, pacer)
-
-	return nil
-}
-
-// PlayListenPrompt 播放独立的唤醒就绪提示音。
-func (p *TurnPipeline) PlayListenPrompt(ctx context.Context, turnId uint64, sessionId string, sender DownlinkSender) error {
-	pkts, err := audio.GetListenPromptOpusPackets()
-	if err != nil {
-		p.logger.Error("failed to get listen prompt opus packets", "error", err, "session_id", sessionId)
-		p.emit(turnEvent{
-			turnId: turnId,
-			typ:    turnEventTurnFailed,
-			err:    err,
-			fatal:  true,
-		})
-		return err
-	}
-
-	p.mu.Lock()
-	if p.activeTurn != nil {
-		p.activeTurn.cancel()
-		p.cleanupTurnResources(p.activeTurn)
-	}
-
-	turnCtx, turnCancel := context.WithCancel(ctx)
-	pacer := NewDownlinkPacer(turnCtx, DownlinkPacerOptions{
-		SessionId:     sessionId,
-		Sender:        sender,
-		QueueCap:      p.cfg.DownlinkOpusQueueCapacity,
-		TickerFactory: p.tickerFactory,
-		Logger:        p.logger,
-		Callbacks: PacerCallbacks{
-			OnStarted: func() {
-				p.emit(turnEvent{
-					turnId: turnId,
-					typ:    turnEventPlaybackStarted,
-				})
-			},
-			OnCompleted: func() {
-				p.emit(turnEvent{
-					turnId: turnId,
-					typ:    turnEventTurnCompleted,
-				})
-			},
-			OnError: func(err error) {
-				p.emit(turnEvent{
-					turnId: turnId,
-					typ:    turnEventTurnFailed,
-					err:    err,
-					fatal:  true,
-				})
-			},
-		},
-	})
-
-	turn := &activeTurn{
-		turnId:  turnId,
-		ctx:     turnCtx,
-		cancel:  turnCancel,
-		effects: &TurnEffects{},
-		pacer:   pacer,
-	}
-	p.activeTurn = turn
-	p.mu.Unlock()
-
-	go pacer.Run()
-
-	go func() {
-		for _, pkt := range pkts {
-			if turnCtx.Err() != nil {
-				return
-			}
-			if err := pacer.Enqueue(pkt); err != nil {
-				return
-			}
-		}
-		pacer.FinishInput()
-	}()
-
+	go p.orchestrateLLM(turn, sessionId, userText)
 	return nil
 }
 
@@ -415,10 +286,6 @@ func (p *TurnPipeline) Close() {
 func (p *TurnPipeline) cleanupTurnResources(turn *activeTurn) {
 	if turn == nil {
 		return
-	}
-	if turn.pacer != nil {
-		turn.pacer.Abort()
-		turn.pacer = nil
 	}
 	if turn.asrQueue != nil {
 		turn.asrQueue.Close()
@@ -511,29 +378,10 @@ func (p *TurnPipeline) readASRResultManual(ctx context.Context, stream ai.ASRStr
 	})
 }
 
-// orchestrateLLMAndTTS 协同编排流式大语言模型生成、分句与逐句 TTS 语音合成。
-func (p *TurnPipeline) orchestrateLLMAndTTS(turn *activeTurn, sessionId string, userText string, sender DownlinkSender, pacer *DownlinkPacer) {
+// orchestrateLLM 编排流式大语言模型生成与多轮工具调用。
+func (p *TurnPipeline) orchestrateLLM(turn *activeTurn, sessionId string, userText string) {
 	ctx := turn.ctx
 	turnId := turn.turnId
-
-	pipelineSucceeded := false
-	defer func() {
-		if !pipelineSucceeded {
-			pacer.Stop()
-		}
-	}()
-
-	pcmDone := make(chan error, 1)
-	sentenceCh := make(chan string, 100)
-	var sentenceChOnce sync.Once
-	closeSentenceCh := func() {
-		sentenceChOnce.Do(func() {
-			close(sentenceCh)
-		})
-	}
-	defer closeSentenceCh()
-
-	go p.consumeSentencesTTS(turn, sessionId, sentenceCh, pacer, pcmDone)
 
 	messages := p.history.BuildLLMMessages(p.systemPrompt, userText)
 	var tools []ai.Tool
@@ -541,21 +389,6 @@ func (p *TurnPipeline) orchestrateLLMAndTTS(turn *activeTurn, sessionId string, 
 		tools = p.toolProvider.BuildSnapshot(ctx, turnId, sessionId, turn.effects)
 	}
 
-	splitter := NewSentenceSplitter()
-
-	sendSentence := func(sentence string) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case sentenceCh <- sentence:
-		}
-		return nil
-	}
-
-	currentIteration := 0
 	finalText, err := p.llmClient.Generate(
 		ctx,
 		ai.LLMRequest{
@@ -564,16 +397,6 @@ func (p *TurnPipeline) orchestrateLLMAndTTS(turn *activeTurn, sessionId string, 
 			MaxTurns: 8,
 		},
 		func(ctx context.Context, chunk ai.LLMChunk) error {
-			if chunk.Iteration != currentIteration {
-				splitter = NewSentenceSplitter()
-				currentIteration = chunk.Iteration
-			}
-
-			for _, sentence := range splitter.Feed(chunk.Text) {
-				if err := sendSentence(sentence); err != nil {
-					return err
-				}
-			}
 			return nil
 		},
 	)
@@ -600,248 +423,14 @@ func (p *TurnPipeline) orchestrateLLMAndTTS(turn *activeTurn, sessionId string, 
 		return
 	}
 
-	// 刷新末尾残句
-	remaining := splitter.Flush()
-	for _, sentence := range remaining {
-		if err := sendSentence(sentence); err != nil {
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-				return
-			}
-			p.logger.Warn("failed to deliver flushed sentence",
-				"error", err,
-				"session_id", sessionId,
-				"turn_id", turnId,
-			)
-			p.emit(turnEvent{
-				turnId: turnId,
-				typ:    turnEventTurnFailed,
-				err:    err,
-				fatal:  true,
-			})
-			return
-		}
-	}
-
-	closeSentenceCh()
-
-	if ctx.Err() != nil {
-		return
-	}
-
-	select {
-	case <-ctx.Done():
-		return
-	case pcmErr := <-pcmDone:
-		if pcmErr != nil {
-			return
-		}
-	}
-
-	if ctx.Err() != nil {
-		return
-	}
-
 	// 文本成功提交至历史
 	if userText != "" && finalText != "" {
 		p.history.AppendTurn(userText, finalText)
 	}
 
-	pipelineSucceeded = true
-	pacer.FinishInput()
-}
-
-// consumeSentencesTTS 严格保持单并发合成与流式分帧编码，将单句字幕与 Opus 包实时压入下行节奏器。
-func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, sentenceCh <-chan string, pacer *DownlinkPacer, done chan<- error) {
-	ctx := turn.ctx
-	turnId := turn.turnId
-
-	var consumeErr error
-	defer func() {
-		if done != nil {
-			select {
-			case done <- consumeErr:
-			default:
-			}
-			close(done)
-		}
-	}()
-
-	if p.ttsClient == nil {
-		return
-	}
-
-	enc, err := audio.NewEncoder(p.cfg.MaxOpusPacketBytes)
-	if err != nil {
-		consumeErr = err
-		p.logger.Error("failed to create per-turn opus encoder",
-			"error", err,
-			"session_id", sessionId,
-			"turn_id", turnId,
-		)
-		p.emit(turnEvent{
-			turnId: turnId,
-			typ:    turnEventTurnFailed,
-			err:    err,
-			fatal:  true,
-		})
-		return
-	}
-	defer enc.Close()
-
-	streamEncoder := audio.NewStreamEncoder(enc)
-
-	for sentence := range sentenceCh {
-		if ctx.Err() != nil {
-			return
-		}
-		if sentence == "" {
-			continue
-		}
-
-		if err := p.synthesizeSentence(ctx, sentence, streamEncoder, pacer); err != nil {
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-				return
-			}
-			consumeErr = err
-			p.logger.Warn("tts sentence stream error",
-				"error", err,
-				"session_id", sessionId,
-				"turn_id", turnId,
-			)
-			p.emit(turnEvent{
-				turnId: turnId,
-				typ:    turnEventTurnFailed,
-				err:    err,
-				fatal:  true,
-			})
-			return
-		}
-	}
-
-	if ctx.Err() != nil {
-		return
-	}
-
-	// 若为 auto 模式且启用了提示音且本轮非关闭连接操作，在末尾追加提示音 PCM
-	if turn.mode == ListenModeAuto && p.cfg.ListenPromptEnabled && !turn.effects.CloseSession {
-		promptPCM, pErr := audio.GetListenPromptPCM()
-		if pErr != nil {
-			consumeErr = pErr
-			p.logger.Warn("failed to get listen prompt pcm for turn tail",
-				"error", pErr,
-				"session_id", sessionId,
-				"turn_id", turnId,
-			)
-		} else if len(promptPCM) > 0 {
-			promptPackets, pEncodeErr := streamEncoder.Feed(promptPCM)
-			if pEncodeErr != nil {
-				consumeErr = pEncodeErr
-				p.logger.Warn("failed to encode prompt pcm to opus",
-					"error", pEncodeErr,
-					"session_id", sessionId,
-					"turn_id", turnId,
-				)
-			} else {
-				for _, pkt := range promptPackets {
-					if ctx.Err() != nil {
-						return
-					}
-					if pacer != nil {
-						if err := pacer.Enqueue(pkt); err != nil {
-							return
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// 统一刷新最后一包 Opus 尾帧
-	flushPackets, flushErr := streamEncoder.Flush()
-	if flushErr != nil {
-		consumeErr = flushErr
-		p.logger.Warn("failed to flush tts opus encoder",
-			"error", flushErr,
-			"session_id", sessionId,
-			"turn_id", turnId,
-		)
-		p.emit(turnEvent{
-			turnId: turnId,
-			typ:    turnEventTurnFailed,
-			err:    flushErr,
-			fatal:  true,
-		})
-		return
-	}
-	for _, pkt := range flushPackets {
-		if ctx.Err() != nil {
-			return
-		}
-		if pacer != nil {
-			if err := pacer.Enqueue(pkt); err != nil {
-				return
-			}
-		}
-	}
-}
-
-// synthesizeSentence 为单个句子建立流式 TTS 会话，顺序流式拉取 PCM 数据、进行分帧 Opus 编码并写入下行节奏器。
-func (p *TurnPipeline) synthesizeSentence(ctx context.Context, sentence string, streamEncoder *audio.StreamEncoder, pacer *DownlinkPacer) error {
-	if p.ttsClient == nil {
-		return nil
-	}
-
-	if pacer != nil {
-		if err := pacer.EnqueueSentenceStart(sentence); err != nil {
-			return err
-		}
-	}
-
-	stream, err := p.ttsClient.CreateStream(ctx)
-	if err != nil {
-		return err
-	}
-	defer stream.Close()
-
-	if err := stream.SendSentence(ctx, sentence); err != nil {
-		return err
-	}
-
-	if err := stream.Finish(ctx); err != nil {
-		return err
-	}
-
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		pcmChunk, err := stream.NextPCM(ctx)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			return err
-		}
-
-		if len(pcmChunk) == 0 {
-			continue
-		}
-
-		packets, err := streamEncoder.Feed(pcmChunk)
-		if err != nil {
-			return err
-		}
-
-		for _, pkt := range packets {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if pacer != nil {
-				if err := pacer.Enqueue(pkt); err != nil {
-					return err
-				}
-			}
-		}
-	}
+	p.emit(turnEvent{
+		turnId:       turnId,
+		typ:          turnEventTurnCompleted,
+		closeSession: turn.effects.CloseSession,
+	})
 }

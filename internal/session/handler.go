@@ -126,22 +126,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. 工厂实例化该会话专属的 ASR, LLM, TTS 客户端
+	// 4. 工厂实例化该会话专属的 ASR, LLM 客户端
 	asrClient, err := factory.CreateASRClient(&snapshot.ASRConfig)
 	if err != nil {
 		RejectUpgrade(w, r, h.logger, err)
 		return
 	}
 	llmClient, err := factory.CreateLLMClient(&snapshot.LLMConfig)
-	if err != nil {
-		RejectUpgrade(w, r, h.logger, err)
-		return
-	}
-	ttsQueueCap := DefaultWriteQueueCapacity
-	if h.cfg != nil && h.cfg.Session.TTSPCMQueueCapacity > 0 {
-		ttsQueueCap = h.cfg.Session.TTSPCMQueueCapacity
-	}
-	ttsClient, err := factory.CreateTTSClient(&snapshot.TTSConfig, snapshot.Agent.Voice, ttsQueueCap)
 	if err != nil {
 		RejectUpgrade(w, r, h.logger, err)
 		return
@@ -190,7 +181,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Config:        mapSessionConfig(h.cfg),
 		ASRClient:     asrClient,
 		LLMClient:     llmClient,
-		TTSClient:     ttsClient,
 		AgentKitStore: h.agentKitStore,
 		Logger:        h.logger,
 	})
