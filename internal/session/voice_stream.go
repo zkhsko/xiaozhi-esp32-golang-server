@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/audio"
@@ -42,6 +43,7 @@ type VoiceWriter interface {
 	SendVoiceTextWait(ctx context.Context, turnId uint64, payload []byte) error
 	SendVoiceBinaryWait(ctx context.Context, turnId uint64, payload []byte) error
 	EnqueueBarrierWait(ctx context.Context, turnId uint64) error
+	SendText(ctx context.Context, payload []byte) error
 }
 
 // VoiceStreamEventKind 定义语音流向外部投递的事件类型。
@@ -133,9 +135,14 @@ type voiceStreamTurn struct {
 	terminalOnce sync.Once
 	terminated   atomic.Bool
 
+	// 状态与取消控制
+	cancelOnce  sync.Once
+	canceled    atomic.Bool
+	startedSent atomic.Bool
+	stoppedSent atomic.Bool
+
 	// 仅由句子工作协程独占访问的资源（保证无并发竞争）
 	ttsStream    ai.TTSStream
-	startedSent  bool
 	hasSentences bool
 }
 
@@ -162,7 +169,7 @@ func newVoiceStreamTurn(
 		downlinkCap = DefaultWriteQueueCapacity
 	}
 
-	return &voiceStreamTurn{
+	turn := &voiceStreamTurn{
 		turnId:        turnId,
 		sessionId:     sessionId,
 		ctx:           turnCtx,
@@ -177,6 +184,56 @@ func newVoiceStreamTurn(
 		onEvent:       onEvent,
 		splitter:      NewSentenceSplitter(),
 	}
+
+	// 监听上下文取消信号，统一触发有界清理
+	go func() {
+		<-turn.ctx.Done()
+		turn.cancelTurn()
+	}()
+
+	return turn
+}
+
+// cancelTurn 安全触发轮次取消，并启动后台独立有界清理。
+func (t *voiceStreamTurn) cancelTurn() {
+	t.cancelOnce.Do(func() {
+		t.canceled.Store(true)
+		t.cancel()
+		t.asyncCleanup()
+	})
+}
+
+// asyncCleanup 启动后台独立有界清理（最多 2 秒），清理在后台完成且不阻塞 Session 立即接受并开启下一轮。
+func (t *voiceStreamTurn) asyncCleanup() {
+	go func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cleanupCancel()
+
+		// 补发 tts/stop 机制：若旧轮次已发送 tts/start 且未曾发送 stop，
+		// 必须通过非语音普通控制帧 SendText 下发 tts/stop，以防被旧语音轮次失效逻辑跳过；
+		// 若未发送 tts/start 则绝不建连、绝不补发 tts/stop。
+		if t.startedSent.Load() && t.stoppedSent.CompareAndSwap(false, true) {
+			stopMsg, err := EncodeTTSStopMessage(t.sessionId)
+			if err == nil && t.writer != nil {
+				if sendErr := t.writer.SendText(cleanupCtx, stopMsg); sendErr != nil {
+					t.logger.Warn("failed to send cancel fallback tts stop", "turnId", t.turnId, "error", sendErr)
+				}
+			}
+		}
+
+		// 有界等待工作协程退出并完成底层资源释放（最多 2 秒）
+		done := make(chan struct{})
+		go func() {
+			t.wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-cleanupCtx.Done():
+			t.logger.Warn("voice stream turn cleanup timed out after 2 seconds", "turnId", t.turnId)
+		}
+	}()
 }
 
 // start 启动本轮规定的三个工作协程：句子工作协程、编码工作协程、下行工作协程。
@@ -192,6 +249,14 @@ func (t *voiceStreamTurn) start() {
 // emit 向外部投递语音流生命周期事件，保证终态事件（Success 或 Failed）在整轮中全局单次发射。
 func (t *voiceStreamTurn) emit(ev VoiceStreamEvent) {
 	if t.onEvent == nil {
+		return
+	}
+	// 严格校验事件轮次 Id
+	if ev.TurnId != t.turnId {
+		return
+	}
+	// 若本轮已被取消，迟到的终态或状态事件直接丢弃
+	if t.canceled.Load() || (t.ctx.Err() != nil && ev.Kind == VoiceStreamEventSuccess) {
 		return
 	}
 	if ev.Kind == VoiceStreamEventSuccess || ev.Kind == VoiceStreamEventFailed {
@@ -227,6 +292,9 @@ func (t *voiceStreamTurn) sentenceWorker() {
 			}
 			if job.turnId != t.turnId {
 				continue
+			}
+			if t.canceled.Load() || t.ctx.Err() != nil {
+				return
 			}
 
 			if job.isEnd {
@@ -264,7 +332,7 @@ func (t *voiceStreamTurn) processSentence(job sentenceJob) error {
 	}
 
 	// 首次合成前下发 tts/start 并通知 speaking 状态
-	if !t.startedSent {
+	if !t.startedSent.Load() {
 		startMsg, err := EncodeTTSStartMessage(t.sessionId)
 		if err != nil {
 			t.logger.Warn("failed to encode tts start message", "turnId", t.turnId, "error", err)
@@ -284,7 +352,7 @@ func (t *voiceStreamTurn) processSentence(job sentenceJob) error {
 		case t.downlinkQueue <- startFrame:
 		}
 
-		t.startedSent = true
+		t.startedSent.Store(true)
 		t.emit(VoiceStreamEvent{TurnId: t.turnId, Kind: VoiceStreamEventSpeaking})
 	}
 
@@ -310,6 +378,9 @@ func (t *voiceStreamTurn) processSentence(job sentenceJob) error {
 
 	// 调用本轮 TTSStream 执行单句合成
 	synthErr := t.ttsStream.SynthesizeSentence(t.ctx, job.text, func(pcmCtx context.Context, pcm []byte) error {
+		if t.canceled.Load() || t.ctx.Err() != nil {
+			return t.ctx.Err()
+		}
 		if len(pcm) == 0 {
 			return nil
 		}
@@ -328,7 +399,7 @@ func (t *voiceStreamTurn) processSentence(job sentenceJob) error {
 		}
 	})
 	if synthErr != nil {
-		if !errors.Is(synthErr, context.Canceled) {
+		if !errors.Is(synthErr, context.Canceled) && !t.canceled.Load() && t.ctx.Err() == nil {
 			t.logger.Warn("failed to synthesize sentence", "turnId", t.turnId, "error", synthErr)
 			t.emit(VoiceStreamEvent{TurnId: t.turnId, Kind: VoiceStreamEventFailed, Err: synthErr})
 		}
@@ -385,7 +456,7 @@ func (t *voiceStreamTurn) handleTextEnd() {
 	}
 
 	// 若已发送 start，则排入 stop 与屏障进行真实写出确认
-	if t.startedSent {
+	if t.startedSent.Load() {
 		stopMsg, err := EncodeTTSStopMessage(t.sessionId)
 		if err != nil {
 			t.logger.Warn("failed to encode tts stop message", "turnId", t.turnId, "error", err)
@@ -424,7 +495,7 @@ func (t *voiceStreamTurn) handleTextEnd() {
 			return
 		case err := <-barrierCh:
 			if err != nil {
-				if !errors.Is(err, context.Canceled) {
+				if !errors.Is(err, context.Canceled) && !t.canceled.Load() && t.ctx.Err() == nil {
 					t.logger.Warn("writer barrier failed after tts stop", "turnId", t.turnId, "error", err)
 					t.emit(VoiceStreamEvent{TurnId: t.turnId, Kind: VoiceStreamEventFailed, Err: err})
 				}
@@ -439,7 +510,8 @@ func (t *voiceStreamTurn) handleTextEnd() {
 		return
 	}
 
-	// 真实写出确认成功，投递轮次成功事件并退出
+	// 真实写出确认成功，标记已正常发送 stop，投递轮次成功事件并退出
+	t.stoppedSent.Store(true)
 	t.emit(VoiceStreamEvent{TurnId: t.turnId, Kind: VoiceStreamEventSuccess})
 	t.cancel()
 }
@@ -470,7 +542,12 @@ func (t *voiceStreamTurn) encoderWorker() {
 				return
 			}
 			if job.turnId != t.turnId {
+				// 丢弃旧轮次迟到 PCM，绝不进入编码器
 				continue
+			}
+			if t.canceled.Load() || t.ctx.Err() != nil {
+				// 轮次已取消，直接退出
+				return
 			}
 
 			if len(job.data) > 0 {
@@ -482,6 +559,9 @@ func (t *voiceStreamTurn) encoderWorker() {
 					return
 				}
 				for _, pkt := range packets {
+					if t.canceled.Load() || t.ctx.Err() != nil {
+						return
+					}
 					frame := downlinkFrame{
 						turnId:   t.turnId,
 						sequence: job.sequence,
@@ -508,6 +588,9 @@ func (t *voiceStreamTurn) encoderWorker() {
 					return
 				}
 				for _, pkt := range packets {
+					if t.canceled.Load() || t.ctx.Err() != nil {
+						return
+					}
 					frame := downlinkFrame{
 						turnId:   t.turnId,
 						sequence: job.sequence,
@@ -544,6 +627,17 @@ func (t *voiceStreamTurn) downlinkWorker() {
 				return
 			}
 			if frame.turnId != t.turnId {
+				// 丢弃旧轮次迟到帧，绝不进入 Writer
+				if frame.barrierCh != nil {
+					frame.barrierCh <- ErrTurnMismatch
+				}
+				continue
+			}
+			if t.canceled.Load() || t.ctx.Err() != nil {
+				// 轮次已取消，迟到帧直接丢弃，绝不进入 Writer
+				if frame.barrierCh != nil {
+					frame.barrierCh <- t.ctx.Err()
+				}
 				continue
 			}
 
@@ -557,7 +651,7 @@ func (t *voiceStreamTurn) downlinkWorker() {
 			switch frame.kind {
 			case frameKindText:
 				if err := t.writer.SendVoiceTextWait(t.ctx, frame.turnId, frame.payload); err != nil {
-					if !errors.Is(err, context.Canceled) {
+					if !errors.Is(err, context.Canceled) && !t.canceled.Load() && t.ctx.Err() == nil {
 						t.logger.Warn("failed to send voice text frame", "turnId", t.turnId, "error", err)
 						t.emit(VoiceStreamEvent{TurnId: t.turnId, Kind: VoiceStreamEventFailed, Err: err})
 					}
@@ -566,7 +660,7 @@ func (t *voiceStreamTurn) downlinkWorker() {
 				}
 			case frameKindBinary:
 				if err := t.writer.SendVoiceBinaryWait(t.ctx, frame.turnId, frame.payload); err != nil {
-					if !errors.Is(err, context.Canceled) {
+					if !errors.Is(err, context.Canceled) && !t.canceled.Load() && t.ctx.Err() == nil {
 						t.logger.Warn("failed to send voice binary frame", "turnId", t.turnId, "error", err)
 						t.emit(VoiceStreamEvent{TurnId: t.turnId, Kind: VoiceStreamEventFailed, Err: err})
 					}
@@ -579,7 +673,7 @@ func (t *voiceStreamTurn) downlinkWorker() {
 					frame.barrierCh <- err
 				}
 				if err != nil {
-					if !errors.Is(err, context.Canceled) {
+					if !errors.Is(err, context.Canceled) && !t.canceled.Load() && t.ctx.Err() == nil {
 						t.logger.Warn("failed to wait writer barrier in downlink worker", "turnId", t.turnId, "error", err)
 						t.emit(VoiceStreamEvent{TurnId: t.turnId, Kind: VoiceStreamEventFailed, Err: err})
 					}
@@ -646,7 +740,7 @@ func (vs *VoiceStream) SetSessionId(sessionId string) {
 }
 
 // StartTurn 为指定轮次启动语音流水线，初始化三个有界队列并创建规定的三个工作协程。
-// 若已有活跃轮次，先取消旧轮次并等待其平稳退出后再初始化新轮次。
+// 若已有活跃轮次，先取消旧轮次并在后台进行有界清理，绝不阻塞立即接受并开启下一轮。
 func (vs *VoiceStream) StartTurn(ctx context.Context, turnId uint64) error {
 	vs.mu.Lock()
 	if vs.closed {
@@ -656,14 +750,8 @@ func (vs *VoiceStream) StartTurn(ctx context.Context, turnId uint64) error {
 
 	if vs.activeTurn != nil {
 		oldTurn := vs.activeTurn
-		oldTurn.cancel()
-		vs.mu.Unlock()
-		oldTurn.wg.Wait()
-		vs.mu.Lock()
-		if vs.closed {
-			vs.mu.Unlock()
-			return ErrVoiceStreamClosed
-		}
+		oldTurn.cancelTurn()
+		vs.activeTurn = nil
 	}
 
 	if ctx == nil {
@@ -860,12 +948,12 @@ func (vs *VoiceStream) FinishText(ctx context.Context, turnId uint64) error {
 	return nil
 }
 
-// CancelTurn 取消指定轮次的语音流水线。
+// CancelTurn 取消指定轮次的语音流水线并在后台进行有界清理。
 func (vs *VoiceStream) CancelTurn(turnId uint64) {
 	vs.mu.Lock()
 	t := vs.activeTurn
 	if t != nil && t.turnId == turnId {
-		t.cancel()
+		t.cancelTurn()
 	}
 	vs.mu.Unlock()
 }
@@ -885,7 +973,7 @@ func (vs *VoiceStream) Close() error {
 	vs.mu.Unlock()
 
 	if t != nil {
-		t.cancel()
+		t.cancelTurn()
 		t.wg.Wait()
 	}
 	return nil

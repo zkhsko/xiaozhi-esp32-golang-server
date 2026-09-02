@@ -67,6 +67,12 @@ func (m *mockTTSStream) Close() error {
 	return nil
 }
 
+func (m *mockTTSStream) CloseCalls() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.closeCalls
+}
+
 // mockTTSClient 实现 ai.TTSClient 接口。
 type mockTTSClient struct {
 	mu             sync.Mutex
@@ -103,25 +109,43 @@ func (c *mockTTSClient) CreateStream(ctx context.Context) (ai.TTSStream, error) 
 
 // mockVoiceWriter 实现 VoiceWriter 接口。
 type mockVoiceWriter struct {
-	mu               sync.Mutex
-	textFrames       []string
-	binaryFrames     [][]byte
-	barrierCalls     int
-	sendTextFn       func(ctx context.Context, turnId uint64, payload []byte) error
-	sendBinaryFn     func(ctx context.Context, turnId uint64, payload []byte) error
-	enqueueBarrierFn func(ctx context.Context, turnId uint64) error
+	mu                sync.Mutex
+	textFrames        []string
+	controlTextFrames []string
+	voiceTextFrames   []string
+	binaryFrames      [][]byte
+	barrierCalls      int
+	sendTextFn        func(ctx context.Context, turnId uint64, payload []byte) error
+	sendControlTextFn func(ctx context.Context, payload []byte) error
+	sendBinaryFn      func(ctx context.Context, turnId uint64, payload []byte) error
+	enqueueBarrierFn  func(ctx context.Context, turnId uint64) error
 }
 
 func newMockVoiceWriter() *mockVoiceWriter {
 	return &mockVoiceWriter{
-		textFrames:   make([]string, 0),
-		binaryFrames: make([][]byte, 0),
+		textFrames:        make([]string, 0),
+		controlTextFrames: make([]string, 0),
+		voiceTextFrames:   make([]string, 0),
+		binaryFrames:      make([][]byte, 0),
 	}
+}
+
+func (w *mockVoiceWriter) SendText(ctx context.Context, payload []byte) error {
+	w.mu.Lock()
+	w.textFrames = append(w.textFrames, string(payload))
+	w.controlTextFrames = append(w.controlTextFrames, string(payload))
+	w.mu.Unlock()
+
+	if w.sendControlTextFn != nil {
+		return w.sendControlTextFn(ctx, payload)
+	}
+	return nil
 }
 
 func (w *mockVoiceWriter) SendVoiceTextWait(ctx context.Context, turnId uint64, payload []byte) error {
 	w.mu.Lock()
 	w.textFrames = append(w.textFrames, string(payload))
+	w.voiceTextFrames = append(w.voiceTextFrames, string(payload))
 	w.mu.Unlock()
 
 	if w.sendTextFn != nil {
@@ -1601,7 +1625,7 @@ func TestVoiceStream_Stop_NotCompletedBeforeBarrierWritten(t *testing.T) {
 	}
 
 	hasSpeaking := false
-	drainLoop:
+drainLoop:
 	for {
 		select {
 		case ev := <-events:
@@ -1698,7 +1722,7 @@ func TestVoiceStream_Stop_WriteFailure_CannotSucceed(t *testing.T) {
 
 		// 排空事件队列，确认无 Success 到达
 		time.Sleep(20 * time.Millisecond)
-		drainLoop1:
+	drainLoop1:
 		for {
 			select {
 			case ev := <-events:
@@ -1790,7 +1814,7 @@ func TestVoiceStream_Stop_WriteFailure_CannotSucceed(t *testing.T) {
 
 		// 排空事件队列，确认无 Success 到达
 		time.Sleep(20 * time.Millisecond)
-		drainLoop2:
+	drainLoop2:
 		for {
 			select {
 			case ev := <-events:
@@ -1853,7 +1877,7 @@ func TestVoiceStream_TTS_CloseError_DoesNotAffectSuccess(t *testing.T) {
 	var hasSpeaking, hasSuccess, hasFailed bool
 	deadline := time.After(3 * time.Second)
 
-	drainLoop:
+drainLoop:
 	for {
 		select {
 		case ev := <-events:
@@ -2001,3 +2025,565 @@ func TestVoiceStream_NoText_DirectSuccess(t *testing.T) {
 	})
 }
 
+// TestVoiceStream_ThreeQueuesBackpressureAndCancelUnblock 验证文本、PCM、下行三队列满载背压与取消唤醒解除。
+func TestVoiceStream_ThreeQueuesBackpressureAndCancelUnblock(t *testing.T) {
+	t.Run("SentenceQueueBackpressureAndCancelUnblock", func(t *testing.T) {
+		synthBlock := make(chan struct{})
+		synthStarted := make(chan struct{}, 1)
+
+		stream := newMockTTSStream()
+		stream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+			select {
+			case synthStarted <- struct{}{}:
+			default:
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-synthBlock:
+				return nil
+			}
+		}
+		ttsClient := newMockTTSClient(stream)
+		writer := newMockVoiceWriter()
+
+		vs := NewVoiceStream(VoiceStreamOptions{
+			SessionId: "sess-backpressure-sentence",
+			TTSClient: ttsClient,
+			Writer:    writer,
+		})
+		defer vs.Close()
+
+		ctx := context.Background()
+		turnId := uint64(701)
+		if err := vs.StartTurn(ctx, turnId); err != nil {
+			t.Fatalf("StartTurn failed: %v", err)
+		}
+
+		// 投递第 1 句，使 sentenceWorker 阻塞在 SynthesizeSentence
+		_ = vs.FeedText(ctx, turnId, "第一句测试文本，用于阻塞句子工作协程！", 0)
+		select {
+		case <-synthStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for synthesis to start")
+		}
+
+		// 填满文本句队列（容量为 100）
+		for i := 0; i < DefaultSentenceQueueCapacity; i++ {
+			err := vs.FeedText(ctx, turnId, "这是填满队列的测试句子！", 0)
+			if err != nil {
+				t.Fatalf("unexpected error feeding sentence %d: %v", i, err)
+			}
+		}
+
+		// 第 102 句投递将因队列满载而阻塞
+		feedErrCh := make(chan error, 1)
+		feedStarted := make(chan struct{})
+		go func() {
+			close(feedStarted)
+			err := vs.FeedText(ctx, turnId, "这是超额阻塞的测试句子！", 0)
+			feedErrCh <- err
+		}()
+
+		<-feedStarted
+		select {
+		case err := <-feedErrCh:
+			t.Fatalf("feed should block on full queue, but returned immediately: %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		// 取消当前轮次，满载等待必须被立即唤醒并解除
+		vs.CancelTurn(turnId)
+
+		select {
+		case err := <-feedErrCh:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected context.Canceled on unblock, got: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for blocked feed to unblock after cancel")
+		}
+
+		close(synthBlock)
+	})
+
+	t.Run("PCMQueueBackpressureAndCancelUnblock", func(t *testing.T) {
+		pcmBlock := make(chan struct{})
+		writerBlock := make(chan struct{})
+
+		stream := newMockTTSStream()
+		stream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+			pcmChunk := make([]byte, audio.DownlinkBytesPerFrame)
+			for i := 0; i < 10; i++ {
+				if err := onPCM(ctx, pcmChunk); err != nil {
+					return err
+				}
+			}
+			<-pcmBlock
+			return nil
+		}
+		ttsClient := newMockTTSClient(stream)
+		writer := newMockVoiceWriter()
+		writer.sendBinaryFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-writerBlock:
+				return nil
+			}
+		}
+
+		cfg := SessionConfig{
+			TTSPCMQueueCapacity:       2,
+			DownlinkOpusQueueCapacity: 2,
+			MaxOpusPacketBytes:        1275,
+		}
+
+		vs := NewVoiceStream(VoiceStreamOptions{
+			SessionId: "sess-backpressure-pcm",
+			TTSClient: ttsClient,
+			Writer:    writer,
+			Config:    cfg,
+		})
+		defer vs.Close()
+
+		ctx := context.Background()
+		turnId := uint64(702)
+		if err := vs.StartTurn(ctx, turnId); err != nil {
+			t.Fatalf("StartTurn failed: %v", err)
+		}
+
+		_ = vs.FeedText(ctx, turnId, "测试 PCM 队列背压与取消解除！", 0)
+
+		// 等待 PCM 队列填满并进入背压阻塞
+		time.Sleep(100 * time.Millisecond)
+
+		// 取消轮次，所有队列背压必须立即解除
+		vs.CancelTurn(turnId)
+
+		close(pcmBlock)
+		close(writerBlock)
+
+		time.Sleep(50 * time.Millisecond)
+		if workers := vs.ActiveWorkers(); workers != 0 {
+			t.Fatalf("expected 0 active workers after cancel, got %d", workers)
+		}
+	})
+
+	t.Run("DownlinkQueueBackpressureAndCancelUnblock", func(t *testing.T) {
+		writerBlock := make(chan struct{})
+		stream := newMockTTSStream()
+		stream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+			// 发送足够多的音频帧使下行队列填满
+			for i := 0; i < 20; i++ {
+				pcmChunk := make([]byte, audio.DownlinkBytesPerFrame)
+				if err := onPCM(ctx, pcmChunk); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		ttsClient := newMockTTSClient(stream)
+		writer := newMockVoiceWriter()
+		writer.sendBinaryFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-writerBlock:
+				return nil
+			}
+		}
+
+		cfg := SessionConfig{
+			TTSPCMQueueCapacity:       10,
+			DownlinkOpusQueueCapacity: 2,
+			MaxOpusPacketBytes:        1275,
+		}
+
+		vs := NewVoiceStream(VoiceStreamOptions{
+			SessionId: "sess-backpressure-downlink",
+			TTSClient: ttsClient,
+			Writer:    writer,
+			Config:    cfg,
+		})
+		defer vs.Close()
+
+		ctx := context.Background()
+		turnId := uint64(703)
+		if err := vs.StartTurn(ctx, turnId); err != nil {
+			t.Fatalf("StartTurn failed: %v", err)
+		}
+
+		_ = vs.FeedText(ctx, turnId, "测试下行队列背压与取消解除！", 0)
+
+		time.Sleep(100 * time.Millisecond)
+
+		// 取消轮次，下行阻塞立即解除
+		vs.CancelTurn(turnId)
+
+		close(writerBlock)
+
+		time.Sleep(50 * time.Millisecond)
+		if workers := vs.ActiveWorkers(); workers != 0 {
+			t.Fatalf("expected 0 active workers after cancel, got %d", workers)
+		}
+	})
+}
+
+// TestVoiceStream_StaleEventsIsolationAndDrop 验证迟到 PCM、Opus 与终态事件隔离丢弃。
+func TestVoiceStream_StaleEventsIsolationAndDrop(t *testing.T) {
+	t.Run("StalePCMAndDownlinkFramesDropped", func(t *testing.T) {
+		stream := newMockTTSStream()
+		ttsClient := newMockTTSClient(stream)
+		writer := newMockVoiceWriter()
+
+		vs := NewVoiceStream(VoiceStreamOptions{
+			SessionId: "sess-stale-isolation",
+			TTSClient: ttsClient,
+			Writer:    writer,
+		})
+		defer vs.Close()
+
+		ctx := context.Background()
+		turnId := uint64(801)
+		if err := vs.StartTurn(ctx, turnId); err != nil {
+			t.Fatalf("StartTurn failed: %v", err)
+		}
+
+		// 获取内部 turn 引用以注入异轮次/迟到数据
+		vs.mu.Lock()
+		activeTurn := vs.activeTurn
+		vs.mu.Unlock()
+
+		// 注入携带旧轮次 turnId 的 PCM 任务
+		stalePCM := pcmJob{
+			turnId:   799,
+			sequence: 1,
+			data:     make([]byte, audio.DownlinkBytesPerFrame),
+		}
+		activeTurn.pcmQueue <- stalePCM
+
+		// 注入携带旧轮次 turnId 的下行帧
+		staleDownlink := downlinkFrame{
+			turnId:   799,
+			sequence: 1,
+			kind:     frameKindBinary,
+			payload:  []byte("stale-opus-data"),
+		}
+		activeTurn.downlinkQueue <- staleDownlink
+
+		// 投递本轮正常文本并收尾
+		_ = vs.FeedText(ctx, turnId, "这是当前轮次的正常文本！", 0)
+		_ = vs.FinishText(ctx, turnId)
+
+		time.Sleep(100 * time.Millisecond)
+
+		// 验证 Writer 从未收到异轮次的二进制数据
+		writer.mu.Lock()
+		for _, bin := range writer.binaryFrames {
+			if string(bin) == "stale-opus-data" {
+				t.Fatalf("stale downlink frame should be dropped, but was sent to writer")
+			}
+		}
+		writer.mu.Unlock()
+	})
+
+	t.Run("StaleTerminalEventsIsolation", func(t *testing.T) {
+		stream := newMockTTSStream()
+		synthStarted := make(chan struct{})
+		stream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+			close(synthStarted)
+			<-ctx.Done()
+			return errors.New("stale dashscope task failed")
+		}
+		ttsClient := newMockTTSClient(stream)
+		writer := newMockVoiceWriter()
+
+		events := make(chan VoiceStreamEvent, 10)
+		vs := NewVoiceStream(VoiceStreamOptions{
+			SessionId: "sess-stale-terminal",
+			TTSClient: ttsClient,
+			Writer:    writer,
+			OnEvent: func(ev VoiceStreamEvent) {
+				events <- ev
+			},
+		})
+		defer vs.Close()
+
+		ctx := context.Background()
+		turnId := uint64(802)
+		if err := vs.StartTurn(ctx, turnId); err != nil {
+			t.Fatalf("StartTurn failed: %v", err)
+		}
+
+		_ = vs.FeedText(ctx, turnId, "测试迟到终态事件隔离！", 0)
+
+		select {
+		case <-synthStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for synth to start")
+		}
+
+		// 主动取消当前轮次
+		vs.CancelTurn(turnId)
+
+		time.Sleep(100 * time.Millisecond)
+
+		// 校验外部监听器绝不收到由于取消引发的迟到 Failed 或 Success 终态事件
+		for {
+			select {
+			case ev := <-events:
+				if ev.Kind == VoiceStreamEventSuccess {
+					t.Fatalf("unexpected success event received after turn canceled: %v", ev)
+				}
+				if ev.Kind == VoiceStreamEventFailed {
+					t.Fatalf("stale failed event should be isolated, but received: %v", ev)
+				}
+			default:
+				return
+			}
+		}
+	})
+}
+
+// TestVoiceStream_AbortWithStartSent_SendsFallbackStop 验证已发送 start 后的 abort 必须补发普通控制帧 tts/stop。
+func TestVoiceStream_AbortWithStartSent_SendsFallbackStop(t *testing.T) {
+	stream := newMockTTSStream()
+	synthStarted := make(chan struct{})
+	stream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+		close(synthStarted)
+		// 交付一部分 PCM 并等待取消
+		pcmChunk := make([]byte, audio.DownlinkBytesPerFrame)
+		_ = onPCM(ctx, pcmChunk)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ttsClient := newMockTTSClient(stream)
+	writer := newMockVoiceWriter()
+
+	events := make(chan VoiceStreamEvent, 10)
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-abort-with-start",
+		TTSClient: ttsClient,
+		Writer:    writer,
+		OnEvent: func(ev VoiceStreamEvent) {
+			events <- ev
+		},
+	})
+	defer vs.Close()
+
+	ctx := context.Background()
+	turnId := uint64(901)
+	if err := vs.StartTurn(ctx, turnId); err != nil {
+		t.Fatalf("StartTurn failed: %v", err)
+	}
+
+	_ = vs.FeedText(ctx, turnId, "你好，这是一条需要发送 start 的测试文本！", 0)
+
+	select {
+	case <-synthStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for synth to start")
+	}
+
+	// 此时已发送 tts/start，收到 speaking 事件
+	select {
+	case ev := <-events:
+		if ev.Kind != VoiceStreamEventSpeaking {
+			t.Fatalf("expected speaking event, got %v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for speaking event")
+	}
+
+	// 执行 abort 取消
+	vs.CancelTurn(turnId)
+
+	// 等待后台异步有界清理执行
+	time.Sleep(100 * time.Millisecond)
+
+	// 验证必须通过 SendText 补发非语音普通控制帧 tts/stop
+	writer.mu.Lock()
+	controlFrames := make([]string, len(writer.controlTextFrames))
+	copy(controlFrames, writer.controlTextFrames)
+	writer.mu.Unlock()
+
+	if len(controlFrames) == 0 {
+		t.Fatal("expected fallback tts/stop in controlTextFrames, but none was sent")
+	}
+
+	var foundStop bool
+	for _, frame := range controlFrames {
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(frame), &msg); err == nil {
+			if msg["type"] == "tts" && msg["state"] == "stop" && msg["session_id"] == "sess-abort-with-start" {
+				foundStop = true
+				break
+			}
+		}
+	}
+
+	if !foundStop {
+		t.Fatalf("expected valid tts/stop message in controlTextFrames, got: %v", controlFrames)
+	}
+
+	// 验证只补发了一次 stop
+	stopCount := 0
+	for _, frame := range controlFrames {
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(frame), &msg); err == nil {
+			if msg["type"] == "tts" && msg["state"] == "stop" {
+				stopCount++
+			}
+		}
+	}
+	if stopCount != 1 {
+		t.Fatalf("expected exactly 1 fallback tts/stop, got %d", stopCount)
+	}
+}
+
+// TestVoiceStream_AbortWithoutStartSent_NoConnectAndNoStop 验证未发送 start 的 abort 绝不建连且绝不补发 tts/stop。
+func TestVoiceStream_AbortWithoutStartSent_NoConnectAndNoStop(t *testing.T) {
+	stream := newMockTTSStream()
+	ttsClient := newMockTTSClient(stream)
+	writer := newMockVoiceWriter()
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-abort-without-start",
+		TTSClient: ttsClient,
+		Writer:    writer,
+	})
+	defer vs.Close()
+
+	ctx := context.Background()
+	turnId := uint64(902)
+	if err := vs.StartTurn(ctx, turnId); err != nil {
+		t.Fatalf("StartTurn failed: %v", err)
+	}
+
+	// 尚未输入任何文本，直接执行 abort 取消
+	vs.CancelTurn(turnId)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// 验证绝不建立 TTSStream 连接
+	if ttsClient.createCalls != 0 {
+		t.Fatalf("expected 0 tts client CreateStream calls, got %d", ttsClient.createCalls)
+	}
+
+	// 验证绝不下发任何 tts/stop 控制帧
+	writer.mu.Lock()
+	textFramesCount := len(writer.textFrames)
+	writer.mu.Unlock()
+
+	if textFramesCount != 0 {
+		t.Fatalf("expected 0 text frames, got %d", textFramesCount)
+	}
+}
+
+// TestVoiceStream_NextTurnUnblockedAndUnaffectedByOldTurnCancel 验证新一轮回答不受旧轮次取消影响且立即接受不阻塞。
+func TestVoiceStream_NextTurnUnblockedAndUnaffectedByOldTurnCancel(t *testing.T) {
+	stream1 := newMockTTSStream()
+	stream1Started := make(chan struct{})
+	stream1.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+		close(stream1Started)
+		pcmChunk := make([]byte, audio.DownlinkBytesPerFrame)
+		_ = onPCM(ctx, pcmChunk)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	stream2 := newMockTTSStream()
+	stream2.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+		pcmChunk := make([]byte, audio.DownlinkBytesPerFrame)
+		return onPCM(ctx, pcmChunk)
+	}
+
+	client := &mockTTSClient{
+		createStreamFn: func(ctx context.Context) (ai.TTSStream, error) {
+			if ctx.Value("turn") == uint64(1) {
+				return stream1, nil
+			}
+			return stream2, nil
+		},
+	}
+	writer := newMockVoiceWriter()
+
+	events := make(chan VoiceStreamEvent, 20)
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-multi-turn-isolate",
+		TTSClient: client,
+		Writer:    writer,
+		OnEvent: func(ev VoiceStreamEvent) {
+			events <- ev
+		},
+	})
+	defer vs.Close()
+
+	// 启动第 1 轮
+	ctx1 := context.WithValue(context.Background(), "turn", uint64(1))
+	if err := vs.StartTurn(ctx1, 1); err != nil {
+		t.Fatalf("StartTurn 1 failed: %v", err)
+	}
+	_ = vs.FeedText(ctx1, 1, "这是第 1 轮的测试文本！", 0)
+
+	select {
+	case <-stream1Started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for stream1 to start")
+	}
+
+	// 立即开启第 2 轮，必须立即返回且不被第 1 轮有界清理阻塞
+	start := time.Now()
+	ctx2 := context.WithValue(context.Background(), "turn", uint64(2))
+	if err := vs.StartTurn(ctx2, 2); err != nil {
+		t.Fatalf("StartTurn 2 failed: %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed > 100*time.Millisecond {
+		t.Fatalf("StartTurn 2 took too long (%v), should return immediately", elapsed)
+	}
+
+	// 第 2 轮正常投递文本并收尾
+	_ = vs.FeedText(ctx2, 2, "这是第 2 轮正常回答文本！", 0)
+	_ = vs.FinishText(ctx2, 2)
+
+	// 等待第 2 轮成功事件
+	var turn2Success bool
+	timeout := time.After(3 * time.Second)
+	for !turn2Success {
+		select {
+		case ev := <-events:
+			if ev.TurnId == 2 && ev.Kind == VoiceStreamEventSuccess {
+				turn2Success = true
+			}
+		case <-timeout:
+			t.Fatal("timeout waiting for turn 2 success event")
+		}
+	}
+
+	// 验证旧轮次 1 的流被正确关闭
+	if stream1.CloseCalls() == 0 {
+		t.Fatal("stream1 should be closed after cancel")
+	}
+
+	// 验证第 1 轮补发了 tts/stop
+	writer.mu.Lock()
+	controlFrames := make([]string, len(writer.controlTextFrames))
+	copy(controlFrames, writer.controlTextFrames)
+	writer.mu.Unlock()
+
+	var foundFallbackStop bool
+	for _, frame := range controlFrames {
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(frame), &msg); err == nil {
+			if msg["type"] == "tts" && msg["state"] == "stop" {
+				foundFallbackStop = true
+				break
+			}
+		}
+	}
+	if !foundFallbackStop {
+		t.Fatal("expected fallback stop sent for turn 1")
+	}
+}
