@@ -726,6 +726,61 @@ func (vs *VoiceStream) FeedText(ctx context.Context, turnId uint64, text string,
 	return nil
 }
 
+// FeedChunk 接收 LLM 流式输出的增量 Chunk 并执行增量切句与投递。
+func (vs *VoiceStream) FeedChunk(ctx context.Context, turnId uint64, chunk ai.LLMChunk) error {
+	return vs.FeedText(ctx, turnId, chunk.Text, chunk.Iteration)
+}
+
+// FlushIteration 显式刷新当前迭代的切句器残余文本，并将产出的句子按序投递至文本句队列。
+func (vs *VoiceStream) FlushIteration(ctx context.Context, turnId uint64) error {
+	vs.mu.Lock()
+	if vs.closed {
+		vs.mu.Unlock()
+		return ErrVoiceStreamClosed
+	}
+	t := vs.activeTurn
+	if t == nil {
+		vs.mu.Unlock()
+		return ErrNoActiveTurn
+	}
+	if t.turnId != turnId {
+		vs.mu.Unlock()
+		return ErrTurnMismatch
+	}
+	if t.turnFinished {
+		vs.mu.Unlock()
+		return ErrTurnFinished
+	}
+
+	sentences := t.splitter.Flush()
+	vs.mu.Unlock()
+
+	for _, s := range sentences {
+		seq := atomic.AddUint32(&t.sentenceSeq, 1)
+		job := sentenceJob{
+			turnId:   turnId,
+			sequence: seq,
+			text:     s,
+		}
+		select {
+		case <-vs.done:
+			return ErrVoiceStreamClosed
+		case <-t.ctx.Done():
+			return t.ctx.Err()
+		case <-ctx.Done():
+			return ctx.Err()
+		case t.sentenceQueue <- job:
+		}
+	}
+
+	return nil
+}
+
+// Finish 标记当前轮次文本输入完成并刷新全部残余句子，等价于 FinishText。
+func (vs *VoiceStream) Finish(ctx context.Context, turnId uint64) error {
+	return vs.FinishText(ctx, turnId)
+}
+
 // FinishText 标记当前轮次文本输入完成，Flush 切句器残余文本并向文本句队列投递结束标记。
 func (vs *VoiceStream) FinishText(ctx context.Context, turnId uint64) error {
 	vs.mu.Lock()

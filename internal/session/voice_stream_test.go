@@ -795,6 +795,424 @@ func TestVoiceStream_Close_ReleasesAllResources(t *testing.T) {
 	}
 }
 
+// TestVoiceStream_MultiSentence_StrictOrderAndSingleStream 验证多句流式合成、编码和下行严格时序与单 Stream 复用。
+func TestVoiceStream_MultiSentence_StrictOrderAndSingleStream(t *testing.T) {
+	var seqMu sync.Mutex
+	var actionSeq []string
+
+	mockStream := newMockTTSStream()
+	mockStream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+		// 每句模拟返回 2 帧标准 PCM（每帧 2880 字节）
+		frame1 := make([]byte, audio.DownlinkBytesPerFrame)
+		frame2 := make([]byte, audio.DownlinkBytesPerFrame)
+		if err := onPCM(ctx, frame1); err != nil {
+			return err
+		}
+		return onPCM(ctx, frame2)
+	}
+
+	ttsClient := newMockTTSClient(mockStream)
+	writer := newMockVoiceWriter()
+
+	writer.sendTextFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+		var msg ServerTTSMessage
+		if err := json.Unmarshal(payload, &msg); err == nil {
+			seqMu.Lock()
+			if msg.State == TTSStateSentenceStart {
+				actionSeq = append(actionSeq, "text:sentence_start:"+msg.Text)
+			} else {
+				actionSeq = append(actionSeq, "text:"+msg.State)
+			}
+			seqMu.Unlock()
+		}
+		return nil
+	}
+
+	writer.sendBinaryFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+		seqMu.Lock()
+		actionSeq = append(actionSeq, "binary:opus")
+		seqMu.Unlock()
+		return nil
+	}
+
+	writer.enqueueBarrierFn = func(ctx context.Context, turnId uint64) error {
+		seqMu.Lock()
+		actionSeq = append(actionSeq, "barrier")
+		seqMu.Unlock()
+		return nil
+	}
+
+	eventCh := make(chan VoiceStreamEvent, 10)
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-multi-sentence-order",
+		TTSClient: ttsClient,
+		Writer:    writer,
+		OnEvent: func(ev VoiceStreamEvent) {
+			eventCh <- ev
+		},
+	})
+	defer vs.Close()
+
+	ctx := context.Background()
+	turnId := uint64(500)
+	if err := vs.StartTurn(ctx, turnId); err != nil {
+		t.Fatalf("StartTurn failed: %v", err)
+	}
+
+	// 增量送入流式文本，产生 3 句完整句子
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "今天北京的天气", Iteration: 0})
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "非常好，阳光明媚。", Iteration: 0}) // 第 1 句
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "建议你多出去走走。", Iteration: 0}) // 第 2 句
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "祝你有愉快的一天！", Iteration: 0}) // 第 3 句
+	if err := vs.Finish(ctx, turnId); err != nil {
+		t.Fatalf("Finish failed: %v", err)
+	}
+
+	// 等待接收 speaking 与 success 事件
+	var receivedSpeaking, receivedSuccess bool
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && (!receivedSpeaking || !receivedSuccess) {
+		select {
+		case ev := <-eventCh:
+			if ev.TurnId == turnId {
+				if ev.Kind == VoiceStreamEventSpeaking {
+					receivedSpeaking = true
+				} else if ev.Kind == VoiceStreamEventSuccess {
+					receivedSuccess = true
+				}
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	if !receivedSpeaking {
+		t.Fatal("expected speaking event before first sentence audio")
+	}
+	if !receivedSuccess {
+		t.Fatal("expected success event after all frames confirmed by barrier")
+	}
+
+	// 1. 验证整个多句回答严格只创建了 1 个物理 TTSStream
+	ttsClient.mu.Lock()
+	createCalls := ttsClient.createCalls
+	ttsClient.mu.Unlock()
+	if createCalls != 1 {
+		t.Fatalf("expected exactly 1 CreateStream call, got %d", createCalls)
+	}
+
+	// 2. 验证 SynthesizeSentence 严格被调用 3 次，且句子文本与切句结果完全一致
+	mockStream.mu.Lock()
+	synthCalls := append([]string(nil), mockStream.synthesizeCalls...)
+	closeCalls := mockStream.closeCalls
+	mockStream.mu.Unlock()
+
+	expectedSentences := []string{
+		"今天北京的天气非常好，阳光明媚。",
+		"建议你多出去走走。",
+		"祝你有愉快的一天！",
+	}
+
+	if len(synthCalls) != len(expectedSentences) {
+		t.Fatalf("expected %d synthesize calls, got %d: %v", len(expectedSentences), len(synthCalls), synthCalls)
+	}
+	for i, exp := range expectedSentences {
+		if synthCalls[i] != exp {
+			t.Errorf("synthesize sentence %d mismatch: expected '%s', got '%s'", i, exp, synthCalls[i])
+		}
+	}
+
+	// 3. 验证 TTSStream 在轮末被幂等关闭
+	if closeCalls != 1 {
+		t.Fatalf("expected exactly 1 Close call on TTSStream, got %d", closeCalls)
+	}
+
+	// 4. 验证设备下行序列严格符合时序规范：
+	// start -> sentence_start(1) -> opus(1) -> opus(1) -> sentence_start(2) -> opus(2) -> opus(2) -> sentence_start(3) -> opus(3) -> opus(3) -> stop -> barrier
+	seqMu.Lock()
+	actualSeq := append([]string(nil), actionSeq...)
+	seqMu.Unlock()
+
+	expectedSeq := []string{
+		"text:start",
+		"text:sentence_start:今天北京的天气非常好，阳光明媚。",
+		"binary:opus",
+		"binary:opus",
+		"text:sentence_start:建议你多出去走走。",
+		"binary:opus",
+		"binary:opus",
+		"text:sentence_start:祝你有愉快的一天！",
+		"binary:opus",
+		"binary:opus",
+		"text:stop",
+		"barrier",
+	}
+
+	if len(actualSeq) != len(expectedSeq) {
+		t.Fatalf("action sequence length mismatch: expected %d, got %d. Sequence:\n%v", len(expectedSeq), len(actualSeq), actualSeq)
+	}
+
+	for i, exp := range expectedSeq {
+		if actualSeq[i] != exp {
+			t.Errorf("sequence step %d mismatch: expected '%s', got '%s'", i, exp, actualSeq[i])
+		}
+	}
+}
+
+// TestVoiceStream_PerSentenceFlush_NoResidualLeakToNextSentence 验证每句单独 Flush，禁止跨句拼接 PCM 残余。
+func TestVoiceStream_PerSentenceFlush_NoResidualLeakToNextSentence(t *testing.T) {
+	var seqMu sync.Mutex
+	var actionSeq []string
+
+	mockStream := newMockTTSStream()
+	mockStream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+		if text == "第一句不足一帧。" {
+			// 交付 1000 字节 PCM（不足标准 2880 字节 1 帧）
+			// 预期：Feed 时产生 0 包 Opus，句末 Flush 时补静音产出 1 包 Opus
+			return onPCM(ctx, make([]byte, 1000))
+		}
+		// 第二句：交付标准 2880 字节 PCM
+		// 预期：Feed 时产出 1 包 Opus，句末 Flush 时产出 0 包 Opus（若有跨句泄漏则会产出异常包数）
+		return onPCM(ctx, make([]byte, audio.DownlinkBytesPerFrame))
+	}
+
+	ttsClient := newMockTTSClient(mockStream)
+	writer := newMockVoiceWriter()
+
+	writer.sendTextFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+		var msg ServerTTSMessage
+		if err := json.Unmarshal(payload, &msg); err == nil {
+			seqMu.Lock()
+			if msg.State == TTSStateSentenceStart {
+				actionSeq = append(actionSeq, "text:sentence_start:"+msg.Text)
+			} else {
+				actionSeq = append(actionSeq, "text:"+msg.State)
+			}
+			seqMu.Unlock()
+		}
+		return nil
+	}
+
+	writer.sendBinaryFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+		seqMu.Lock()
+		actionSeq = append(actionSeq, "binary:opus")
+		seqMu.Unlock()
+		return nil
+	}
+
+	writer.enqueueBarrierFn = func(ctx context.Context, turnId uint64) error {
+		seqMu.Lock()
+		actionSeq = append(actionSeq, "barrier")
+		seqMu.Unlock()
+		return nil
+	}
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-flush-separation",
+		TTSClient: ttsClient,
+		Writer:    writer,
+	})
+	defer vs.Close()
+
+	ctx := context.Background()
+	turnId := uint64(600)
+	if err := vs.StartTurn(ctx, turnId); err != nil {
+		t.Fatalf("StartTurn failed: %v", err)
+	}
+
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第一句不足一帧。", Iteration: 0})
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第二句完整一帧。", Iteration: 0})
+	if err := vs.Finish(ctx, turnId); err != nil {
+		t.Fatalf("Finish failed: %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	seqMu.Lock()
+	actualSeq := append([]string(nil), actionSeq...)
+	seqMu.Unlock()
+
+	expectedSeq := []string{
+		"text:start",
+		"text:sentence_start:第一句不足一帧。",
+		"binary:opus", // 第 1 句 Flush 补齐静音产出 1 包 Opus
+		"text:sentence_start:第二句完整一帧。",
+		"binary:opus", // 第 2 句 Feed 独立产出 1 包 Opus（无上一句残余拼接）
+		"text:stop",
+		"barrier",
+	}
+
+	if len(actualSeq) != len(expectedSeq) {
+		t.Fatalf("sequence length mismatch: expected %d, got %d: %v", len(expectedSeq), len(actualSeq), actualSeq)
+	}
+
+	for i, exp := range expectedSeq {
+		if actualSeq[i] != exp {
+			t.Errorf("step %d mismatch: expected '%s', got '%s'", i, exp, actualSeq[i])
+		}
+	}
+}
+
+// TestVoiceStream_FeedChunk_And_Finish_PipelineEntrypoints 验证 TurnPipeline 调用的 FeedChunk/FlushIteration/Finish 入口。
+func TestVoiceStream_FeedChunk_And_Finish_PipelineEntrypoints(t *testing.T) {
+	mockStream := newMockTTSStream()
+	ttsClient := newMockTTSClient(mockStream)
+	writer := newMockVoiceWriter()
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-entrypoints",
+		TTSClient: ttsClient,
+		Writer:    writer,
+	})
+	defer vs.Close()
+
+	ctx := context.Background()
+	turnId := uint64(700)
+	if err := vs.StartTurn(ctx, turnId); err != nil {
+		t.Fatalf("StartTurn failed: %v", err)
+	}
+
+	// 1. Chunk 1: 未满 5 字短文本，不触发切句
+	if err := vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "你好", Iteration: 0}); err != nil {
+		t.Fatalf("FeedChunk 1 failed: %v", err)
+	}
+
+	// 2. Chunk 2: 切换到 Iteration 1，上一 Iteration 残余 "你好" 强制切出作为第 1 句
+	if err := vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "世界", Iteration: 1}); err != nil {
+		t.Fatalf("FeedChunk 2 failed: %v", err)
+	}
+
+	// 3. 显式调用 FlushIteration，将 Iteration 1 的 "世界" 强制切出作为第 2 句
+	if err := vs.FlushIteration(ctx, turnId); err != nil {
+		t.Fatalf("FlushIteration failed: %v", err)
+	}
+
+	// 4. Chunk 3: Iteration 2 产生完整句子作为第 3 句
+	if err := vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "这是第三个测试句子。", Iteration: 2}); err != nil {
+		t.Fatalf("FeedChunk 3 failed: %v", err)
+	}
+
+	// 5. 调用 Finish 结束本轮
+	if err := vs.Finish(ctx, turnId); err != nil {
+		t.Fatalf("Finish failed: %v", err)
+	}
+
+	time.Sleep(80 * time.Millisecond)
+
+	mockStream.mu.Lock()
+	calls := append([]string(nil), mockStream.synthesizeCalls...)
+	mockStream.mu.Unlock()
+
+	expectedCalls := []string{
+		"你好",
+		"世界",
+		"这是第三个测试句子。",
+	}
+
+	if len(calls) != len(expectedCalls) {
+		t.Fatalf("expected %d sentences synthesized, got %d: %v", len(expectedCalls), len(calls), calls)
+	}
+	for i, exp := range expectedCalls {
+		if calls[i] != exp {
+			t.Errorf("sentence %d mismatch: expected '%s', got '%s'", i, exp, calls[i])
+		}
+	}
+}
+
+// TestVoiceStream_BackpressureAndSlowWriter_MaintainsOrder 验证下行队列背压情况下仍严格保持下发时序且不丢帧。
+func TestVoiceStream_BackpressureAndSlowWriter_MaintainsOrder(t *testing.T) {
+	var seqMu sync.Mutex
+	var actionSeq []string
+
+	mockStream := newMockTTSStream()
+	mockStream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+		return onPCM(ctx, make([]byte, audio.DownlinkBytesPerFrame))
+	}
+
+	ttsClient := newMockTTSClient(mockStream)
+	writer := newMockVoiceWriter()
+
+	// 模拟较慢的写入器，制造下行队列背压
+	writer.sendTextFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+		time.Sleep(5 * time.Millisecond)
+		var msg ServerTTSMessage
+		if err := json.Unmarshal(payload, &msg); err == nil {
+			seqMu.Lock()
+			if msg.State == TTSStateSentenceStart {
+				actionSeq = append(actionSeq, "text:sentence_start:"+msg.Text)
+			} else {
+				actionSeq = append(actionSeq, "text:"+msg.State)
+			}
+			seqMu.Unlock()
+		}
+		return nil
+	}
+
+	writer.sendBinaryFn = func(ctx context.Context, turnId uint64, payload []byte) error {
+		time.Sleep(5 * time.Millisecond)
+		seqMu.Lock()
+		actionSeq = append(actionSeq, "binary:opus")
+		seqMu.Unlock()
+		return nil
+	}
+
+	writer.enqueueBarrierFn = func(ctx context.Context, turnId uint64) error {
+		time.Sleep(5 * time.Millisecond)
+		seqMu.Lock()
+		actionSeq = append(actionSeq, "barrier")
+		seqMu.Unlock()
+		return nil
+	}
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-backpressure-order",
+		TTSClient: ttsClient,
+		Writer:    writer,
+		Config: SessionConfig{
+			TTSPCMQueueCapacity:       2,
+			DownlinkOpusQueueCapacity: 2,
+		},
+	})
+	defer vs.Close()
+
+	ctx := context.Background()
+	turnId := uint64(800)
+	if err := vs.StartTurn(ctx, turnId); err != nil {
+		t.Fatalf("StartTurn failed: %v", err)
+	}
+
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第一句慢写测试文本。", Iteration: 0})
+	_ = vs.FeedChunk(ctx, turnId, ai.LLMChunk{Text: "第二句慢写测试文本。", Iteration: 0})
+	if err := vs.Finish(ctx, turnId); err != nil {
+		t.Fatalf("Finish failed: %v", err)
+	}
+
+	time.Sleep(150 * time.Millisecond)
+
+	seqMu.Lock()
+	actualSeq := append([]string(nil), actionSeq...)
+	seqMu.Unlock()
+
+	expectedSeq := []string{
+		"text:start",
+		"text:sentence_start:第一句慢写测试文本。",
+		"binary:opus",
+		"text:sentence_start:第二句慢写测试文本。",
+		"binary:opus",
+		"text:stop",
+		"barrier",
+	}
+
+	if len(actualSeq) != len(expectedSeq) {
+		t.Fatalf("backpressure sequence length mismatch: expected %d, got %d: %v", len(expectedSeq), len(actualSeq), actualSeq)
+	}
+
+	for i, exp := range expectedSeq {
+		if actualSeq[i] != exp {
+			t.Errorf("step %d mismatch: expected '%s', got '%s'", i, exp, actualSeq[i])
+		}
+	}
+}
+
 // TestVoiceStream_GoroutineLeak_MultiTurnLoop 循环多轮次验证无 goroutine 泄漏。
 func TestVoiceStream_GoroutineLeak_MultiTurnLoop(t *testing.T) {
 	baseGoroutines := runtime.NumGoroutine()
