@@ -58,6 +58,9 @@ const (
 
 	// VoiceStreamEventFailed 表示语音流在合成、编码或下发过程中发生不可恢复错误。
 	VoiceStreamEventFailed
+
+	// VoiceStreamEventFirstSpeech 是首句开始下发事件的别名常量。
+	VoiceStreamEventFirstSpeech = VoiceStreamEventSpeaking
 )
 
 // VoiceStreamEvent 封装语音流生命周期事件，严格携带 turnId。
@@ -736,6 +739,26 @@ func (vs *VoiceStream) SetSessionId(sessionId string) {
 	vs.sessionId = sessionId
 	if vs.activeTurn != nil {
 		vs.activeTurn.sessionId = sessionId
+	}
+}
+
+// SetOnEvent 动态设置语音流生命周期事件回调，若已有回调则形成链式调用。
+func (vs *VoiceStream) SetOnEvent(fn func(VoiceStreamEvent)) {
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+	orig := vs.onEvent
+	if orig != nil {
+		vs.onEvent = func(ev VoiceStreamEvent) {
+			orig(ev)
+			if fn != nil {
+				fn(ev)
+			}
+		}
+	} else {
+		vs.onEvent = fn
+	}
+	if vs.activeTurn != nil {
+		vs.activeTurn.onEvent = vs.onEvent
 	}
 }
 

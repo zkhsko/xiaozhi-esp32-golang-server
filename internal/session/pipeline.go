@@ -19,6 +19,9 @@ const (
 	// turnEventASRFinal 表示 ASR 最终识别文本产出。
 	turnEventASRFinal turnEventType = iota
 
+	// turnEventSpeaking 表示首句已准备好下发，会话进入说话状态。
+	turnEventSpeaking
+
 	// turnEventTurnCompleted 表示当前问答处理已完整结束。
 	turnEventTurnCompleted
 
@@ -49,6 +52,11 @@ type activeTurn struct {
 	decoder   *audio.Decoder
 	asrStream ai.ASRStream
 	asrQueue  *audio.ASRAudioQueue
+
+	// 历史与意图暂存（在语音下行写出确认前不直接提交）
+	userText     string
+	finalText    string
+	closeSession bool
 }
 
 // PipelineOptions 聚合构造 TurnPipeline 的依赖与配置。
@@ -92,7 +100,7 @@ func NewTurnPipeline(opts PipelineOptions) *TurnPipeline {
 		hist = NewConversationHistory(opts.Config.MaxHistoryTurns)
 	}
 
-	return &TurnPipeline{
+	p := &TurnPipeline{
 		asrClient:    opts.ASRClient,
 		llmClient:    opts.LLMClient,
 		voiceStream:  opts.VoiceStream,
@@ -103,6 +111,12 @@ func NewTurnPipeline(opts PipelineOptions) *TurnPipeline {
 		logger:       l,
 		postEvent:    opts.PostEvent,
 	}
+
+	if opts.VoiceStream != nil {
+		opts.VoiceStream.SetOnEvent(p.handleVoiceStreamEvent)
+	}
+
+	return p
 }
 
 // emit 向 Supervisor 投递类型化轮次事件。
@@ -506,18 +520,97 @@ func (p *TurnPipeline) orchestrateLLM(turn *activeTurn, sessionId string, userTe
 		}
 	}
 
+	// 先暂存历史与意图，确保在 Finish 触发的下行完成或无文本直接成功前数据已就绪
+	p.mu.Lock()
+	if p.activeTurn == turn {
+		turn.userText = userText
+		turn.finalText = finalText
+		if turn.effects != nil {
+			turn.closeSession = turn.effects.CloseSession
+		}
+	}
+	p.mu.Unlock()
+
 	if p.voiceStream != nil {
 		_ = p.voiceStream.Finish(ctx, turnId)
+	} else {
+		// 未配置 VoiceStream 时的兼容回退逻辑
+		if userText != "" && finalText != "" {
+			p.history.AppendTurn(userText, finalText)
+		}
+		p.mu.Lock()
+		if p.activeTurn == turn {
+			p.cleanupTurnResources(turn)
+			p.activeTurn = nil
+		}
+		p.mu.Unlock()
+		p.emit(turnEvent{
+			turnId:       turnId,
+			typ:          turnEventTurnCompleted,
+			closeSession: turn.effects != nil && turn.effects.CloseSession,
+		})
+	}
+}
+
+// History 返回当前流水线的会话历史管理器。
+func (p *TurnPipeline) History() *ConversationHistory {
+	return p.history
+}
+
+// handleVoiceStreamEvent 处理来自 VoiceStream 的生命周期事件。
+func (p *TurnPipeline) handleVoiceStreamEvent(ev VoiceStreamEvent) {
+	p.mu.Lock()
+	turn := p.activeTurn
+	if turn == nil || turn.turnId != ev.TurnId {
+		p.mu.Unlock()
+		return
 	}
 
-	// 文本成功提交至历史
-	if userText != "" && finalText != "" {
-		p.history.AppendTurn(userText, finalText)
-	}
+	switch ev.Kind {
+	case VoiceStreamEventSpeaking:
+		p.mu.Unlock()
+		p.emit(turnEvent{
+			turnId: ev.TurnId,
+			typ:    turnEventSpeaking,
+		})
 
-	p.emit(turnEvent{
-		turnId:       turnId,
-		typ:          turnEventTurnCompleted,
-		closeSession: turn.effects.CloseSession,
-	})
+	case VoiceStreamEventSuccess:
+		if turn.ctx.Err() != nil {
+			p.mu.Unlock()
+			return
+		}
+
+		userText := turn.userText
+		finalText := turn.finalText
+		closeSession := turn.closeSession
+
+		if userText != "" && finalText != "" {
+			p.history.AppendTurn(userText, finalText)
+		}
+
+		p.cleanupTurnResources(turn)
+		p.activeTurn = nil
+		p.mu.Unlock()
+
+		p.emit(turnEvent{
+			turnId:       ev.TurnId,
+			typ:          turnEventTurnCompleted,
+			closeSession: closeSession,
+		})
+
+	case VoiceStreamEventFailed:
+		p.cleanupTurnResources(turn)
+		p.activeTurn = nil
+		p.mu.Unlock()
+
+		p.emit(turnEvent{
+			turnId: ev.TurnId,
+			typ:    turnEventTurnFailed,
+			err:    ev.Err,
+			fatal:  true,
+		})
+
+	default:
+		p.mu.Unlock()
+	}
 }

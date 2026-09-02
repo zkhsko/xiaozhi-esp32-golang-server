@@ -36,6 +36,21 @@ func (m *mockLLMClient) Generate(ctx context.Context, request ai.LLMRequest, cal
 	return "默认回复", nil
 }
 
+func waitTurnCompleted(t *testing.T, events <-chan turnEvent) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.typ == turnEventTurnCompleted {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for turnEventTurnCompleted")
+		}
+	}
+}
+
 func TestTurnPipeline_MultiTurnTools_Success(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -138,14 +153,7 @@ func TestTurnPipeline_VoiceStream_ProductionChainEndToEnd(t *testing.T) {
 		t.Fatalf("StartResponse failed: %v", err)
 	}
 
-	select {
-	case ev := <-events:
-		if ev.typ != turnEventTurnCompleted {
-			t.Fatalf("expected turnEventTurnCompleted, got %v", ev.typ)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("StartResponse timed out")
-	}
+	waitTurnCompleted(t, events)
 
 	// 验证 TTS 合成确实被调用
 	deadline := time.Now().Add(2 * time.Second)
@@ -264,14 +272,7 @@ func TestTurnPipeline_VoiceStream_MultiIterationSwitchFlush(t *testing.T) {
 		t.Fatalf("StartResponse failed: %v", err)
 	}
 
-	select {
-	case ev := <-events:
-		if ev.typ != turnEventTurnCompleted {
-			t.Fatalf("expected turnEventTurnCompleted, got %v", ev.typ)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("StartResponse timed out")
-	}
+	waitTurnCompleted(t, events)
 
 	// 验证两个 Iteration 的文本均被顺序合成，且 Iteration 0 的残余先被切出
 	deadline := time.Now().Add(2 * time.Second)
@@ -347,14 +348,7 @@ func TestTurnPipeline_VoiceStream_TrailingResidueFlush(t *testing.T) {
 		t.Fatalf("StartResponse failed: %v", err)
 	}
 
-	select {
-	case ev := <-events:
-		if ev.typ != turnEventTurnCompleted {
-			t.Fatalf("expected turnEventTurnCompleted, got %v", ev.typ)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("StartResponse timed out")
-	}
+	waitTurnCompleted(t, events)
 
 	// 验证残余文本被完整下发合成
 	deadline := time.Now().Add(2 * time.Second)
@@ -428,14 +422,7 @@ func TestTurnPipeline_VoiceStream_FallbackReading_NoStreamedText(t *testing.T) {
 		t.Fatalf("StartResponse failed: %v", err)
 	}
 
-	select {
-	case ev := <-events:
-		if ev.typ != turnEventTurnCompleted {
-			t.Fatalf("expected turnEventTurnCompleted, got %v", ev.typ)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("StartResponse timed out")
-	}
+	waitTurnCompleted(t, events)
 
 	// 验证 finalText 作为兜底送入 TTSStream 合成
 	deadline := time.Now().Add(2 * time.Second)
@@ -508,14 +495,7 @@ func TestTurnPipeline_VoiceStream_NoDuplicateFallback_WhenStreamedTextExists(t *
 		t.Fatalf("StartResponse failed: %v", err)
 	}
 
-	select {
-	case ev := <-events:
-		if ev.typ != turnEventTurnCompleted {
-			t.Fatalf("expected turnEventTurnCompleted, got %v", ev.typ)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("StartResponse timed out")
-	}
+	waitTurnCompleted(t, events)
 
 	// 验证仅合成 1 次，绝不重复合成 finalText
 	deadline := time.Now().Add(2 * time.Second)
@@ -674,5 +654,387 @@ func TestTurnPipeline_VoiceStream_LLMError_CancelsVoiceStream(t *testing.T) {
 	}
 	if workers := vs.ActiveWorkers(); workers != 0 {
 		t.Fatalf("expected 0 active workers after error cancel, got %d", workers)
+	}
+}
+
+// TestTurnPipeline_History_DelayedUntilVoiceStreamBarrier 验证历史记录严格在 tts/stop 屏障写出确认后才追加：
+// LLM 完成但屏障未确认时，历史记录为 0；屏障确认后历史记录正确追加。
+func TestTurnPipeline_History_DelayedUntilVoiceStreamBarrier(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStream := newMockTTSStream()
+	ttsClient := newMockTTSClient(mockStream)
+	writer := newMockVoiceWriter()
+
+	barrierBlock := make(chan struct{})
+	barrierDone := make(chan struct{})
+	writer.enqueueBarrierFn = func(ctx context.Context, turnId uint64) error {
+		<-barrierBlock
+		return nil
+	}
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-delay-hist",
+		TTSClient: ttsClient,
+		Writer:    writer,
+		Config:    NormalizeConfig(SessionConfig{}),
+		Logger:    slog.Default(),
+	})
+	defer vs.Close()
+
+	llmFinished := make(chan struct{})
+	mockLLM := &mockLLMClient{}
+	mockLLM.generate = func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+		if callback != nil {
+			_ = callback(ctx, ai.LLMChunk{Text: "请等待语音下行完成确认。", Iteration: 0})
+		}
+		close(llmFinished)
+		return "请等待语音下行完成确认。", nil
+	}
+
+	events := make(chan turnEvent, 10)
+	pipeline := NewTurnPipeline(PipelineOptions{
+		LLMClient:   mockLLM,
+		VoiceStream: vs,
+		Config:      NormalizeConfig(SessionConfig{}),
+		Logger:      slog.Default(),
+		PostEvent: func(ev turnEvent) {
+			events <- ev
+		},
+	})
+	defer pipeline.Close()
+
+	if err := pipeline.StartListening(ctx, 1, "sess-delay-hist", ListenModeAuto); err != nil {
+		t.Fatalf("StartListening failed: %v", err)
+	}
+	if err := pipeline.StartResponse(1, "sess-delay-hist", "何时提交历史"); err != nil {
+		t.Fatalf("StartResponse failed: %v", err)
+	}
+
+	// 等待 LLM 执行完成
+	select {
+	case <-llmFinished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("LLM generate timed out")
+	}
+
+	// 此时首句已下发，会产生 Speaking 事件
+	select {
+	case ev := <-events:
+		if ev.typ != turnEventSpeaking {
+			t.Fatalf("expected turnEventSpeaking, got %v", ev.typ)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for turnEventSpeaking")
+	}
+
+	// 关键断言：此时屏障尚未写出确认，历史记录严格为 0 条
+	if histLen := pipeline.History().Len(); histLen != 0 {
+		t.Fatalf("expected 0 history messages before barrier written confirmation, got %d", histLen)
+	}
+
+	// 放行屏障确认
+	close(barrierBlock)
+
+	// 等待轮次完成事件
+	select {
+	case ev := <-events:
+		if ev.typ != turnEventTurnCompleted {
+			t.Fatalf("expected turnEventTurnCompleted, got %v", ev.typ)
+		}
+		close(barrierDone)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for turnEventTurnCompleted")
+	}
+
+	// 关键断言：屏障确认写出后，历史记录严格追加 1 轮（2 条消息）
+	if histLen := pipeline.History().Len(); histLen != 2 {
+		t.Fatalf("expected 2 history messages after barrier written confirmation, got %d", histLen)
+	}
+	msgs := pipeline.History().Messages()
+	if msgs[0].Content != "何时提交历史" || msgs[1].Content != "请等待语音下行完成确认。" {
+		t.Fatalf("unexpected history content: %+v", msgs)
+	}
+}
+
+// TestTurnPipeline_History_NoTextTurn_DirectSuccess 验证无文本轮次（0 句）直接成功，绝不发送 speaking 事件。
+func TestTurnPipeline_History_NoTextTurn_DirectSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStream := newMockTTSStream()
+	ttsClient := newMockTTSClient(mockStream)
+	writer := newMockVoiceWriter()
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-notext-hist",
+		TTSClient: ttsClient,
+		Writer:    writer,
+		Config:    NormalizeConfig(SessionConfig{}),
+		Logger:    slog.Default(),
+	})
+	defer vs.Close()
+
+	mockLLM := &mockLLMClient{}
+	mockLLM.generate = func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+		// 返回无文本回复（0 句）
+		return "", nil
+	}
+
+	events := make(chan turnEvent, 10)
+	pipeline := NewTurnPipeline(PipelineOptions{
+		LLMClient:   mockLLM,
+		VoiceStream: vs,
+		Config:      NormalizeConfig(SessionConfig{}),
+		Logger:      slog.Default(),
+		PostEvent: func(ev turnEvent) {
+			events <- ev
+		},
+	})
+	defer pipeline.Close()
+
+	if err := pipeline.StartListening(ctx, 1, "sess-notext-hist", ListenModeAuto); err != nil {
+		t.Fatalf("StartListening failed: %v", err)
+	}
+	if err := pipeline.StartResponse(1, "sess-notext-hist", "无语音问答"); err != nil {
+		t.Fatalf("StartResponse failed: %v", err)
+	}
+
+	// 应当直接收到 turnEventTurnCompleted，绝不产生 turnEventSpeaking
+	select {
+	case ev := <-events:
+		if ev.typ != turnEventTurnCompleted {
+			t.Fatalf("expected turnEventTurnCompleted directly, got %v", ev.typ)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for turnEventTurnCompleted")
+	}
+
+	// 检查事件队列无其他事件（确保无 turnEventSpeaking）
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected extra event: %v", ev)
+	default:
+	}
+}
+
+// TestTurnPipeline_History_Abort_DoesNotCommitHistory 验证轮次被中止（Abort）时绝不追加历史记录。
+func TestTurnPipeline_History_Abort_DoesNotCommitHistory(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStream := newMockTTSStream()
+	ttsClient := newMockTTSClient(mockStream)
+	writer := newMockVoiceWriter()
+
+	barrierBlock := make(chan struct{})
+	writer.enqueueBarrierFn = func(ctx context.Context, turnId uint64) error {
+		<-barrierBlock
+		return nil
+	}
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-abort-nohist",
+		TTSClient: ttsClient,
+		Writer:    writer,
+		Config:    NormalizeConfig(SessionConfig{}),
+		Logger:    slog.Default(),
+	})
+	defer vs.Close()
+
+	llmFinished := make(chan struct{})
+	mockLLM := &mockLLMClient{}
+	mockLLM.generate = func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+		if callback != nil {
+			_ = callback(ctx, ai.LLMChunk{Text: "正在播报但在播报中将被打断。", Iteration: 0})
+		}
+		close(llmFinished)
+		return "正在播报但在播报中将被打断。", nil
+	}
+
+	events := make(chan turnEvent, 10)
+	pipeline := NewTurnPipeline(PipelineOptions{
+		LLMClient:   mockLLM,
+		VoiceStream: vs,
+		Config:      NormalizeConfig(SessionConfig{}),
+		Logger:      slog.Default(),
+		PostEvent: func(ev turnEvent) {
+			events <- ev
+		},
+	})
+	defer pipeline.Close()
+
+	if err := pipeline.StartListening(ctx, 1, "sess-abort-nohist", ListenModeAuto); err != nil {
+		t.Fatalf("StartListening failed: %v", err)
+	}
+	if err := pipeline.StartResponse(1, "sess-abort-nohist", "播报打断测试"); err != nil {
+		t.Fatalf("StartResponse failed: %v", err)
+	}
+
+	select {
+	case <-llmFinished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("LLM generate timed out")
+	}
+
+	// 消费 speaking 事件
+	select {
+	case ev := <-events:
+		if ev.typ != turnEventSpeaking {
+			t.Fatalf("expected turnEventSpeaking, got %v", ev.typ)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for turnEventSpeaking")
+	}
+
+	// 执行中止
+	pipeline.Abort(1)
+
+	// 放行屏障
+	close(barrierBlock)
+
+	// 等待并排空事件（可能无后续事件或被取消）
+	time.Sleep(100 * time.Millisecond)
+
+	// 关键断言：中止后历史记录严格为 0，绝不追加
+	if histLen := pipeline.History().Len(); histLen != 0 {
+		t.Fatalf("expected 0 history messages after abort, got %d", histLen)
+	}
+}
+
+// TestTurnPipeline_History_TTSFailure_DoesNotCommitHistory 验证 TTS 发生错误时绝不追加历史记录。
+func TestTurnPipeline_History_TTSFailure_DoesNotCommitHistory(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStream := newMockTTSStream()
+	mockStream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+		return errors.New("upstream tts quota exceeded")
+	}
+	ttsClient := newMockTTSClient(mockStream)
+	writer := newMockVoiceWriter()
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-tts-fail-nohist",
+		TTSClient: ttsClient,
+		Writer:    writer,
+		Config:    NormalizeConfig(SessionConfig{}),
+		Logger:    slog.Default(),
+	})
+	defer vs.Close()
+
+	mockLLM := &mockLLMClient{}
+	mockLLM.generate = func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+		if callback != nil {
+			_ = callback(ctx, ai.LLMChunk{Text: "该回复合成时将失败。", Iteration: 0})
+		}
+		return "该回复合成时将失败。", nil
+	}
+
+	events := make(chan turnEvent, 10)
+	pipeline := NewTurnPipeline(PipelineOptions{
+		LLMClient:   mockLLM,
+		VoiceStream: vs,
+		Config:      NormalizeConfig(SessionConfig{}),
+		Logger:      slog.Default(),
+		PostEvent: func(ev turnEvent) {
+			events <- ev
+		},
+	})
+	defer pipeline.Close()
+
+	if err := pipeline.StartListening(ctx, 1, "sess-tts-fail-nohist", ListenModeAuto); err != nil {
+		t.Fatalf("StartListening failed: %v", err)
+	}
+	if err := pipeline.StartResponse(1, "sess-tts-fail-nohist", "合成失败测试"); err != nil {
+		t.Fatalf("StartResponse failed: %v", err)
+	}
+
+	// 等待直到收到 turnEventTurnFailed
+	var sawFailed bool
+	deadline := time.After(2 * time.Second)
+	for !sawFailed {
+		select {
+		case ev := <-events:
+			if ev.typ == turnEventTurnFailed {
+				sawFailed = true
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for turnEventTurnFailed")
+		}
+	}
+
+	// 关键断言：TTS 失败绝不追加历史
+	if histLen := pipeline.History().Len(); histLen != 0 {
+		t.Fatalf("expected 0 history messages on tts failure, got %d", histLen)
+	}
+}
+
+// TestTurnPipeline_History_WriterBarrierFailure_DoesNotCommitHistory 验证写出屏障失败时绝不追加历史记录。
+func TestTurnPipeline_History_WriterBarrierFailure_DoesNotCommitHistory(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockStream := newMockTTSStream()
+	ttsClient := newMockTTSClient(mockStream)
+	writer := newMockVoiceWriter()
+	writer.enqueueBarrierFn = func(ctx context.Context, turnId uint64) error {
+		return errors.New("underlying socket broken during barrier wait")
+	}
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "sess-barrier-fail-nohist",
+		TTSClient: ttsClient,
+		Writer:    writer,
+		Config:    NormalizeConfig(SessionConfig{}),
+		Logger:    slog.Default(),
+	})
+	defer vs.Close()
+
+	mockLLM := &mockLLMClient{}
+	mockLLM.generate = func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+		if callback != nil {
+			_ = callback(ctx, ai.LLMChunk{Text: "屏障写出将失败。", Iteration: 0})
+		}
+		return "屏障写出将失败。", nil
+	}
+
+	events := make(chan turnEvent, 10)
+	pipeline := NewTurnPipeline(PipelineOptions{
+		LLMClient:   mockLLM,
+		VoiceStream: vs,
+		Config:      NormalizeConfig(SessionConfig{}),
+		Logger:      slog.Default(),
+		PostEvent: func(ev turnEvent) {
+			events <- ev
+		},
+	})
+	defer pipeline.Close()
+
+	if err := pipeline.StartListening(ctx, 1, "sess-barrier-fail-nohist", ListenModeAuto); err != nil {
+		t.Fatalf("StartListening failed: %v", err)
+	}
+	if err := pipeline.StartResponse(1, "sess-barrier-fail-nohist", "屏障写出失败测试"); err != nil {
+		t.Fatalf("StartResponse failed: %v", err)
+	}
+
+	// 等待直到收到 turnEventTurnFailed
+	var sawFailed bool
+	deadline := time.After(2 * time.Second)
+	for !sawFailed {
+		select {
+		case ev := <-events:
+			if ev.typ == turnEventTurnFailed {
+				sawFailed = true
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for turnEventTurnFailed")
+		}
+	}
+
+	// 关键断言：屏障失败绝不追加历史
+	if histLen := pipeline.History().Len(); histLen != 0 {
+		t.Fatalf("expected 0 history messages on barrier failure, got %d", histLen)
 	}
 }

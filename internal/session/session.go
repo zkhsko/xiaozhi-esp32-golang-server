@@ -185,6 +185,14 @@ func (s *Session) DeviceKey() string {
 	return s.serialNumber
 }
 
+// History 返回当前会话的对话历史管理器。
+func (s *Session) History() *ConversationHistory {
+	if s == nil || s.pipeline == nil {
+		return nil
+	}
+	return s.pipeline.History()
+}
+
 // Close 主动请求关闭会话。
 func (s *Session) Close() {
 	s.postEvent(sessionEvent{
@@ -574,12 +582,19 @@ func (s *Session) handleTurnEvent(st *runtimeState, ev turnEvent) {
 		)
 		_ = s.pipeline.StartResponse(ev.turnId, st.sessionId, ev.text)
 
+	case turnEventSpeaking:
+		if st.state == StateProcessing {
+			s.setState(st, StateSpeaking)
+			s.logger.Info("session entered speaking state",
+				"session_id", st.sessionId,
+				"turn_id", ev.turnId,
+			)
+		}
+
 	case turnEventTurnCompleted:
 		if st.state != StateSpeaking && st.state != StateProcessing {
 			return
 		}
-
-		s.setState(st, StateReady)
 
 		if ev.closeSession {
 			s.logger.Info("closing session after turn finished as requested by tool",
@@ -591,6 +606,7 @@ func (s *Session) handleTurnEvent(st *runtimeState, ev turnEvent) {
 			return
 		}
 
+		s.setState(st, StateReady)
 		s.logger.Info("session returned to ready state",
 			"session_id", st.sessionId,
 			"turn_id", ev.turnId,

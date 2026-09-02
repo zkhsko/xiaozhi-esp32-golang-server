@@ -631,3 +631,518 @@ func TestSession_AsyncWriterError_ClosesSession(t *testing.T) {
 		t.Fatalf("expected StateClosed after writer error, got %v", sess.State())
 	}
 }
+
+// TestSession_StateTransitions_NormalVoice_ProcessingToSpeakingToReady 验证正常语音轮次状态流转：
+// Processing -> 首次下发 tts/start 后进入 Speaking -> stop 屏障确认完成后回到 Ready，且历史在此刻提交。
+func TestSession_StateTransitions_NormalVoice_ProcessingToSpeakingToReady(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 10, nil)
+
+	mockStream := newMockTTSStream()
+	ttsClient := newMockTTSClient(mockStream)
+	voiceWriter := newMockVoiceWriter()
+
+	barrierBlock := make(chan struct{})
+	voiceWriter.enqueueBarrierFn = func(ctx context.Context, turnId uint64) error {
+		<-barrierBlock
+		return nil
+	}
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "",
+		TTSClient: ttsClient,
+		Writer:    voiceWriter,
+		Config:    NormalizeConfig(SessionConfig{}),
+		Logger:    slog.Default(),
+	})
+	defer vs.Close()
+
+	startGenerate := make(chan struct{})
+	mockLLM := &mockLLMClient{
+		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+			<-startGenerate
+			if callback != nil {
+				_ = callback(ctx, ai.LLMChunk{Text: "你好，很高兴为您服务。", Iteration: 0})
+			}
+			return "你好，很高兴为您服务。", nil
+		},
+	}
+
+	sess := NewSession(ctx, Options{
+		Writer:       writer,
+		SerialNumber: "SN-TRANS-01",
+		VoiceStream:  vs,
+		TTSClient:    ttsClient,
+		LLMClient:    mockLLM,
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	// 1. 握手
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	// 等待进入 Ready
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateReady {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.State() != StateReady {
+		t.Fatalf("expected StateReady after handshake, got %v", sess.State())
+	}
+
+	// 2. 发送 listen.start 进入 Listening
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     listenRaw,
+	})
+
+	// 等待确已进入 Listening
+	deadline = time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateListening {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.State() != StateListening {
+		t.Fatalf("expected StateListening, got %v", sess.State())
+	}
+
+	// 3. 投递 ASR 识别结果，触发进入 Processing
+	sess.postEvent(sessionEvent{
+		kind: eventKindTurnEvent,
+		turnEv: turnEvent{
+			turnId: 1,
+			typ:    turnEventASRFinal,
+			text:   "今天天气怎么样",
+		},
+	})
+
+	// 验证确定性进入 Processing 状态（因 startGenerate 阻塞，稳定处于 Processing）
+	deadline = time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateProcessing {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.State() != StateProcessing {
+		t.Fatalf("expected StateProcessing, got %v", sess.State())
+	}
+
+	// 4. 放行 LLM 生成流式文本，等待到达 Speaking 状态（因 barrierBlock 阻塞，稳定处于 Speaking）
+	close(startGenerate)
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateSpeaking {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.State() != StateSpeaking {
+		t.Fatalf("expected session to enter StateSpeaking, got %v", sess.State())
+	}
+
+	// 此时屏障尚未确认，历史记录严格为 0
+	if histLen := sess.History().Len(); histLen != 0 {
+		t.Fatalf("expected 0 history messages while in Speaking state before barrier confirmation, got %d", histLen)
+	}
+
+	// 5. 放行屏障，等待语音写出与屏障确认后回到 Ready 状态
+	close(barrierBlock)
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateReady {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.State() != StateReady {
+		t.Fatalf("expected session to return to StateReady, got %v", sess.State())
+	}
+
+	// 6. 验证历史在此刻成功追加
+	if histLen := sess.History().Len(); histLen != 2 {
+		t.Fatalf("expected 2 history messages after turn completion, got %d", histLen)
+	}
+	msgs := sess.History().Messages()
+	if msgs[0].Content != "今天天气怎么样" || msgs[1].Content != "你好，很高兴为您服务。" {
+		t.Fatalf("unexpected history content: %+v", msgs)
+	}
+}
+
+// TestSession_StateTransitions_NoText_ProcessingDirectToReady 验证无可朗读文本轮次（0 句）：
+// 直接从 Processing 回到 Ready，严格不进入 Speaking。
+func TestSession_StateTransitions_NoText_ProcessingDirectToReady(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 10, nil)
+
+	mockStream := newMockTTSStream()
+	ttsClient := newMockTTSClient(mockStream)
+	voiceWriter := newMockVoiceWriter()
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "",
+		TTSClient: ttsClient,
+		Writer:    voiceWriter,
+		Config:    NormalizeConfig(SessionConfig{}),
+		Logger:    slog.Default(),
+	})
+	defer vs.Close()
+
+	// mockLLM 生成无文本回复（0 句）
+	mockLLM := &mockLLMClient{
+		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+			return "", nil
+		},
+	}
+
+	sess := NewSession(ctx, Options{
+		Writer:       writer,
+		SerialNumber: "SN-TRANS-NOTEXT",
+		VoiceStream:  vs,
+		TTSClient:    ttsClient,
+		LLMClient:    mockLLM,
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	// 握手
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateReady {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 状态变迁轨迹监控
+	var statesMu sync.Mutex
+	var stateTrace []State
+	recordState := func(s State) {
+		statesMu.Lock()
+		defer statesMu.Unlock()
+		if len(stateTrace) == 0 || stateTrace[len(stateTrace)-1] != s {
+			stateTrace = append(stateTrace, s)
+		}
+	}
+
+	stopPoll := make(chan struct{})
+	defer close(stopPoll)
+	go func() {
+		ticker := time.NewTicker(2 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopPoll:
+				return
+			case <-ticker.C:
+				recordState(sess.State())
+			}
+		}
+	}()
+
+	// 发送 listen.start 进入 Listening
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     listenRaw,
+	})
+
+	// 投递 ASR 识别结果进入 Processing
+	sess.postEvent(sessionEvent{
+		kind: eventKindTurnEvent,
+		turnEv: turnEvent{
+			turnId: 1,
+			typ:    turnEventASRFinal,
+			text:   "执行静默指令",
+		},
+	})
+
+	// 等待直接回到 Ready 状态
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateReady {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sess.State() != StateReady {
+		t.Fatalf("expected session to return to StateReady directly, got %v", sess.State())
+	}
+
+	// 验证在整个过程中绝未进入 Speaking 状态
+	statesMu.Lock()
+	traceCopy := make([]State, len(stateTrace))
+	copy(traceCopy, stateTrace)
+	statesMu.Unlock()
+
+	for _, st := range traceCopy {
+		if st == StateSpeaking {
+			t.Fatalf("session must not enter StateSpeaking for 0-sentence turn, got trace: %v", traceCopy)
+		}
+	}
+}
+
+// TestSession_Abort_WhileSpeaking_ResetsToReady_NoHistory 验证在 Speaking 状态下发生 Abort 立即重置为 Ready 且绝不追加历史。
+func TestSession_Abort_WhileSpeaking_ResetsToReady_NoHistory(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 10, nil)
+
+	mockStream := newMockTTSStream()
+	ttsClient := newMockTTSClient(mockStream)
+	voiceWriter := newMockVoiceWriter()
+
+	barrierBlock := make(chan struct{})
+	voiceWriter.enqueueBarrierFn = func(ctx context.Context, turnId uint64) error {
+		<-barrierBlock
+		return nil
+	}
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "",
+		TTSClient: ttsClient,
+		Writer:    voiceWriter,
+		Config:    NormalizeConfig(SessionConfig{}),
+		Logger:    slog.Default(),
+	})
+	defer vs.Close()
+
+	mockLLM := &mockLLMClient{
+		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+			if callback != nil {
+				_ = callback(ctx, ai.LLMChunk{Text: "长文本播报第一句。", Iteration: 0})
+			}
+			return "长文本播报第一句。", nil
+		},
+	}
+
+	sess := NewSession(ctx, Options{
+		Writer:       writer,
+		SerialNumber: "SN-ABORT-SPEAKING",
+		VoiceStream:  vs,
+		TTSClient:    ttsClient,
+		LLMClient:    mockLLM,
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	// 握手
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateReady {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 发送 listen.start 进入 Listening
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     listenRaw,
+	})
+
+	// 投递 ASR 识别结果进入 Processing 并触发首句
+	sess.postEvent(sessionEvent{
+		kind: eventKindTurnEvent,
+		turnEv: turnEvent{
+			turnId: 1,
+			typ:    turnEventASRFinal,
+			text:   "开始播报",
+		},
+	})
+
+	// 等待达到 Speaking 状态（因屏障阻塞而稳定处于 Speaking）
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateSpeaking {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.State() != StateSpeaking {
+		t.Fatalf("expected session to enter StateSpeaking before abort, got %v", sess.State())
+	}
+
+	// 发送 abort 控制帧
+	abortRaw := []byte(`{"type":"abort","reason":"user interrupt"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     abortRaw,
+	})
+
+	// 验证立即重置为 Ready
+	deadline = time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateReady {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sess.State() != StateReady {
+		t.Fatalf("expected session to reset to StateReady after abort, got %v", sess.State())
+	}
+
+	// 放行屏障
+	close(barrierBlock)
+	time.Sleep(50 * time.Millisecond)
+
+	// 关键断言：Abort 发生后历史记录严格为 0
+	if histLen := sess.History().Len(); histLen != 0 {
+		t.Fatalf("expected 0 history messages after abort, got %d", histLen)
+	}
+}
+
+// TestSession_VoiceStreamFailure_ClosesSession_NoHistory 验证语音流失败时会话关闭且绝不追加历史。
+func TestSession_VoiceStreamFailure_ClosesSession_NoHistory(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 10, nil)
+
+	mockStream := newMockTTSStream()
+	mockStream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+		return errors.New("dashscope quota exceeded")
+	}
+	ttsClient := newMockTTSClient(mockStream)
+	voiceWriter := newMockVoiceWriter()
+
+	vs := NewVoiceStream(VoiceStreamOptions{
+		SessionId: "",
+		TTSClient: ttsClient,
+		Writer:    voiceWriter,
+		Config:    NormalizeConfig(SessionConfig{}),
+		Logger:    slog.Default(),
+	})
+	defer vs.Close()
+
+	mockLLM := &mockLLMClient{
+		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+			if callback != nil {
+				_ = callback(ctx, ai.LLMChunk{Text: "合成将失败的句子。", Iteration: 0})
+			}
+			return "合成将失败的句子。", nil
+		},
+	}
+
+	sess := NewSession(ctx, Options{
+		Writer:       writer,
+		SerialNumber: "SN-FAIL-CLOSE",
+		VoiceStream:  vs,
+		TTSClient:    ttsClient,
+		LLMClient:    mockLLM,
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	// 握手
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateReady {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 发送 listen.start 进入 Listening
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     listenRaw,
+	})
+
+	// 投递 ASR 识别结果进入 Processing
+	sess.postEvent(sessionEvent{
+		kind: eventKindTurnEvent,
+		turnEv: turnEvent{
+			turnId: 1,
+			typ:    turnEventASRFinal,
+			text:   "触发失败流程",
+		},
+	})
+
+	// 等待会话关闭
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateClosed {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sess.State() != StateClosed {
+		t.Fatalf("expected StateClosed on voice stream failure, got %v", sess.State())
+	}
+
+	// 关键断言：失败后历史记录严格为 0
+	if histLen := sess.History().Len(); histLen != 0 {
+		t.Fatalf("expected 0 history messages after voice failure, got %d", histLen)
+	}
+}
