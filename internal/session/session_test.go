@@ -452,6 +452,9 @@ func TestSession_CloseTool_ClosesSessionAfterTurn(t *testing.T) {
 	writer := NewWriter(ctx, conn, 10, nil)
 	defer writer.Close()
 
+	mockStream := newMockTTSStream()
+	ttsClient := newMockTTSClient(mockStream)
+
 	mockLLM := &mockLLMClient{
 		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
 			for _, tool := range req.Tools {
@@ -469,6 +472,7 @@ func TestSession_CloseTool_ClosesSessionAfterTurn(t *testing.T) {
 	sess := NewSession(ctx, Options{
 		Writer:       writer,
 		SerialNumber: "SN-12345678",
+		TTSClient:    ttsClient,
 		LLMClient:    mockLLM,
 		Logger:       slog.Default(),
 	})
@@ -1044,8 +1048,8 @@ func TestSession_Abort_WhileSpeaking_ResetsToReady_NoHistory(t *testing.T) {
 	}
 }
 
-// TestSession_VoiceStreamFailure_ClosesSession_NoHistory 验证语音流失败时会话关闭且绝不追加历史。
-func TestSession_VoiceStreamFailure_ClosesSession_NoHistory(t *testing.T) {
+// TestSession_VoiceStreamFailure_ResetsToReady_NoHistory 验证语音流非致命失败时会话转回 Ready 且绝不追加历史。
+func TestSession_VoiceStreamFailure_ResetsToReady_NoHistory(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1079,7 +1083,7 @@ func TestSession_VoiceStreamFailure_ClosesSession_NoHistory(t *testing.T) {
 
 	sess := NewSession(ctx, Options{
 		Writer:       writer,
-		SerialNumber: "SN-FAIL-CLOSE",
+		SerialNumber: "SN-FAIL-RESET-READY",
 		VoiceStream:  vs,
 		TTSClient:    ttsClient,
 		LLMClient:    mockLLM,
@@ -1122,6 +1126,11 @@ func TestSession_VoiceStreamFailure_ClosesSession_NoHistory(t *testing.T) {
 		data:     listenRaw,
 	})
 
+	deadline = time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateListening {
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	// 投递 ASR 识别结果进入 Processing
 	sess.postEvent(sessionEvent{
 		kind: eventKindTurnEvent,
@@ -1132,17 +1141,311 @@ func TestSession_VoiceStreamFailure_ClosesSession_NoHistory(t *testing.T) {
 		},
 	})
 
-	// 等待会话关闭
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && sess.State() != StateClosed {
+	// 等待进入 Processing 或 Speaking
+	deadline = time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) && sess.State() == StateListening {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if sess.State() != StateClosed {
-		t.Fatalf("expected StateClosed on voice stream failure, got %v", sess.State())
+
+	// 等待语音流失败后会话转回 Ready 状态
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateReady {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if sess.State() != StateReady {
+		t.Fatalf("expected StateReady on voice stream failure, got %v", sess.State())
 	}
 
 	// 关键断言：失败后历史记录严格为 0
 	if histLen := sess.History().Len(); histLen != 0 {
 		t.Fatalf("expected 0 history messages after voice failure, got %d", histLen)
+	}
+}
+
+// TestSession_LayeredFailureSemantics 表驱动测试验证分层失败语义：
+// 1. 首句建连失败、task-failed、协议错误、编码失败：非致命错误，回到 Ready 状态，不提交历史；
+// 2. Writer 写失败、LLM 失败：致命错误，关闭会话（StateClosed），不提交历史；
+// 3. 非致命失败后下一轮问答：正常新建 TTSStream 独立合成，成功提交该轮历史。
+func TestSession_LayeredFailureSemantics(t *testing.T) {
+	type testCase struct {
+		name                 string
+		setupFailure         func(conn *mockWSConn, writer *Writer, tts *mockTTSClient, stream *mockTTSStream, llm *mockLLMClient, cfg *SessionConfig) *VoiceStream
+		wantFatal            bool
+		wantStateAfterFirst  State
+		wantHistoryLenFirst  int
+		testSecondTurn       bool
+		wantStateAfterSecond State
+		wantHistoryLenSecond int
+	}
+
+	tests := []testCase{
+		{
+			name: "TTS_ConnectFailure",
+			setupFailure: func(conn *mockWSConn, writer *Writer, tts *mockTTSClient, stream *mockTTSStream, llm *mockLLMClient, cfg *SessionConfig) *VoiceStream {
+				tts.createStreamFn = func(ctx context.Context) (ai.TTSStream, error) {
+					return nil, errors.New("dashscope dial timeout")
+				}
+				return nil
+			},
+			wantFatal:           false,
+			wantStateAfterFirst: StateReady,
+			wantHistoryLenFirst: 0,
+		},
+		{
+			name: "TTS_TaskFailed",
+			setupFailure: func(conn *mockWSConn, writer *Writer, tts *mockTTSClient, stream *mockTTSStream, llm *mockLLMClient, cfg *SessionConfig) *VoiceStream {
+				stream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+					return errors.New("dashscope task failed: quota exceeded")
+				}
+				return nil
+			},
+			wantFatal:           false,
+			wantStateAfterFirst: StateReady,
+			wantHistoryLenFirst: 0,
+		},
+		{
+			name: "TTS_ProtocolError",
+			setupFailure: func(conn *mockWSConn, writer *Writer, tts *mockTTSClient, stream *mockTTSStream, llm *mockLLMClient, cfg *SessionConfig) *VoiceStream {
+				stream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
+					return errors.New("tts websocket protocol error: invalid frame payload")
+				}
+				return nil
+			},
+			wantFatal:           false,
+			wantStateAfterFirst: StateReady,
+			wantHistoryLenFirst: 0,
+		},
+		{
+			name: "Audio_EncodingFailure",
+			setupFailure: func(conn *mockWSConn, writer *Writer, tts *mockTTSClient, stream *mockTTSStream, llm *mockLLMClient, cfg *SessionConfig) *VoiceStream {
+				vsCfg := *cfg
+				vsCfg.MaxOpusPacketBytes = -1
+				return NewVoiceStream(VoiceStreamOptions{
+					TTSClient: tts,
+					Writer:    writer,
+					Config:    vsCfg,
+					Logger:    slog.Default(),
+				})
+			},
+			wantFatal:           false,
+			wantStateAfterFirst: StateReady,
+			wantHistoryLenFirst: 0,
+		},
+		{
+			name: "Writer_WriteFailure",
+			setupFailure: func(conn *mockWSConn, writer *Writer, tts *mockTTSClient, stream *mockTTSStream, llm *mockLLMClient, cfg *SessionConfig) *VoiceStream {
+				conn.beforeWrite = func(typ websocket.MessageType, p []byte) {
+					if strings.Contains(string(p), "tts") || typ == websocket.MessageBinary {
+						conn.mu.Lock()
+						conn.writeErr = errors.New("underlying network write pipe broken")
+						conn.mu.Unlock()
+					}
+				}
+				return nil
+			},
+			wantFatal:           true,
+			wantStateAfterFirst: StateClosed,
+			wantHistoryLenFirst: 0,
+		},
+		{
+			name: "LLM_Failure",
+			setupFailure: func(conn *mockWSConn, writer *Writer, tts *mockTTSClient, stream *mockTTSStream, llm *mockLLMClient, cfg *SessionConfig) *VoiceStream {
+				llm.generate = func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+					return "", errors.New("upstream llm connection refused")
+				}
+				return nil
+			},
+			wantFatal:           true,
+			wantStateAfterFirst: StateClosed,
+			wantHistoryLenFirst: 0,
+		},
+		{
+			name: "NonFatalFailure_NextTurn_Success",
+			setupFailure: func(conn *mockWSConn, writer *Writer, tts *mockTTSClient, stream *mockTTSStream, llm *mockLLMClient, cfg *SessionConfig) *VoiceStream {
+				var calls int
+				tts.createStreamFn = func(ctx context.Context) (ai.TTSStream, error) {
+					calls++
+					if calls == 1 {
+						return nil, errors.New("dashscope dial timeout")
+					}
+					return newMockTTSStream(), nil
+				}
+				return nil
+			},
+			wantFatal:            false,
+			wantStateAfterFirst:  StateReady,
+			wantHistoryLenFirst:  0,
+			testSecondTurn:       true,
+			wantStateAfterSecond: StateReady,
+			wantHistoryLenSecond: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			conn := &mockWSConn{}
+			writer := NewWriter(ctx, conn, 10, nil)
+
+			stream := newMockTTSStream()
+			ttsClient := newMockTTSClient(stream)
+
+			cfg := NormalizeConfig(SessionConfig{})
+
+			mockLLM := &mockLLMClient{
+				generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+					if callback != nil {
+						_ = callback(ctx, ai.LLMChunk{Text: "这是第一轮回答。", Iteration: 0})
+					}
+					return "这是第一轮回答。", nil
+				},
+			}
+
+			var customVS *VoiceStream
+			if tc.setupFailure != nil {
+				customVS = tc.setupFailure(conn, writer, ttsClient, stream, mockLLM, &cfg)
+			}
+
+			sess := NewSession(ctx, Options{
+				Writer:       writer,
+				SerialNumber: "SN-LAYERED-TEST",
+				VoiceStream:  customVS,
+				TTSClient:    ttsClient,
+				LLMClient:    mockLLM,
+				Config:       cfg,
+				Logger:       slog.Default(),
+			})
+
+			go func() {
+				_ = sess.Run()
+			}()
+
+			// 执行握手流程
+			helloMsg := ClientHelloMessage{
+				Type:      "hello",
+				Version:   1,
+				Transport: "websocket",
+				AudioParams: ClientAudioParams{
+					Format:        "opus",
+					SampleRate:    16000,
+					Channels:      1,
+					FrameDuration: 60,
+				},
+			}
+			rawHello, _ := json.Marshal(helloMsg)
+			sess.postEvent(sessionEvent{
+				kind:     eventKindClientFrame,
+				isBinary: false,
+				data:     rawHello,
+			})
+
+			deadline := time.Now().Add(1 * time.Second)
+			for time.Now().Before(deadline) && sess.State() != StateReady {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if sess.State() != StateReady {
+				t.Fatalf("expected StateReady after handshake, got %v", sess.State())
+			}
+
+			// 发送 listen.start 开启第一轮
+			listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+			sess.postEvent(sessionEvent{
+				kind:     eventKindClientFrame,
+				isBinary: false,
+				data:     listenRaw,
+			})
+
+			deadline = time.Now().Add(1 * time.Second)
+			for time.Now().Before(deadline) && sess.State() != StateListening {
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			// 投递第 1 轮 ASR 结果
+			sess.postEvent(sessionEvent{
+				kind: eventKindTurnEvent,
+				turnEv: turnEvent{
+					turnId: 1,
+					typ:    turnEventASRFinal,
+					text:   "第一轮问题",
+				},
+			})
+
+			// 等待第一轮状态机流转结束
+			deadline = time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) && sess.State() != tc.wantStateAfterFirst {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if sess.State() != tc.wantStateAfterFirst {
+				t.Fatalf("expected first turn final state %v, got %v", tc.wantStateAfterFirst, sess.State())
+			}
+
+			// 验证第一轮后的历史记录条目数
+			if histLen := sess.History().Len(); histLen != tc.wantHistoryLenFirst {
+				t.Fatalf("expected %d history turns after first turn, got %d", tc.wantHistoryLenFirst, histLen)
+			}
+
+			// 若不需要测试第二轮，则单轮测试结束
+			if !tc.testSecondTurn {
+				return
+			}
+
+			// 覆盖第二轮 LLM 回答
+			mockLLM.generate = func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+				if callback != nil {
+					_ = callback(ctx, ai.LLMChunk{Text: "第二轮回答成功。", Iteration: 0})
+				}
+				return "第二轮回答成功。", nil
+			}
+
+			// 发送 listen.start 开启第二轮
+			sess.postEvent(sessionEvent{
+				kind:     eventKindClientFrame,
+				isBinary: false,
+				data:     listenRaw,
+			})
+
+			deadline = time.Now().Add(1 * time.Second)
+			for time.Now().Before(deadline) && sess.State() != StateListening {
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			// 投递第 2 轮 ASR 结果
+			sess.postEvent(sessionEvent{
+				kind: eventKindTurnEvent,
+				turnEv: turnEvent{
+					turnId: 2,
+					typ:    turnEventASRFinal,
+					text:   "第二轮问题",
+				},
+			})
+
+			// 等待第二轮成功应答并回到 Ready
+			deadline = time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) && sess.State() != tc.wantStateAfterSecond {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if sess.State() != tc.wantStateAfterSecond {
+				t.Fatalf("expected second turn final state %v, got %v", tc.wantStateAfterSecond, sess.State())
+			}
+
+			// 关键断言：历史记录严格只有第二轮（共 2 条消息）
+			hist := sess.History()
+			if hist.Len() != tc.wantHistoryLenSecond*2 {
+				t.Fatalf("expected %d messages in history after second turn, got %d", tc.wantHistoryLenSecond*2, hist.Len())
+			}
+			msgs := hist.Messages()
+			if len(msgs) == 2 {
+				if msgs[0].Content != "第二轮问题" || msgs[1].Content != "第二轮回答成功。" {
+					t.Fatalf("unexpected history content: %+v", msgs)
+				}
+			}
+
+			// 验证创建了全新的 TTSStream（共调用了 2 次 CreateStream）
+			if ttsClient.createCalls != 2 {
+				t.Fatalf("expected 2 CreateStream calls across two turns, got %d", ttsClient.createCalls)
+			}
+		})
 	}
 }

@@ -61,6 +61,9 @@ const (
 
 	// VoiceStreamEventFirstSpeech 是首句开始下发事件的别名常量。
 	VoiceStreamEventFirstSpeech = VoiceStreamEventSpeaking
+
+	// VoiceStreamEventError 是语音流错误事件的别名常量。
+	VoiceStreamEventError = VoiceStreamEventFailed
 )
 
 // VoiceStreamEvent 封装语音流生命周期事件，严格携带 turnId。
@@ -530,6 +533,7 @@ func (t *voiceStreamTurn) encoderWorker() {
 	if err != nil {
 		t.logger.Error("failed to create opus encoder", "turnId", t.turnId, "error", err)
 		t.emit(VoiceStreamEvent{TurnId: t.turnId, Kind: VoiceStreamEventFailed, Err: err})
+		t.cancel()
 		return
 	}
 	defer enc.Close()

@@ -607,7 +607,7 @@ func (p *TurnPipeline) handleVoiceStreamEvent(ev VoiceStreamEvent) {
 			turnId: ev.TurnId,
 			typ:    turnEventTurnFailed,
 			err:    ev.Err,
-			fatal:  true,
+			fatal:  false,
 		})
 
 	default:

@@ -47,7 +47,10 @@ type Encoder struct {
 
 // NewEncoder 创建配置就绪的 24 kHz 单声道 Opus 编码器。
 func NewEncoder(maxPacketBytes int) (*Encoder, error) {
-	if maxPacketBytes <= 0 {
+	if maxPacketBytes < 0 {
+		return nil, errors.New("invalid max packet bytes")
+	}
+	if maxPacketBytes == 0 {
 		maxPacketBytes = DefaultMaxOpusPacketBytes
 	}
 

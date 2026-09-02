@@ -37,7 +37,7 @@ func NormalizeConfig(cfg SessionConfig) SessionConfig {
 	if cfg.MaxWSTextMessageBytes <= 0 {
 		cfg.MaxWSTextMessageBytes = DefaultMaxWSTextMessageBytes
 	}
-	if cfg.MaxOpusPacketBytes <= 0 {
+	if cfg.MaxOpusPacketBytes == 0 {
 		cfg.MaxOpusPacketBytes = DefaultMaxOpusPacketBytes
 	}
 	if cfg.MaxListeningDuration <= 0 {

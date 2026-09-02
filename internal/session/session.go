@@ -621,6 +621,19 @@ func (s *Session) handleTurnEvent(st *runtimeState, ev turnEvent) {
 			}
 			s.setState(st, StateClosed)
 			s.closeWithReason(websocket.StatusInternalError, reason)
+		} else {
+			s.stopListeningTimer(st)
+			s.stopASRResultTimer(st)
+			s.pipeline.Abort(ev.turnId)
+			if s.voiceStream != nil {
+				s.voiceStream.CancelTurn(ev.turnId)
+			}
+			s.setState(st, StateReady)
+			s.logger.Warn("non-fatal turn error, session returned to ready state",
+				"session_id", st.sessionId,
+				"turn_id", ev.turnId,
+				"error", ev.err,
+			)
 		}
 	}
 }
