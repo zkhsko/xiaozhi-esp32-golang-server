@@ -16,12 +16,11 @@ var rawPromptOpusFile []byte
 
 var (
 	promptOnce        sync.Once
-	promptPCMData     []byte
 	promptOpusPackets [][]byte
 	promptInitErr     error
 )
 
-// initPromptData 在首次调用时解码内嵌的 prompt.opus 文件并自适应生成标准 PCM 与预编码 Opus 数据包。
+// initPromptData 在首次调用时解码内嵌的 prompt.opus 文件并自适应生成预编码 Opus 数据包。
 func initPromptData() {
 	promptOnce.Do(func() {
 		rawPCM, err := decodeEmbeddedPrompt(rawPromptOpusFile)
@@ -53,11 +52,9 @@ func initPromptData() {
 		}
 		defer enc.Close()
 
-		fullPCM := make([]byte, 0, len(allFrames)*DownlinkBytesPerFrame)
 		packets := make([][]byte, 0, len(allFrames))
 
 		for i, frame := range allFrames {
-			fullPCM = append(fullPCM, frame...)
 			pkt, err := enc.Encode(frame)
 			if err != nil {
 				promptInitErr = fmt.Errorf("encode prompt frame %d: %w", i, err)
@@ -66,7 +63,6 @@ func initPromptData() {
 			packets = append(packets, pkt)
 		}
 
-		promptPCMData = fullPCM
 		promptOpusPackets = packets
 	})
 }
@@ -155,18 +151,6 @@ func decodeEmbeddedPrompt(oggData []byte) ([]byte, error) {
 	return pcmBytes, nil
 }
 
-// GetListenPromptPCM 返回内嵌提示音的 24 kHz 单声道 16-bit PCM 数据。
-// 返回值为独立切片拷贝，确保跨并发安全。
-func GetListenPromptPCM() ([]byte, error) {
-	initPromptData()
-	if promptInitErr != nil {
-		return nil, promptInitErr
-	}
-	res := make([]byte, len(promptPCMData))
-	copy(res, promptPCMData)
-	return res, nil
-}
-
 // GetListenPromptOpusPackets 返回内嵌提示音自适应分帧预编码的 24 kHz 60 ms Opus 数据包列表。
 // 返回值为切片拷贝，确保跨并发安全。
 func GetListenPromptOpusPackets() ([][]byte, error) {
@@ -181,13 +165,4 @@ func GetListenPromptOpusPackets() ([][]byte, error) {
 		res[i] = copied
 	}
 	return res, nil
-}
-
-// GetListenPromptFrameCount 返回内嵌提示音切分后的 60 ms 下行标准帧数。
-func GetListenPromptFrameCount() (int, error) {
-	initPromptData()
-	if promptInitErr != nil {
-		return 0, promptInitErr
-	}
-	return len(promptOpusPackets), nil
 }

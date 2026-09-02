@@ -92,7 +92,6 @@ type SessionConfig struct {
 	TTSPCMQueueCapacity       int           `yaml:"tts_pcm_queue_capacity"`
 	DownlinkOpusQueueCapacity int           `yaml:"downlink_opus_queue_capacity"`
 	MaxHistoryTurns           int           `yaml:"max_history_turns"`
-	ListenPromptEnabled       bool          `yaml:"listen_prompt_enabled"`
 }
 
 // DatabaseConfig 定义数据库连接与连接池配置。

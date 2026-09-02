@@ -28,7 +28,6 @@ session:
   tts_pcm_queue_capacity: 100
   downlink_opus_queue_capacity: 100
   max_history_turns: 6
-  listen_prompt_enabled: true
 
 database:
   driver: "sqlite"
@@ -77,7 +76,6 @@ session:
   tts_pcm_queue_capacity: 100
   downlink_opus_queue_capacity: 100
   max_history_turns: 6
-  listen_prompt_enabled: true
 
 database:
   driver: "sqlite"

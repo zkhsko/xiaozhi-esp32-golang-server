@@ -26,7 +26,6 @@ type SessionConfig struct {
 	TTSPCMQueueCapacity       int
 	DownlinkOpusQueueCapacity int
 	MaxHistoryTurns           int
-	ListenPromptEnabled       bool
 }
 
 // NormalizeConfig 对传入的会话配置进行防御性校验并补齐默认值。

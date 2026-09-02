@@ -339,8 +339,8 @@ func TestSession_Abort_InvalidatesOldVoiceFramesAndPreservesControlFrames(t *tes
 	})
 	time.Sleep(50 * time.Millisecond)
 
-	// 2. 发送 listen.start -> 进入 Listening 状态，turnId 递增为 1
-	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	// 2. 发送 listen.start (manual) -> 进入 Listening 状态，turnId 递增为 1
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"manual"}`)
 	sess.postEvent(sessionEvent{
 		kind:     eventKindClientFrame,
 		isBinary: false,
@@ -881,8 +881,8 @@ func TestSession_StateTransitions_NoText_ProcessingDirectToReady(t *testing.T) {
 		}
 	}()
 
-	// 发送 listen.start 进入 Listening
-	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	// 发送 listen.start 进入 Listening (使用 manual 模式验证无语音输出轮次绝不进入 Speaking)
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"manual"}`)
 	sess.postEvent(sessionEvent{
 		kind:     eventKindClientFrame,
 		isBinary: false,
@@ -1001,6 +1001,14 @@ func TestSession_Abort_WhileSpeaking_ResetsToReady_NoHistory(t *testing.T) {
 		isBinary: false,
 		data:     listenRaw,
 	})
+
+	deadline = time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) && sess.State() != StateListening {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if sess.State() != StateListening {
+		t.Fatalf("expected StateListening, got %v", sess.State())
+	}
 
 	// 投递 ASR 识别结果进入 Processing 并触发首句
 	sess.postEvent(sessionEvent{
@@ -2097,4 +2105,3 @@ func TestSession_CloseSession_FatalErrorClosesSessionWithoutHistory(t *testing.T
 		t.Fatalf("expected 0 history messages after fatal error, got %d", sess.History().Len())
 	}
 }
-

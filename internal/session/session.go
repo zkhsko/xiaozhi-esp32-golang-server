@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/audio"
 	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
@@ -25,6 +26,7 @@ const (
 	eventKindTurnEvent
 	eventKindTimeout
 	eventKindCloseRequest
+	eventKindListenPromptFinished
 )
 
 // sessionEvent 封装投递给 supervisor 主循环的统一事件对象。
@@ -292,6 +294,8 @@ func (s *Session) handleEvent(st *runtimeState, ev sessionEvent) {
 		s.handleTurnEvent(st, ev.turnEv)
 	case eventKindTimeout:
 		s.handleTimeoutEvent(st, ev)
+	case eventKindListenPromptFinished:
+		s.handleListenPromptFinished(st, ev)
 	case eventKindCloseRequest:
 		s.setState(st, StateClosed)
 		s.closeWithReason(ev.closeCode, ev.closeReason)
@@ -461,22 +465,26 @@ func (s *Session) handleClientText(st *runtimeState, msg *ClientMessage) {
 			}
 			st.currentTurnId++
 			turnId := st.currentTurnId
-
-			s.setState(st, StateListening)
 			st.mode = mode
 
-			s.startListeningTimer(st, turnId)
-			if err := s.pipeline.StartListening(s.ctx, turnId, st.sessionId, mode); err != nil {
-				s.logger.Error("failed to start listening", "error", err, "session_id", st.sessionId)
-				s.setState(st, StateClosed)
-				s.closeWithReason(websocket.StatusInternalError, err.Error())
-				return
+			if mode == ListenModeAuto {
+				s.setState(st, StateSpeaking)
+				go s.playListenPrompt(s.ctx, turnId, st.sessionId)
+			} else {
+				s.setState(st, StateListening)
+				s.startListeningTimer(st, turnId)
+				if err := s.pipeline.StartListening(s.ctx, turnId, st.sessionId, mode); err != nil {
+					s.logger.Error("failed to start listening", "error", err, "session_id", st.sessionId)
+					s.setState(st, StateClosed)
+					s.closeWithReason(websocket.StatusInternalError, err.Error())
+					return
+				}
+				s.logger.Info("session entered listening state",
+					"session_id", st.sessionId,
+					"turn_id", turnId,
+					"mode", mode,
+				)
 			}
-			s.logger.Info("session entered listening state",
-				"session_id", st.sessionId,
-				"turn_id", turnId,
-				"mode", mode,
-			)
 
 		case StateListening:
 			s.logDiag(st.sessionId, "duplicate listen.start ignored in listening state",
@@ -869,6 +877,98 @@ func (s *Session) sendTextMessage(payload []byte) error {
 // truncatedSerialNumber 获取截断后的序列号。
 func (s *Session) truncatedSerialNumber() string {
 	return logger.TruncateString(s.serialNumber)
+}
+
+// playListenPrompt 异步下发开始聆听提示音序列并等待写入屏障确认。
+func (s *Session) playListenPrompt(ctx context.Context, turnId uint64, sessionId string) {
+	if s.writer == nil {
+		s.postEvent(sessionEvent{
+			kind:   eventKindListenPromptFinished,
+			turnId: turnId,
+		})
+		return
+	}
+
+	startBytes, err := EncodeTTSStartMessage(sessionId)
+	if err != nil {
+		s.logger.Error("failed to encode tts start for listen prompt",
+			"error", err,
+			"session_id", sessionId,
+			"turn_id", turnId,
+		)
+		return
+	}
+	if err := s.writer.SendVoiceTextWait(ctx, turnId, startBytes); err != nil {
+		return
+	}
+
+	packets, err := audio.GetListenPromptOpusPackets()
+	if err != nil {
+		s.logger.Error("failed to get listen prompt opus packets",
+			"error", err,
+			"session_id", sessionId,
+			"turn_id", turnId,
+		)
+		return
+	}
+
+	for _, pkt := range packets {
+		if err := s.writer.SendVoiceBinaryWait(ctx, turnId, pkt); err != nil {
+			return
+		}
+	}
+
+	stopBytes, err := EncodeTTSStopMessage(sessionId)
+	if err != nil {
+		s.logger.Error("failed to encode tts stop for listen prompt",
+			"error", err,
+			"session_id", sessionId,
+			"turn_id", turnId,
+		)
+		return
+	}
+	if err := s.writer.SendVoiceTextWait(ctx, turnId, stopBytes); err != nil {
+		return
+	}
+
+	if err := s.writer.EnqueueBarrierWait(ctx, turnId); err != nil {
+		return
+	}
+
+	s.postEvent(sessionEvent{
+		kind:   eventKindListenPromptFinished,
+		turnId: turnId,
+	})
+}
+
+// handleListenPromptFinished 处理自动模式下聆听提示音写出完成事件。
+func (s *Session) handleListenPromptFinished(st *runtimeState, ev sessionEvent) {
+	if ev.turnId != st.currentTurnId || st.state != StateSpeaking {
+		s.logger.Debug("stale listen prompt finished event discarded",
+			"event_turn_id", ev.turnId,
+			"current_turn_id", st.currentTurnId,
+			"state", st.state.String(),
+		)
+		return
+	}
+
+	s.setState(st, StateListening)
+	s.startListeningTimer(st, ev.turnId)
+	if err := s.pipeline.StartListening(s.ctx, ev.turnId, st.sessionId, st.mode); err != nil {
+		s.logger.Error("failed to start listening after prompt",
+			"error", err,
+			"session_id", st.sessionId,
+			"turn_id", ev.turnId,
+		)
+		s.setState(st, StateClosed)
+		s.closeWithReason(websocket.StatusInternalError, err.Error())
+		return
+	}
+	s.logger.Info("session entered listening state",
+		"session_id", st.sessionId,
+		"turn_id", ev.turnId,
+		"mode", st.mode,
+	)
 }
 
 // logDiag 限频记录诊断日志。

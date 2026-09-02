@@ -99,7 +99,6 @@ curl http://127.0.0.1:8080/xiaozhi/ota/
 | `server.websocket_url` | 下发给设备的 WebSocket 地址 | `ws://<局域网IP>:8080/xiaozhi/v1/` |
 | `server.max_concurrent_sessions` | 最大并发会话上限 | `10`（超限返回 503） |
 | `session.max_history_turns` | 上下文保留轮数 | `6`（FIFO 滚动淘汰） |
-| `session.listen_prompt_enabled` | 自动模式提示音开关 | `true` |
 | `database.driver` | 数据库驱动类型（`sqlite` / `mysql` / `postgres`） | `sqlite` |
 
 > **提示：** AI 模型（ASR/LLM/TTS）、音色、提示词及代理配置均已完全纯数据库化，由管理后台或数据表动态驱动，无需在配置文件中配置。
