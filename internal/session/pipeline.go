@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
@@ -54,6 +55,7 @@ type activeTurn struct {
 type PipelineOptions struct {
 	ASRClient    ai.ASRClient
 	LLMClient    ai.LLMClient
+	VoiceStream  *VoiceStream
 	SystemPrompt string
 	Config       SessionConfig
 	History      *ConversationHistory
@@ -66,6 +68,7 @@ type PipelineOptions struct {
 type TurnPipeline struct {
 	asrClient    ai.ASRClient
 	llmClient    ai.LLMClient
+	voiceStream  *VoiceStream
 	systemPrompt string
 	cfg          SessionConfig
 	history      *ConversationHistory
@@ -92,6 +95,7 @@ func NewTurnPipeline(opts PipelineOptions) *TurnPipeline {
 	return &TurnPipeline{
 		asrClient:    opts.ASRClient,
 		llmClient:    opts.LLMClient,
+		voiceStream:  opts.VoiceStream,
 		systemPrompt: opts.SystemPrompt,
 		cfg:          opts.Config,
 		history:      hist,
@@ -112,8 +116,12 @@ func (p *TurnPipeline) emit(ev turnEvent) {
 func (p *TurnPipeline) StartListening(ctx context.Context, turnId uint64, sessionId string, mode string) error {
 	p.mu.Lock()
 	if p.activeTurn != nil {
+		activeTurnId := p.activeTurn.turnId
 		p.activeTurn.cancel()
 		p.cleanupTurnResources(p.activeTurn)
+		if p.voiceStream != nil {
+			p.voiceStream.CancelTurn(activeTurnId)
+		}
 	}
 
 	turnCtx, turnCancel := context.WithCancel(ctx)
@@ -247,6 +255,21 @@ func (p *TurnPipeline) StartResponse(turnId uint64, sessionId string, userText s
 		})
 		return nil
 	}
+
+	if p.voiceStream != nil {
+		p.voiceStream.SetSessionId(sessionId)
+		if err := p.voiceStream.StartTurn(turn.ctx, turnId); err != nil {
+			p.mu.Unlock()
+			p.logger.Error("failed to start voice stream turn", "error", err, "turnId", turnId)
+			p.emit(turnEvent{
+				turnId: turnId,
+				typ:    turnEventTurnFailed,
+				err:    err,
+				fatal:  true,
+			})
+			return err
+		}
+	}
 	p.mu.Unlock()
 
 	go p.orchestrateLLM(turn, sessionId, userText)
@@ -259,15 +282,22 @@ func (p *TurnPipeline) Abort(turnId uint64) {
 	defer p.mu.Unlock()
 
 	if p.activeTurn == nil {
+		if p.voiceStream != nil {
+			p.voiceStream.CancelTurn(turnId)
+		}
 		return
 	}
 	if turnId != 0 && p.activeTurn.turnId != turnId {
 		return
 	}
 
+	activeTurnId := p.activeTurn.turnId
 	p.activeTurn.cancel()
 	p.cleanupTurnResources(p.activeTurn)
 	p.activeTurn = nil
+	if p.voiceStream != nil {
+		p.voiceStream.CancelTurn(activeTurnId)
+	}
 }
 
 // Close 关闭整个流水线，取消当前轮次并释放所有资源。
@@ -276,9 +306,16 @@ func (p *TurnPipeline) Close() {
 	defer p.mu.Unlock()
 
 	if p.activeTurn != nil {
+		activeTurnId := p.activeTurn.turnId
 		p.activeTurn.cancel()
 		p.cleanupTurnResources(p.activeTurn)
 		p.activeTurn = nil
+		if p.voiceStream != nil {
+			p.voiceStream.CancelTurn(activeTurnId)
+		}
+	}
+	if p.voiceStream != nil {
+		_ = p.voiceStream.Close()
 	}
 }
 
@@ -389,6 +426,12 @@ func (p *TurnPipeline) orchestrateLLM(turn *activeTurn, sessionId string, userTe
 		tools = p.toolProvider.BuildSnapshot(ctx, turnId, sessionId, turn.effects)
 	}
 
+	var (
+		lastIteration   = -1
+		iterationInit   = false
+		hasStreamedText = false
+	)
+
 	finalText, err := p.llmClient.Generate(
 		ctx,
 		ai.LLMRequest{
@@ -396,12 +439,35 @@ func (p *TurnPipeline) orchestrateLLM(turn *activeTurn, sessionId string, userTe
 			Tools:    tools,
 			MaxTurns: 8,
 		},
-		func(ctx context.Context, chunk ai.LLMChunk) error {
+		func(chunkCtx context.Context, chunk ai.LLMChunk) error {
+			if iterationInit && chunk.Iteration != lastIteration {
+				if p.voiceStream != nil {
+					if err := p.voiceStream.FlushIteration(chunkCtx, turnId); err != nil {
+						return err
+					}
+				}
+			}
+			lastIteration = chunk.Iteration
+			iterationInit = true
+
+			if chunk.Text != "" {
+				if p.voiceStream != nil {
+					if err := p.voiceStream.FeedChunk(chunkCtx, turnId, chunk); err != nil {
+						return err
+					}
+				}
+				if strings.TrimSpace(chunk.Text) != "" {
+					hasStreamedText = true
+				}
+			}
 			return nil
 		},
 	)
 
 	if err != nil {
+		if p.voiceStream != nil {
+			p.voiceStream.CancelTurn(turnId)
+		}
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			return
 		}
@@ -420,7 +486,28 @@ func (p *TurnPipeline) orchestrateLLM(turn *activeTurn, sessionId string, userTe
 	}
 
 	if ctx.Err() != nil {
+		if p.voiceStream != nil {
+			p.voiceStream.CancelTurn(turnId)
+		}
 		return
+	}
+
+	// 朗读兜底策略：只有在整个流式回调中没有产生任何非空文本时，且 finalText 非空，才将 finalText 作为兜底送入 VoiceStream 朗读一次
+	if !hasStreamedText && strings.TrimSpace(finalText) != "" {
+		if p.voiceStream != nil {
+			fallbackIteration := 0
+			if lastIteration >= 0 {
+				fallbackIteration = lastIteration
+			}
+			_ = p.voiceStream.FeedChunk(ctx, turnId, ai.LLMChunk{
+				Text:      finalText,
+				Iteration: fallbackIteration,
+			})
+		}
+	}
+
+	if p.voiceStream != nil {
+		_ = p.voiceStream.Finish(ctx, turnId)
 	}
 
 	// 文本成功提交至历史

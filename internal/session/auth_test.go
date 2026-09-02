@@ -306,6 +306,41 @@ func TestHandler_DynamicLoading_FailFast(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected HTTP 500 for disabled tts, got %d", w.Code)
 	}
+
+	// 6. TTS Provider 不支持导致 CreateTTSClient 失败 -> HTTP 500 (Fail Fast)
+	resolver.snapErr = nil
+	resolver.snapshots = map[string]*database.AgentRuntimeSnapshot{
+		"unconfigured-device": {
+			Agent: database.AgentSnapshot{
+				Id:           1,
+				Name:         "test-agent",
+				SystemPrompt: "test",
+				Voice:        "longxiaochun",
+			},
+			ASRConfig: database.ASRConfig{
+				Provider: "dashscope",
+				Endpoint: "wss://dashscope.aliyuncs.com/api-v1/ws",
+				APIKey:   "fake-key",
+				Model:    "qwen-asr",
+			},
+			LLMConfig: database.LLMConfig{
+				Provider: "dashscope",
+				Endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+				APIKey:   "fake-key",
+				Model:    "qwen-turbo",
+			},
+			TTSConfig: database.TTSConfig{
+				Provider: "unsupported-tts-provider",
+				Endpoint: "wss://invalid.tts.com",
+				APIKey:   "fake-key",
+			},
+		},
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected HTTP 400 for unsupported tts provider, got %d", w.Code)
+	}
 }
 
 func TestSession_DeviceKey_SNIsUniqueIdentity(t *testing.T) {

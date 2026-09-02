@@ -54,6 +54,7 @@ type runtimeState struct {
 type Session struct {
 	conn         *websocket.Conn
 	writer       *Writer
+	voiceStream  *VoiceStream
 	events       chan sessionEvent
 	serialNumber string
 	cfg          SessionConfig
@@ -81,6 +82,8 @@ type Options struct {
 	Config        SessionConfig
 	ASRClient     ai.ASRClient
 	LLMClient     ai.LLMClient
+	TTSClient     ai.TTSClient
+	VoiceStream   *VoiceStream
 	AgentKitStore AgentKitStore
 	Logger        *slog.Logger
 }
@@ -109,9 +112,21 @@ func NewSession(ctx context.Context, opts Options) *Session {
 	toolProvider := NewToolProvider(mcpBridge, opts.AgentKitStore, l)
 	history := NewConversationHistory(cfg.MaxHistoryTurns)
 
+	vs := opts.VoiceStream
+	if vs == nil {
+		vs = NewVoiceStream(VoiceStreamOptions{
+			SessionId: "",
+			TTSClient: opts.TTSClient,
+			Writer:    w,
+			Config:    cfg,
+			Logger:    l,
+		})
+	}
+
 	pipeline := NewTurnPipeline(PipelineOptions{
 		ASRClient:    opts.ASRClient,
 		LLMClient:    opts.LLMClient,
+		VoiceStream:  vs,
 		SystemPrompt: opts.SystemPrompt,
 		Config:       cfg,
 		History:      history,
@@ -131,6 +146,7 @@ func NewSession(ctx context.Context, opts Options) *Session {
 	s := &Session{
 		conn:         opts.Conn,
 		writer:       w,
+		voiceStream:  vs,
 		events:       events,
 		serialNumber: opts.SerialNumber,
 		cfg:          cfg,
@@ -345,6 +361,9 @@ func (s *Session) handleClientFrame(st *runtimeState, ev sessionEvent) {
 
 		st.sessionId = sessionId
 		s.atomicSessionId.Store(sessionId)
+		if s.voiceStream != nil {
+			s.voiceStream.SetSessionId(sessionId)
+		}
 		s.setState(st, StateReady)
 
 		mcpSupported := clientHello.SupportsMCP()
@@ -603,6 +622,9 @@ func (s *Session) handleAbort(st *runtimeState, reason string) {
 	s.stopListeningTimer(st)
 	s.stopASRResultTimer(st)
 	s.pipeline.Abort(0)
+	if s.voiceStream != nil {
+		s.voiceStream.CancelTurn(oldTurnId)
+	}
 
 	if s.writer != nil {
 		s.writer.InvalidateVoiceTurn(oldTurnId)
@@ -705,6 +727,9 @@ func (s *Session) readLoop() {
 // closeWithReason 执行会话资源清理并安全关闭底层连接。
 func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 	s.closeOnce.Do(func() {
+		if s.voiceStream != nil {
+			_ = s.voiceStream.Close()
+		}
 		s.pipeline.Close()
 		s.mcpBridge.Close()
 
