@@ -2,9 +2,11 @@ package factory
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/ai/dashscope"
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
@@ -88,4 +90,163 @@ func TestFactory_CreateClients(t *testing.T) {
 			t.Fatalf("expected non-nil llm client for provider %q", p)
 		}
 	}
+}
+
+func TestFactory_CreateTTSClient(t *testing.T) {
+	t.Run("nil config", func(t *testing.T) {
+		client, err := CreateTTSClient(nil, "longxiaochun")
+		if err == nil {
+			t.Fatal("expected error for nil tts config, got nil")
+		}
+		if client != nil {
+			t.Fatalf("expected nil client, got: %v", client)
+		}
+		if !strings.Contains(err.Error(), "tts config is nil") {
+			t.Fatalf("expected error message to contain 'tts config is nil', got: %v", err)
+		}
+	})
+
+	t.Run("dashscope success and normalization", func(t *testing.T) {
+		validProviders := []string{
+			"dashscope",
+			"DashScope",
+			"DASHSCOPE",
+			" dashscope ",
+			"  DashScope  ",
+		}
+		for _, p := range validProviders {
+			cfg := &database.TTSConfig{
+				Provider:            p,
+				Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
+				APIKey:              "test-api-key",
+				Model:               dashscope.TargetTTSModel,
+				ConnectTimeoutMS:    5000,
+				FirstAudioTimeoutMS: 5000,
+				SentenceTimeoutMS:   10000,
+				ProxyURL:            "http://127.0.0.1:8080",
+			}
+			client, err := CreateTTSClient(cfg, "longxiaochun")
+			if err != nil {
+				t.Fatalf("CreateTTSClient with provider %q failed: %v", p, err)
+			}
+			if client == nil {
+				t.Fatalf("expected non-nil tts client for provider %q", p)
+			}
+		}
+	})
+
+	t.Run("unsupported and empty providers", func(t *testing.T) {
+		unsupportedProviders := []string{
+			"",
+			"   ",
+			"\t",
+			"unsupported",
+			"openai",
+			"volcengine",
+			"cosyvoice",
+			"azure",
+		}
+		for _, p := range unsupportedProviders {
+			cfg := &database.TTSConfig{
+				Provider: p,
+				Endpoint: "wss://dashscope.aliyuncs.com/api-v1/ws",
+				APIKey:   "test-api-key",
+				Model:    dashscope.TargetTTSModel,
+			}
+			client, err := CreateTTSClient(cfg, "longxiaochun")
+			if err == nil {
+				t.Fatalf("expected error for unsupported provider %q, got client: %v", p, client)
+			}
+			if client != nil {
+				t.Fatalf("expected nil client for unsupported provider %q", p)
+			}
+			if !strings.Contains(err.Error(), "unsupported tts provider") {
+				t.Fatalf("expected 'unsupported tts provider' in error, got: %v", err)
+			}
+		}
+	})
+
+	t.Run("invalid models", func(t *testing.T) {
+		invalidModels := []string{
+			"",
+			"   ",
+			"cosyvoice-v1",
+			"sambert-zhichu-v1",
+			"qwen-audio-other",
+			"qwen-audio-3.0-tts",
+		}
+		for _, m := range invalidModels {
+			cfg := &database.TTSConfig{
+				Provider: "dashscope",
+				Endpoint: "wss://dashscope.aliyuncs.com/api-v1/ws",
+				APIKey:   "test-api-key",
+				Model:    m,
+			}
+			client, err := CreateTTSClient(cfg, "longxiaochun")
+			if err == nil {
+				t.Fatalf("expected error for invalid model %q, got client: %v", m, client)
+			}
+			if client != nil {
+				t.Fatalf("expected nil client for invalid model %q", m)
+			}
+		}
+	})
+
+	t.Run("empty voice", func(t *testing.T) {
+		emptyVoices := []string{
+			"",
+			"   ",
+			"\t\n",
+		}
+		cfg := &database.TTSConfig{
+			Provider: "dashscope",
+			Endpoint: "wss://dashscope.aliyuncs.com/api-v1/ws",
+			APIKey:   "test-api-key",
+			Model:    dashscope.TargetTTSModel,
+		}
+		for _, v := range emptyVoices {
+			client, err := CreateTTSClient(cfg, v)
+			if err == nil {
+				t.Fatalf("expected error for empty voice %q, got client: %v", v, client)
+			}
+			if client != nil {
+				t.Fatalf("expected nil client for empty voice %q", v)
+			}
+			if !strings.Contains(err.Error(), "tts voice is required") {
+				t.Fatalf("expected 'tts voice is required' in error, got: %v", err)
+			}
+		}
+	})
+
+	t.Run("invalid dashscope config parameters", func(t *testing.T) {
+		baseCfg := func() *database.TTSConfig {
+			return &database.TTSConfig{
+				Provider: "dashscope",
+				Endpoint: "wss://dashscope.aliyuncs.com/api-v1/ws",
+				APIKey:   "test-api-key",
+				Model:    dashscope.TargetTTSModel,
+			}
+		}
+
+		// Empty endpoint
+		cfgNoEndpoint := baseCfg()
+		cfgNoEndpoint.Endpoint = ""
+		if _, err := CreateTTSClient(cfgNoEndpoint, "longxiaochun"); err == nil {
+			t.Fatal("expected error for empty endpoint, got nil")
+		}
+
+		// Empty API key
+		cfgNoAPIKey := baseCfg()
+		cfgNoAPIKey.APIKey = ""
+		if _, err := CreateTTSClient(cfgNoAPIKey, "longxiaochun"); err == nil {
+			t.Fatal("expected error for empty api key, got nil")
+		}
+
+		// Invalid proxy URL
+		cfgBadProxy := baseCfg()
+		cfgBadProxy.ProxyURL = "://invalid-url"
+		if _, err := CreateTTSClient(cfgBadProxy, "longxiaochun"); err == nil {
+			t.Fatal("expected error for invalid proxy url, got nil")
+		}
+	})
 }
