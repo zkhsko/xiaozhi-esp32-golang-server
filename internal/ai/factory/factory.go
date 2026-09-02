@@ -65,8 +65,6 @@ func CreateTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (ai.TT
 
 	provider := strings.TrimSpace(cfg.Provider)
 	switch strings.ToLower(provider) {
-	case "dashscope", "":
-		return dashscope.NewTTSClient(cfg, voice, queueCap)
 	default:
 		return nil, fmt.Errorf("unsupported tts provider: %s", provider)
 	}

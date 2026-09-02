@@ -51,7 +51,7 @@ func TestFactory_CreateClients(t *testing.T) {
 		}
 	}
 
-	// 4. ASR / DashScope LLM / TTS configs (with and without proxy)
+	// 4. ASR / DashScope LLM configs (with and without proxy)
 	for _, p := range []string{"dashscope", ""} {
 		asrCfg := &database.ASRConfig{
 			Provider:         p,
@@ -87,41 +87,5 @@ func TestFactory_CreateClients(t *testing.T) {
 		if llmClient == nil {
 			t.Fatalf("expected non-nil llm client for provider %q", p)
 		}
-	}
-
-	for _, p := range []string{"dashscope", ""} {
-		ttsCfg := &database.TTSConfig{
-			Provider:            p,
-			Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
-			APIKey:              "test-key",
-			Model:               "cosyvoice-v1",
-			Voices:              `["voice1"]`,
-			ConnectTimeoutMS:    5000,
-			FirstAudioTimeoutMS: 5000,
-			SentenceTimeoutMS:   10000,
-			ProxyURL:            "http://127.0.0.1:8080",
-		}
-		ttsClient, err := CreateTTSClient(ttsCfg, "voice1", 100)
-		if err != nil {
-			t.Fatalf("CreateTTSClient(%q) failed: %v", p, err)
-		}
-		if ttsClient == nil {
-			t.Fatalf("expected non-nil tts client for provider %q", p)
-		}
-	}
-
-	testTTSCfg := &database.TTSConfig{
-		Provider:            "dashscope",
-		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
-		APIKey:              "test-key",
-		Model:               "cosyvoice-v1",
-		Voices:              `["voice1"]`,
-		ConnectTimeoutMS:    5000,
-		FirstAudioTimeoutMS: 5000,
-		SentenceTimeoutMS:   10000,
-	}
-	// 5. TTS Empty voice validation
-	if _, err := CreateTTSClient(testTTSCfg, "  ", 100); err == nil {
-		t.Error("expected error for empty voice, got nil")
 	}
 }
