@@ -24,6 +24,9 @@ const TargetTTSModel = "qwen-audio-3.0-tts-flash"
 // maxTTSReadMessageBytes 定义 DashScope TTS WebSocket 单帧最大读取字节数（1 MiB）。
 const maxTTSReadMessageBytes = 1 * 1024 * 1024
 
+// cancelCleanupTimeout 定义任务取消清理的最长等待时间（2 秒）。
+const cancelCleanupTimeout = 2 * time.Second
+
 // ErrConcurrentSynthesize 表示同一 Stream 上存在并发的 SynthesizeSentence 调用或当前状态非空闲。
 var ErrConcurrentSynthesize = errors.New("concurrent SynthesizeSentence calls are not allowed")
 
@@ -231,15 +234,20 @@ const (
 
 // TTSStream 实现基于 DashScope WebSocket 流式协议的单轮流式语音合成会话。
 type TTSStream struct {
-	client       *TTSClient
-	conn         *websocket.Conn
-	mu           sync.Mutex
-	writeMu      sync.Mutex
-	state        streamState
-	activeTaskId string
-	err          error
-	connClosed   bool
-	closeOnce    sync.Once
+	client           *TTSClient
+	conn             *websocket.Conn
+	mu               sync.Mutex
+	writeMu          sync.Mutex
+	state            streamState
+	activeTaskId     string
+	err              error
+	connClosed       bool
+	closeOnce        sync.Once
+	cancelCause      error
+	normalFinishSent bool
+	cancelFinishSent bool
+	terminalReceived bool
+	cleanupTimer     *time.Timer
 }
 
 // 确保 TTSStream 实现了 ai.TTSStream 接口。
@@ -286,29 +294,82 @@ func (s *TTSStream) SynthesizeSentence(
 	taskId := newUUID()
 	s.activeTaskId = taskId
 	s.state = stateWaitingTaskStarted
+	s.cancelCause = nil
+	s.normalFinishSent = false
+	s.cancelFinishSent = false
+	s.terminalReceived = false
+	s.cleanupTimer = nil
 	s.mu.Unlock()
 
 	var (
 		firstAudioReceived atomic.Bool
 		firstAudioTimedOut atomic.Bool
 		sentenceTimedOut   atomic.Bool
+		firstAudioTimer    *time.Timer
 	)
 
+	// 退出时统一清理状态；若经历过取消，连接必须关闭且禁止复用
 	defer func() {
-		s.mu.Lock()
-		if s.state != stateClosed && s.state != stateFailed {
-			s.state = stateIdle
+		if firstAudioTimer != nil {
+			firstAudioTimer.Stop()
 		}
+		s.mu.Lock()
+		if s.cleanupTimer != nil {
+			s.cleanupTimer.Stop()
+			s.cleanupTimer = nil
+		}
+		cause := s.cancelCause
+		wasFailed := (s.state == stateFailed)
+		wasCancelling := (s.state == stateCancelling)
+
+		if wasFailed {
+			s.mu.Unlock()
+		} else if isFailureCause(cause) {
+			s.state = stateFailed
+			if s.err == nil {
+				s.err = cause
+			}
+			conn := s.conn
+			alreadyClosed := s.connClosed
+			s.connClosed = true
+			s.mu.Unlock()
+			if conn != nil && !alreadyClosed {
+				_ = conn.Close(websocket.StatusPolicyViolation, "tts stream failed")
+			}
+		} else if wasCancelling || errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+			s.state = stateClosed
+			conn := s.conn
+			alreadyClosed := s.connClosed
+			s.connClosed = true
+			s.mu.Unlock()
+			if conn != nil && !alreadyClosed {
+				_ = conn.Close(websocket.StatusNormalClosure, "stream closed after cancellation")
+			}
+		} else if s.state != stateClosed {
+			s.state = stateIdle
+			s.mu.Unlock()
+		} else {
+			s.mu.Unlock()
+		}
+
+		s.mu.Lock()
 		s.activeTaskId = ""
+		s.cancelCause = nil
+		s.normalFinishSent = false
+		s.cancelFinishSent = false
+		s.terminalReceived = false
 		s.mu.Unlock()
 	}()
 
-	// 监听外部 context 取消并执行清理
-	stopOuterContext := context.AfterFunc(ctx, func() {
-		s.sendCancelDirect(taskId)
-		s.forceClose()
+	// 内部读上下文，确保 SynthesizeSentence 保持连接上的唯一读取权
+	readCtx, readCancel := context.WithCancel(context.Background())
+	defer readCancel()
+
+	// 监听外部 context 取消，转换为取消清理触发
+	stopMonitor := context.AfterFunc(ctx, func() {
+		_ = s.triggerCancel(ctx.Err())
 	})
-	defer stopOuterContext()
+	defer stopMonitor()
 
 	// 1. 发送 run-task 消息
 	runMsg := ttsRunTaskMessage{
@@ -343,12 +404,21 @@ func (s *TTSStream) SynthesizeSentence(
 	}
 
 	s.writeMu.Lock()
-	err = s.conn.Write(ctx, websocket.MessageText, runBytes)
+	s.mu.Lock()
+	cancelling := (s.state == stateCancelling || s.state == stateClosed)
+	s.mu.Unlock()
+	if cancelling {
+		s.writeMu.Unlock()
+		if cause := s.getCancelCause(); cause != nil {
+			return cause
+		}
+		return context.Canceled
+	}
+	err = s.conn.Write(readCtx, websocket.MessageText, runBytes)
 	s.writeMu.Unlock()
 	if err != nil {
-		if ctx.Err() != nil {
-			s.markFailed(ctx.Err())
-			return ctx.Err()
+		if cause := s.getCancelCause(); cause != nil {
+			return cause
 		}
 		s.markFailed(err)
 		return fmt.Errorf("write run-task: %w", err)
@@ -357,189 +427,200 @@ func (s *TTSStream) SynthesizeSentence(
 	// run-task 成功写出后，启动单句总超时定时器
 	sentenceTimer := time.AfterFunc(s.client.sentenceTimeout, func() {
 		sentenceTimedOut.Store(true)
-		s.sendCancelAndScheduleForceClose(taskId)
+		_ = s.triggerCancel(ErrSentenceTimeout)
 	})
 	defer sentenceTimer.Stop()
 
 	// 2. 等待 task-started 响应
-	msgType, firstData, err := s.conn.Read(ctx)
+	msgType, firstData, err := s.conn.Read(readCtx)
 	if err != nil {
-		if sentenceTimedOut.Load() {
-			s.markFailed(ErrSentenceTimeout)
-			return ErrSentenceTimeout
-		}
-		if ctx.Err() != nil {
-			s.markFailed(ctx.Err())
-			return ctx.Err()
+		if cause := s.getCancelCause(); cause != nil {
+			return cause
 		}
 		s.markFailed(err)
 		return fmt.Errorf("read task-started: %w", err)
 	}
-	if msgType == websocket.MessageBinary {
-		err := fmt.Errorf("received binary audio message before task-started (task_id: %s)", taskId)
-		s.markFailed(err)
-		return err
-	}
-	if msgType != websocket.MessageText {
-		err := fmt.Errorf("unexpected websocket message type waiting for task-started: %v (task_id: %s)", msgType, taskId)
-		s.markFailed(err)
-		return err
-	}
-
-	var initResp ttsResponseMessage
-	if err := json.Unmarshal(firstData, &initResp); err != nil {
-		err := fmt.Errorf("unmarshal task-started JSON: %w (task_id: %s)", err, taskId)
-		s.markFailed(err)
-		return err
-	}
-
-	if initResp.Header.TaskId == "" {
-		err := fmt.Errorf("missing task_id in task-started response (expected %s)", taskId)
-		s.markFailed(err)
-		return err
-	}
-
-	if initResp.Header.TaskId != taskId {
-		err := fmt.Errorf("task_id mismatch in task-started: got %s, want %s", initResp.Header.TaskId, taskId)
-		s.markFailed(err)
-		return err
-	}
-
-	event := initResp.Header.Event
-	if event == "" {
-		event = initResp.Header.Action
-	}
-
-	if event == "task-failed" {
-		code := initResp.Header.ErrorCode
-		if code == "" {
-			code = "UNKNOWN_ERROR"
-		}
-		msg := initResp.Header.ErrorMessage
-		if msg == "" {
-			msg = "task start failed"
-		}
-		err := fmt.Errorf("tts task failed: [%s] %s (task_id: %s)", code, msg, taskId)
-		s.markFailed(err)
-		return err
-	}
-
-	if event != "task-started" {
-		err := fmt.Errorf("unexpected event waiting for task-started: %s (task_id: %s)", event, taskId)
-		s.markFailed(err)
-		return err
-	}
 
 	s.mu.Lock()
-	if s.state != stateClosed && s.state != stateFailed {
-		s.state = stateReceivingAudio
-	}
+	cancelling = (s.state == stateCancelling)
 	s.mu.Unlock()
 
-	// 3. 发送 continue-task (携带待朗读文本) 与 finish-task
-	continueMsg := ttsContinueTaskMessage{
-		Header: ttsRequestHeader{
-			Action:    "continue-task",
-			TaskId:    taskId,
-			Streaming: "duplex",
-		},
-		Payload: ttsContinuePayload{
-			Input: struct {
-				Text string `json:"text"`
-			}{
-				Text: text,
+	if !cancelling {
+		if msgType == websocket.MessageBinary {
+			err := fmt.Errorf("received binary audio message before task-started (task_id: %s)", taskId)
+			s.markFailed(err)
+			return err
+		}
+		if msgType != websocket.MessageText {
+			err := fmt.Errorf("unexpected websocket message type waiting for task-started: %v (task_id: %s)", msgType, taskId)
+			s.markFailed(err)
+			return err
+		}
+
+		var initResp ttsResponseMessage
+		if err := json.Unmarshal(firstData, &initResp); err != nil {
+			err := fmt.Errorf("unmarshal task-started JSON: %w (task_id: %s)", err, taskId)
+			s.markFailed(err)
+			return err
+		}
+
+		if initResp.Header.TaskId == "" {
+			err := fmt.Errorf("missing task_id in task-started response (expected %s)", taskId)
+			s.markFailed(err)
+			return err
+		}
+
+		if initResp.Header.TaskId != taskId {
+			err := fmt.Errorf("task_id mismatch in task-started: got %s, want %s", initResp.Header.TaskId, taskId)
+			s.markFailed(err)
+			return err
+		}
+
+		event := initResp.Header.Event
+		if event == "" {
+			event = initResp.Header.Action
+		}
+
+		if event == "task-failed" {
+			s.mu.Lock()
+			s.terminalReceived = true
+			s.mu.Unlock()
+
+			code := initResp.Header.ErrorCode
+			if code == "" {
+				code = "UNKNOWN_ERROR"
+			}
+			msg := initResp.Header.ErrorMessage
+			if msg == "" {
+				msg = "task start failed"
+			}
+			err := fmt.Errorf("tts task failed: [%s] %s (task_id: %s)", code, msg, taskId)
+			s.markFailed(err)
+			return err
+		}
+
+		if event != "task-started" {
+			err := fmt.Errorf("unexpected event waiting for task-started: %s (task_id: %s)", event, taskId)
+			s.markFailed(err)
+			return err
+		}
+
+		s.mu.Lock()
+		if s.state != stateClosed && s.state != stateFailed && s.state != stateCancelling {
+			s.state = stateReceivingAudio
+		}
+		cancelling = (s.state == stateCancelling)
+		s.mu.Unlock()
+	}
+
+	// 3. 发送 continue-task 与 finish-task
+	if !cancelling {
+		continueMsg := ttsContinueTaskMessage{
+			Header: ttsRequestHeader{
+				Action:    "continue-task",
+				TaskId:    taskId,
+				Streaming: "duplex",
 			},
-		},
+			Payload: ttsContinuePayload{
+				Input: struct {
+					Text string `json:"text"`
+				}{
+					Text: text,
+				},
+			},
+		}
+
+		continueBytes, err := json.Marshal(continueMsg)
+		if err != nil {
+			s.markFailed(err)
+			return fmt.Errorf("marshal continue-task: %w", err)
+		}
+
+		finishMsg := ttsFinishTaskMessage{
+			Header: ttsRequestHeader{
+				Action:    "finish-task",
+				TaskId:    taskId,
+				Streaming: "duplex",
+			},
+			Payload: ttsFinishPayload{},
+		}
+
+		finishBytes, err := json.Marshal(finishMsg)
+		if err != nil {
+			s.markFailed(err)
+			return fmt.Errorf("marshal finish-task: %w", err)
+		}
+
+		s.writeMu.Lock()
+		s.mu.Lock()
+		cancelling = (s.state == stateCancelling || s.state == stateClosed || s.terminalReceived)
+		s.mu.Unlock()
+
+		if !cancelling {
+			err = s.conn.Write(readCtx, websocket.MessageText, continueBytes)
+			if err != nil {
+				s.writeMu.Unlock()
+				if cause := s.getCancelCause(); cause != nil {
+					return cause
+				}
+				s.markFailed(err)
+				return fmt.Errorf("write continue-task: %w", err)
+			}
+
+			// continue-task 成功写出后，启动首音频超时定时器
+			firstAudioTimer = time.AfterFunc(s.client.firstAudioTimeout, func() {
+				if !firstAudioReceived.Load() {
+					firstAudioTimedOut.Store(true)
+					_ = s.triggerCancel(ErrFirstAudioTimeout)
+				}
+			})
+
+			// 检查是否在 continue-task 写出后已被取消或收到终态
+			s.mu.Lock()
+			cancelling = (s.state == stateCancelling || s.state == stateClosed || s.terminalReceived || s.cancelFinishSent)
+			if !cancelling {
+				s.normalFinishSent = true
+			}
+			s.mu.Unlock()
+
+			if !cancelling {
+				err = s.conn.Write(readCtx, websocket.MessageText, finishBytes)
+			}
+			s.writeMu.Unlock()
+			if err != nil {
+				if cause := s.getCancelCause(); cause != nil {
+					return cause
+				}
+				s.markFailed(err)
+				return fmt.Errorf("write finish-task: %w", err)
+			}
+		} else {
+			s.writeMu.Unlock()
+		}
 	}
 
-	continueBytes, err := json.Marshal(continueMsg)
-	if err != nil {
-		s.markFailed(err)
-		return fmt.Errorf("marshal continue-task: %w", err)
-	}
-
-	finishMsg := ttsFinishTaskMessage{
-		Header: ttsRequestHeader{
-			Action:    "finish-task",
-			TaskId:    taskId,
-			Streaming: "duplex",
-		},
-		Payload: ttsFinishPayload{},
-	}
-
-	finishBytes, err := json.Marshal(finishMsg)
-	if err != nil {
-		s.markFailed(err)
-		return fmt.Errorf("marshal finish-task: %w", err)
-	}
-
-	s.writeMu.Lock()
-	err = s.conn.Write(ctx, websocket.MessageText, continueBytes)
-	if err != nil {
-		s.writeMu.Unlock()
-		if sentenceTimedOut.Load() {
-			s.markFailed(ErrSentenceTimeout)
-			return ErrSentenceTimeout
-		}
-		if ctx.Err() != nil {
-			s.markFailed(ctx.Err())
-			return ctx.Err()
-		}
-		s.markFailed(err)
-		return fmt.Errorf("write continue-task: %w", err)
-	}
-
-	// continue-task 成功写出后，启动首音频超时定时器
-	firstAudioTimer := time.AfterFunc(s.client.firstAudioTimeout, func() {
-		if !firstAudioReceived.Load() {
-			firstAudioTimedOut.Store(true)
-			s.sendCancelAndScheduleForceClose(taskId)
-		}
-	})
-	defer firstAudioTimer.Stop()
-
-	err = s.conn.Write(ctx, websocket.MessageText, finishBytes)
-	s.writeMu.Unlock()
-	if err != nil {
-		if sentenceTimedOut.Load() {
-			s.markFailed(ErrSentenceTimeout)
-			return ErrSentenceTimeout
-		}
-		if firstAudioTimedOut.Load() {
-			s.markFailed(ErrFirstAudioTimeout)
-			return ErrFirstAudioTimeout
-		}
-		if ctx.Err() != nil {
-			s.markFailed(ctx.Err())
-			return ctx.Err()
-		}
-		s.markFailed(err)
-		return fmt.Errorf("write finish-task: %w", err)
-	}
-
-	// 4. 读取 PCM 二进制数据及事件响应，直至 task-finished
+	// 4. 读取 PCM 数据及事件响应，直至 task-finished
 	var nonEmptyAudioCount int
 
 	for {
-		msgType, data, err := s.conn.Read(ctx)
+		msgType, data, err := s.conn.Read(readCtx)
 		if err != nil {
-			if firstAudioTimedOut.Load() {
-				s.markFailed(ErrFirstAudioTimeout)
-				return ErrFirstAudioTimeout
-			}
-			if sentenceTimedOut.Load() {
-				s.markFailed(ErrSentenceTimeout)
-				return ErrSentenceTimeout
-			}
-			if ctx.Err() != nil {
-				s.markFailed(ctx.Err())
-				return ctx.Err()
+			if cause := s.getCancelCause(); cause != nil {
+				return cause
 			}
 			s.markFailed(err)
 			return fmt.Errorf("read tts message: %w", err)
 		}
 
+		s.mu.Lock()
+		isCancelling := (s.state == stateCancelling)
+		s.mu.Unlock()
+
 		if msgType == websocket.MessageBinary {
+			if isCancelling {
+				// 活跃 SynthesizeSentence 进入 cancelling 状态后继续读取，静默丢弃迟到的二进制 PCM 消息
+				continue
+			}
 			if len(data) == 0 {
 				// 空二进制消息忽略，不视为有效音频，不停止首音频计时器
 				continue
@@ -553,9 +634,8 @@ func (s *TTSStream) SynthesizeSentence(
 			nonEmptyAudioCount++
 
 			if err := onPCM(ctx, data); err != nil {
-				s.sendCancelDirect(taskId)
-				s.markFailed(err)
-				return err
+				_ = s.triggerCancel(err)
+				continue
 			}
 			continue
 		}
@@ -563,18 +643,27 @@ func (s *TTSStream) SynthesizeSentence(
 		if msgType == websocket.MessageText {
 			var resp ttsResponseMessage
 			if err := json.Unmarshal(data, &resp); err != nil {
+				if cause := s.getCancelCause(); cause != nil {
+					return cause
+				}
 				err = fmt.Errorf("unmarshal tts response JSON: %w (task_id: %s)", err, taskId)
 				s.markFailed(err)
 				return err
 			}
 
 			if resp.Header.TaskId == "" {
+				if cause := s.getCancelCause(); cause != nil {
+					return cause
+				}
 				err := fmt.Errorf("missing task_id in tts response (expected %s)", taskId)
 				s.markFailed(err)
 				return err
 			}
 
 			if resp.Header.TaskId != taskId {
+				if cause := s.getCancelCause(); cause != nil {
+					return cause
+				}
 				err := fmt.Errorf("task_id mismatch: got %s, want %s", resp.Header.TaskId, taskId)
 				s.markFailed(err)
 				return err
@@ -590,13 +679,12 @@ func (s *TTSStream) SynthesizeSentence(
 				// 合法中间事件，忽略接收，不报错也不干扰设备下行
 				continue
 			case "task-finished":
-				if firstAudioTimedOut.Load() {
-					s.markFailed(ErrFirstAudioTimeout)
-					return ErrFirstAudioTimeout
-				}
-				if sentenceTimedOut.Load() {
-					s.markFailed(ErrSentenceTimeout)
-					return ErrSentenceTimeout
+				s.mu.Lock()
+				s.terminalReceived = true
+				s.mu.Unlock()
+
+				if cause := s.getCancelCause(); cause != nil {
+					return cause
 				}
 				if nonEmptyAudioCount == 0 {
 					s.markFailed(ErrNoAudioReceived)
@@ -604,6 +692,10 @@ func (s *TTSStream) SynthesizeSentence(
 				}
 				return nil
 			case "task-failed":
+				s.mu.Lock()
+				s.terminalReceived = true
+				s.mu.Unlock()
+
 				code := resp.Header.ErrorCode
 				if code == "" {
 					code = "UNKNOWN_ERROR"
@@ -614,36 +706,78 @@ func (s *TTSStream) SynthesizeSentence(
 				}
 				err := fmt.Errorf("tts task failed: [%s] %s (task_id: %s)", code, msg, taskId)
 				s.markFailed(err)
+				if cause := s.getCancelCause(); cause != nil {
+					return cause
+				}
 				return err
 			default:
+				if cause := s.getCancelCause(); cause != nil {
+					return cause
+				}
 				err := fmt.Errorf("unknown tts event: %s (task_id: %s)", event, taskId)
 				s.markFailed(err)
 				return err
 			}
 		}
 
+		if cause := s.getCancelCause(); cause != nil {
+			return cause
+		}
 		err = fmt.Errorf("unexpected websocket message type: %v (task_id: %s)", msgType, taskId)
 		s.markFailed(err)
 		return err
 	}
 }
 
-func (s *TTSStream) sendCancelAndScheduleForceClose(taskId string) {
-	s.sendCancelDirect(taskId)
-	time.AfterFunc(2*time.Second, func() {
-		s.forceClose()
-	})
+func (s *TTSStream) getCancelCause() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cancelCause
 }
 
-func (s *TTSStream) sendCancelDirect(taskId string) {
-	if taskId == "" {
-		return
-	}
+func (s *TTSStream) triggerCancel(cause error) error {
 	s.mu.Lock()
-	if s.connClosed || s.conn == nil || s.state == stateClosed || s.state == stateFailed {
+	if s.state == stateClosed || s.state == stateFailed || s.state == stateIdle || s.connClosed || s.activeTaskId == "" {
 		s.mu.Unlock()
-		return
+		return nil
 	}
+	if s.cancelCause == nil {
+		s.cancelCause = cause
+	}
+	taskId := s.activeTaskId
+	alreadyCancelling := (s.state == stateCancelling)
+	s.state = stateCancelling
+
+	// 启动最多 2 秒清理上限定时器（若尚未启动）
+	if s.cleanupTimer == nil {
+		s.cleanupTimer = time.AfterFunc(cancelCleanupTimeout, func() {
+			s.forceClose()
+		})
+	}
+	s.mu.Unlock()
+
+	if alreadyCancelling {
+		return nil
+	}
+
+	return s.sendCancelFinish(taskId)
+}
+
+func (s *TTSStream) sendCancelFinish(taskId string) error {
+	if taskId == "" {
+		return nil
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	s.mu.Lock()
+	if s.cancelFinishSent || s.terminalReceived || s.connClosed || s.conn == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	s.cancelFinishSent = true
+	conn := s.conn
 	s.mu.Unlock()
 
 	cancelMsg := ttsFinishTaskMessage{
@@ -662,20 +796,19 @@ func (s *TTSStream) sendCancelDirect(taskId string) {
 	}
 	cancelBytes, err := json.Marshal(cancelMsg)
 	if err != nil {
-		return
+		s.forceClose()
+		return fmt.Errorf("marshal cancel message: %w", err)
 	}
 
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cleanupCancel()
+	// 取消指令使用独立且最多 2 秒的清理 context 发送
+	cleanCtx, cleanCancel := context.WithTimeout(context.Background(), cancelCleanupTimeout)
+	defer cleanCancel()
 
-	s.writeMu.Lock()
-	s.mu.Lock()
-	closed := s.connClosed || s.conn == nil
-	s.mu.Unlock()
-	if !closed {
-		_ = s.conn.Write(cleanupCtx, websocket.MessageText, cancelBytes)
+	if err := conn.Write(cleanCtx, websocket.MessageText, cancelBytes); err != nil {
+		s.forceClose()
+		return fmt.Errorf("write cancel task: %w", err)
 	}
-	s.writeMu.Unlock()
+	return nil
 }
 
 func (s *TTSStream) forceClose() {
@@ -710,49 +843,13 @@ func (s *TTSStream) markFailed(err error) {
 	}
 }
 
-// Cancel 取消当前活跃单句任务。无活跃任务时幂等返回。不启动第二读取者。
+// Cancel 取消当前活跃单句任务。无活跃任务时幂等返回。不启动第二读取协程。
 func (s *TTSStream) Cancel(ctx context.Context) error {
-	s.mu.Lock()
-	if s.state == stateClosed || s.state == stateFailed || s.state == stateIdle || s.connClosed {
-		s.mu.Unlock()
-		return nil
+	cause := context.Canceled
+	if ctx != nil && ctx.Err() != nil {
+		cause = ctx.Err()
 	}
-	taskId := s.activeTaskId
-	if taskId == "" {
-		s.mu.Unlock()
-		return nil
-	}
-	s.state = stateCancelling
-	s.mu.Unlock()
-
-	cancelMsg := ttsFinishTaskMessage{
-		Header: ttsRequestHeader{
-			Action:    "finish-task",
-			TaskId:    taskId,
-			Streaming: "duplex",
-		},
-		Payload: ttsFinishPayload{
-			Input: struct {
-				Directive string `json:"directive,omitempty"`
-			}{
-				Directive: "cancel",
-			},
-		},
-	}
-	msgBytes, err := json.Marshal(cancelMsg)
-	if err != nil {
-		return fmt.Errorf("marshal cancel message: %w", err)
-	}
-
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if s.conn == nil {
-		return nil
-	}
-	if err := s.conn.Write(ctx, websocket.MessageText, msgBytes); err != nil {
-		return fmt.Errorf("write cancel task: %w", err)
-	}
-	return nil
+	return s.triggerCancel(cause)
 }
 
 // Close 幂等关闭流式语音合成会话并释放底层 WebSocket 连接。
@@ -762,6 +859,10 @@ func (s *TTSStream) Close() error {
 		s.mu.Lock()
 		if s.state != stateFailed {
 			s.state = stateClosed
+		}
+		if s.cleanupTimer != nil {
+			s.cleanupTimer.Stop()
+			s.cleanupTimer = nil
 		}
 		conn := s.conn
 		alreadyClosed := s.connClosed
@@ -773,4 +874,14 @@ func (s *TTSStream) Close() error {
 		}
 	})
 	return err
+}
+
+func isFailureCause(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return true
 }
