@@ -213,11 +213,26 @@ func (s *Session) supervisorLoop() error {
 	// 启动 hello 超时定时器
 	s.startHelloTimer(st)
 
+	var writerErrCh <-chan error
+	if s.writer != nil {
+		writerErrCh = s.writer.ErrorNotify()
+	}
+
 	for {
 		select {
 		case <-s.ctx.Done():
 			s.stopAllTimers(st)
 			return s.ctx.Err()
+
+		case err := <-writerErrCh:
+			s.logger.Warn("websocket writer async error received",
+				"session_id", st.sessionId,
+				"error", err,
+			)
+			s.setState(st, StateClosed)
+			s.closeWithReason(websocket.StatusInternalError, "writer write failed")
+			s.stopAllTimers(st)
+			return nil
 
 		case ev, ok := <-s.events:
 			if !ok {

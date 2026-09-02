@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -563,5 +564,70 @@ func TestSession_History_MaintainedCorrectly(t *testing.T) {
 	}
 	if fullMsgs[5].Role != ai.RoleUser || fullMsgs[5].Content != "新问题" {
 		t.Fatalf("unexpected user message: %+v", fullMsgs[5])
+	}
+}
+
+// TestSession_AsyncWriterError_ClosesSession 验证当 Writer 发生底层写错误时，Session 主循环能够从 ErrorNotify 监听到错误并主动关闭会话。
+func TestSession_AsyncWriterError_ClosesSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 10, nil)
+
+	sess := NewSession(ctx, Options{
+		Writer:       writer,
+		SerialNumber: "SN-12345678",
+		Logger:       slog.Default(),
+	})
+
+	runDoneCh := make(chan error, 1)
+	go func() {
+		runDoneCh <- sess.Run()
+	}()
+
+	// 1. 完成 Hello 握手
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	if sess.State() != StateReady {
+		t.Fatalf("expected StateReady after handshake, got %v", sess.State())
+	}
+
+	// 2. 模拟底层连接写入失败
+	expectedErr := errors.New("underlying network write pipe broken")
+	conn.mu.Lock()
+	conn.writeErr = expectedErr
+	conn.mu.Unlock()
+
+	// 3. 触发一次下行写入
+	_ = writer.SendTextMessage(ctx, "trigger-write-fail")
+
+	// 4. 等待 Session 检测到写错误并关闭
+	select {
+	case <-runDoneCh:
+		// Run 正常返回
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for Session.Run to exit on async writer error")
+	}
+
+	if sess.State() != StateClosed {
+		t.Fatalf("expected StateClosed after writer error, got %v", sess.State())
 	}
 }

@@ -1038,3 +1038,410 @@ func TestWriter_SendVoiceWait_ConcurrentSenders_NoFrameLoss(t *testing.T) {
 		}
 	}
 }
+
+// TestWriter_EnqueueBarrierWait_Success 验证屏障正常等待：
+// 屏障自身不向底层连接写入任何数据；
+// 屏障只在排在其前面的所有有效消息已成功写入底层连接后完成；
+// 屏障返回 nil。
+func TestWriter_EnqueueBarrierWait_Success(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 10, nil)
+	defer writer.Close()
+
+	const turnId = uint64(101)
+
+	// 发送三条语音消息：start、opus 音频帧、stop
+	startPayload := []byte(`{"session_id":"s-101","type":"tts","state":"start"}`)
+	audioPayload := []byte{0x01, 0x02, 0x03, 0x04}
+	stopPayload := []byte(`{"session_id":"s-101","type":"tts","state":"stop"}`)
+
+	if err := writer.SendVoiceTextWait(ctx, turnId, startPayload); err != nil {
+		t.Fatalf("SendVoiceTextWait start failed: %v", err)
+	}
+	if err := writer.SendVoiceBinaryWait(ctx, turnId, audioPayload); err != nil {
+		t.Fatalf("SendVoiceBinaryWait audio failed: %v", err)
+	}
+	if err := writer.SendVoiceTextWait(ctx, turnId, stopPayload); err != nil {
+		t.Fatalf("SendVoiceTextWait stop failed: %v", err)
+	}
+
+	// 排入屏障并等待
+	if err := writer.EnqueueBarrierWait(ctx, turnId); err != nil {
+		t.Fatalf("EnqueueBarrierWait failed: %v", err)
+	}
+
+	// 此时底层连接必须已经收到了全部 3 条消息
+	messages := conn.getMessages()
+	if len(messages) != 3 {
+		t.Fatalf("expected exactly 3 messages written, got %d", len(messages))
+	}
+
+	// 校验每条消息的内容与类型，并确认屏障自身未向底层写入任何帧
+	if messages[0].typ != websocket.MessageText || !bytes.Equal(messages[0].payload, startPayload) {
+		t.Errorf("msg[0] mismatch: got %v %s", messages[0].typ, string(messages[0].payload))
+	}
+	if messages[1].typ != websocket.MessageBinary || !bytes.Equal(messages[1].payload, audioPayload) {
+		t.Errorf("msg[1] mismatch: got %v %v", messages[1].typ, messages[1].payload)
+	}
+	if messages[2].typ != websocket.MessageText || !bytes.Equal(messages[2].payload, stopPayload) {
+		t.Errorf("msg[2] mismatch: got %v %s", messages[2].typ, string(messages[2].payload))
+	}
+}
+
+// TestWriter_EnqueueBarrierWait_WithInvalidatedFrames 验证前序包含失效语音帧时的屏障行为：
+// 旧轮次的语音帧被跳过（不写入底层连接），未失效帧成功写出，屏障自身不写入数据并成功完成。
+func TestWriter_EnqueueBarrierWait_WithInvalidatedFrames(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var firstWriteStarted sync.Once
+	startedChan := make(chan struct{})
+	proceedChan := make(chan struct{})
+
+	conn := &mockWSConn{
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			firstWriteStarted.Do(func() {
+				close(startedChan)
+				<-proceedChan
+			})
+		},
+	}
+
+	writer := NewWriter(ctx, conn, 20, nil)
+	defer writer.Close()
+
+	const oldTurnId = uint64(1)
+	const newTurnId = uint64(2)
+
+	// 先排入一条占位控制消息卡住写协程
+	if err := writer.SendTextWait(ctx, []byte("blocker")); err != nil {
+		t.Fatalf("SendTextWait blocker failed: %v", err)
+	}
+	<-startedChan
+
+	// 排入旧轮次语音帧
+	if err := writer.SendVoiceTextWait(ctx, oldTurnId, []byte("old-voice-start")); err != nil {
+		t.Fatalf("SendVoiceTextWait old start failed: %v", err)
+	}
+	if err := writer.SendVoiceBinaryWait(ctx, oldTurnId, []byte{0xDE, 0xAD}); err != nil {
+		t.Fatalf("SendVoiceBinaryWait old audio failed: %v", err)
+	}
+
+	// 标记旧轮次失效
+	writer.InvalidateVoiceTurn(oldTurnId)
+
+	// 排入普通控制帧与新轮次语音帧
+	if err := writer.SendTextWait(ctx, []byte("mcp-ctrl-msg")); err != nil {
+		t.Fatalf("SendTextWait ctrl failed: %v", err)
+	}
+	if err := writer.SendVoiceTextWait(ctx, newTurnId, []byte("new-voice-start")); err != nil {
+		t.Fatalf("SendVoiceTextWait new start failed: %v", err)
+	}
+	if err := writer.SendVoiceTextWait(ctx, newTurnId, []byte("new-voice-stop")); err != nil {
+		t.Fatalf("SendVoiceTextWait new stop failed: %v", err)
+	}
+
+	// 释放写协程
+	close(proceedChan)
+
+	// 排入屏障等待新轮次写完
+	if err := writer.EnqueueBarrierWait(ctx, newTurnId); err != nil {
+		t.Fatalf("EnqueueBarrierWait failed: %v", err)
+	}
+
+	// 验证底层连接收到的消息：占位 blocker + MCP 控制帧 + 新轮次 2 条语音帧（旧轮次的 2 条语音帧被跳过）
+	messages := conn.getMessages()
+	if len(messages) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(messages))
+	}
+	if string(messages[0].payload) != "blocker" {
+		t.Errorf("msg[0] expected 'blocker', got %q", string(messages[0].payload))
+	}
+	if string(messages[1].payload) != "mcp-ctrl-msg" {
+		t.Errorf("msg[1] expected 'mcp-ctrl-msg', got %q", string(messages[1].payload))
+	}
+	if string(messages[2].payload) != "new-voice-start" {
+		t.Errorf("msg[2] expected 'new-voice-start', got %q", string(messages[2].payload))
+	}
+	if string(messages[3].payload) != "new-voice-stop" {
+		t.Errorf("msg[3] expected 'new-voice-stop', got %q", string(messages[3].payload))
+	}
+}
+
+// TestWriter_EnqueueBarrierWait_PrecedingWriteFailure 验证前序帧写入失败时，屏障返回该错误且写流程终止。
+func TestWriter_EnqueueBarrierWait_PrecedingWriteFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var writeCount int
+	var countMu sync.Mutex
+	expectedErr := errors.New("underlying socket broken")
+
+	var conn *mockWSConn
+	conn = &mockWSConn{
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			countMu.Lock()
+			defer countMu.Unlock()
+			writeCount++
+			if writeCount >= 2 {
+				conn.mu.Lock()
+				conn.writeErr = expectedErr
+				conn.mu.Unlock()
+			}
+		},
+	}
+
+	writer := NewWriter(ctx, conn, 10, nil)
+
+	// 发送第 1 条消息（写入成功）
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("msg-1")); err != nil {
+		t.Fatalf("SendVoiceTextWait 1 failed: %v", err)
+	}
+
+	// 发送第 2 条消息（写入将触发错误）
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("msg-2")); err != nil {
+		t.Fatalf("SendVoiceTextWait 2 failed: %v", err)
+	}
+
+	// 发送第 3 条消息与屏障
+	_ = writer.SendVoiceTextWait(ctx, 1, []byte("msg-3"))
+
+	barrierErrCh := make(chan error, 1)
+	go func() {
+		barrierErrCh <- writer.EnqueueBarrierWait(ctx, 1)
+	}()
+
+	select {
+	case err := <-barrierErrCh:
+		if !errors.Is(err, expectedErr) {
+			t.Fatalf("expected EnqueueBarrierWait to return expectedErr %v, got %v", expectedErr, err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for EnqueueBarrierWait to return on write failure")
+	}
+
+	// 验证 ErrorNotify 也收到了该错误
+	select {
+	case notifyErr := <-writer.ErrorNotify():
+		if !errors.Is(notifyErr, expectedErr) {
+			t.Fatalf("expected ErrorNotify to return %v, got %v", expectedErr, notifyErr)
+		}
+	default:
+		t.Fatal("expected error in ErrorNotify channel")
+	}
+}
+
+// TestWriter_EnqueueBarrierWait_CallerCanceledContext 验证等待屏障期间调用方 Context 取消能及时解除阻塞。
+func TestWriter_EnqueueBarrierWait_CallerCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	holdWriteCh := make(chan struct{})
+	writeStartedCh := make(chan struct{}, 1)
+
+	conn := &mockWSConn{
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			select {
+			case writeStartedCh <- struct{}{}:
+			default:
+			}
+			<-holdWriteCh
+		},
+	}
+
+	writer := NewWriter(ctx, conn, 5, nil)
+
+	// 发送首条消息，使写循环进入阻塞
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("hold-msg")); err != nil {
+		t.Fatalf("SendVoiceTextWait failed: %v", err)
+	}
+	<-writeStartedCh
+
+	barrierCtx, cancelBarrier := context.WithCancel(ctx)
+	barrierErrCh := make(chan error, 1)
+
+	go func() {
+		barrierErrCh <- writer.EnqueueBarrierWait(barrierCtx, 1)
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+
+	// 取消屏障调用的 Context
+	cancelBarrier()
+
+	select {
+	case err := <-barrierErrCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for EnqueueBarrierWait to unblock on cancel")
+	}
+
+	// 释放底层写入并优雅关闭
+	close(holdWriteCh)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+}
+
+// TestWriter_EnqueueBarrierWait_ConcurrentClose 验证并发多协程排入消息与屏障时调用 Close 幂等安全退出且无竞态。
+func TestWriter_EnqueueBarrierWait_ConcurrentClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 4, nil)
+
+	const workerCount = 10
+	var wg sync.WaitGroup
+
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func(turnId uint64) {
+			defer wg.Done()
+			_ = writer.SendVoiceTextWait(ctx, turnId, []byte("concurrent-voice"))
+			err := writer.EnqueueBarrierWait(ctx, turnId)
+			if err != nil && !errors.Is(err, ErrWriterClosed) && !errors.Is(err, context.Canceled) {
+				t.Errorf("unexpected error from barrier: %v", err)
+			}
+		}(uint64(i + 1))
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	wg.Wait()
+}
+
+// TestWriter_EnqueueBarrierWait_ConcurrentStop 验证并发等待屏障时调用 Stop 立即唤醒全部等待者并返回 ErrWriterClosed。
+func TestWriter_EnqueueBarrierWait_ConcurrentStop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	holdWriteCh := make(chan struct{})
+	defer close(holdWriteCh)
+
+	writeStartedCh := make(chan struct{}, 1)
+	conn := &mockWSConn{
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			select {
+			case writeStartedCh <- struct{}{}:
+			default:
+			}
+			<-holdWriteCh
+		},
+	}
+
+	writer := NewWriter(ctx, conn, 5, nil)
+
+	// 发送一条消息卡住写循环
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("hold-msg")); err != nil {
+		t.Fatalf("SendVoiceTextWait failed: %v", err)
+	}
+	<-writeStartedCh
+
+	const waiterCount = 5
+	var wg sync.WaitGroup
+	errs := make([]error, waiterCount)
+
+	for i := 0; i < waiterCount; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			errs[idx] = writer.EnqueueBarrierWait(ctx, uint64(idx+1))
+		}(i)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+
+	// 立即停止
+	writer.Stop()
+
+	wg.Wait()
+
+	for i, err := range errs {
+		if !errors.Is(err, ErrWriterClosed) {
+			t.Errorf("waiter[%d] expected ErrWriterClosed, got %v", i, err)
+		}
+	}
+}
+
+// TestWriter_EnqueueBarrierWait_NilAndClosedWriter 验证在 nil 或已关闭的 Writer 上调用屏障的安全行为。
+func TestWriter_EnqueueBarrierWait_NilAndClosedWriter(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. nil Writer
+	var nilWriter *Writer
+	if err := nilWriter.EnqueueBarrierWait(ctx, 1); !errors.Is(err, ErrWriterClosed) {
+		t.Errorf("expected ErrWriterClosed from nil Writer, got %v", err)
+	}
+	if ch := nilWriter.ErrorNotify(); ch != nil {
+		t.Errorf("expected nil channel from nil Writer ErrorNotify, got %v", ch)
+	}
+
+	// 2. Closed Writer
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 10, nil)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	if err := writer.EnqueueBarrierWait(ctx, 1); !errors.Is(err, ErrWriterClosed) {
+		t.Errorf("expected ErrWriterClosed from closed Writer, got %v", err)
+	}
+}
+
+// TestWriter_ErrorNotify_UnderlyingWriteFailure 验证底层写失败时 ErrorNotify 能够单次非阻塞收到错误。
+func TestWriter_ErrorNotify_UnderlyingWriteFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	expectedErr := errors.New("underlying socket fail")
+	conn := &mockWSConn{
+		writeErr: expectedErr,
+	}
+
+	writer := NewWriter(ctx, conn, 5, nil)
+
+	// 发送消息触发底层写错误
+	_ = writer.SendVoiceTextWait(ctx, 1, []byte("fail-msg"))
+
+	select {
+	case err := <-writer.ErrorNotify():
+		if !errors.Is(err, expectedErr) {
+			t.Fatalf("expected %v from ErrorNotify, got %v", expectedErr, err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout waiting for error in ErrorNotify")
+	}
+}
+
+// TestWriter_ErrorNotify_NormalCloseNoData 验证正常关闭时不会向 ErrorNotify 误投递错误。
+func TestWriter_ErrorNotify_NormalCloseNoData(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 5, nil)
+
+	if err := writer.SendVoiceTextWait(ctx, 1, []byte("normal-msg")); err != nil {
+		t.Fatalf("SendVoiceTextWait failed: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	select {
+	case err := <-writer.ErrorNotify():
+		t.Fatalf("expected no error in ErrorNotify on normal close, got %v", err)
+	default:
+		// 正常通道无数据
+	}
+}
