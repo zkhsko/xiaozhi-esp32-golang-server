@@ -741,9 +741,6 @@ func (vs *VoiceStream) SetSessionId(sessionId string) {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 	vs.sessionId = sessionId
-	if vs.activeTurn != nil {
-		vs.activeTurn.sessionId = sessionId
-	}
 }
 
 // SetOnEvent 动态设置语音流生命周期事件回调，若已有回调则形成链式调用。
