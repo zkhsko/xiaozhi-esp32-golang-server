@@ -3,11 +3,13 @@ package dashscope
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -602,5 +604,525 @@ func TestTTSStream_CancelAndClose_Idempotent(t *testing.T) {
 	// 关闭后 Cancel 也幂等返回 nil
 	if err := stream.Cancel(context.Background()); err != nil {
 		t.Errorf("expected Cancel on closed stream to return nil, got: %v", err)
+	}
+}
+
+// mockHandleSingleTask 在指定 WebSocket 连接上模拟服务端处理单句语音合成的完整时序。
+func mockHandleSingleTask(ctx context.Context, conn *websocket.Conn, expectedText string, pcmChunks [][]byte) (string, error) {
+	// 1. 读取 run-task
+	msgType, data, err := conn.Read(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read run-task: %w", err)
+	}
+	if msgType != websocket.MessageText {
+		return "", fmt.Errorf("expected text message for run-task, got %v", msgType)
+	}
+	var runMsg ttsRunTaskMessage
+	if err := json.Unmarshal(data, &runMsg); err != nil {
+		return "", fmt.Errorf("unmarshal run-task: %w", err)
+	}
+	taskId := runMsg.Header.TaskId
+	if taskId == "" {
+		return "", errors.New("empty task_id in run-task")
+	}
+
+	// 2. 发送 task-started
+	startedResp := map[string]any{
+		"header": map[string]any{
+			"action":  "task-started",
+			"task_id": taskId,
+			"event":   "task-started",
+		},
+		"payload": map[string]any{},
+	}
+	startedBytes, _ := json.Marshal(startedResp)
+	if err := conn.Write(ctx, websocket.MessageText, startedBytes); err != nil {
+		return "", fmt.Errorf("write task-started: %w", err)
+	}
+
+	// 3. 读取 continue-task
+	msgType, data, err = conn.Read(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read continue-task: %w", err)
+	}
+	var continueMsg ttsContinueTaskMessage
+	if err := json.Unmarshal(data, &continueMsg); err != nil {
+		return "", fmt.Errorf("unmarshal continue-task: %w", err)
+	}
+	if continueMsg.Header.TaskId != taskId {
+		return "", fmt.Errorf("continue-task task_id mismatch: got %s, want %s", continueMsg.Header.TaskId, taskId)
+	}
+	if expectedText != "" && continueMsg.Payload.Input.Text != expectedText {
+		return "", fmt.Errorf("continue-task text mismatch: got %s, want %s", continueMsg.Payload.Input.Text, expectedText)
+	}
+
+	// 4. 读取 finish-task
+	msgType, data, err = conn.Read(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read finish-task: %w", err)
+	}
+	var finishMsg ttsFinishTaskMessage
+	if err := json.Unmarshal(data, &finishMsg); err != nil {
+		return "", fmt.Errorf("unmarshal finish-task: %w", err)
+	}
+	if finishMsg.Header.TaskId != taskId {
+		return "", fmt.Errorf("finish-task task_id mismatch: got %s, want %s", finishMsg.Header.TaskId, taskId)
+	}
+
+	// 5. 发送 PCM 二进制数据分片
+	for i, chunk := range pcmChunks {
+		if err := conn.Write(ctx, websocket.MessageBinary, chunk); err != nil {
+			return "", fmt.Errorf("write pcm chunk %d: %w", i, err)
+		}
+	}
+
+	// 6. 发送 task-finished
+	finishedResp := map[string]any{
+		"header": map[string]any{
+			"action":  "task-finished",
+			"task_id": taskId,
+			"event":   "task-finished",
+		},
+		"payload": map[string]any{},
+	}
+	finishedBytes, _ := json.Marshal(finishedResp)
+	if err := conn.Write(ctx, websocket.MessageText, finishedBytes); err != nil {
+		return "", fmt.Errorf("write task-finished: %w", err)
+	}
+
+	return taskId, nil
+}
+
+func TestTTSStream_SequentialReuse_SingleConnectionMultipleSentences(t *testing.T) {
+	var (
+		serverConnCount int32
+		serverErr       error
+		serverDone      = make(chan struct{})
+		taskIds         []string
+		mu              sync.Mutex
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			serverErr = fmt.Errorf("accept websocket: %w", err)
+			close(serverDone)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "server close")
+		defer close(serverDone)
+
+		atomic.AddInt32(&serverConnCount, 1)
+		ctx := r.Context()
+
+		// 顺序处理第一句
+		task1Id, err := mockHandleSingleTask(ctx, conn, "第一句文本", [][]byte{{0x01, 0x02}, {0x03, 0x04}})
+		if err != nil {
+			serverErr = fmt.Errorf("task 1 failed: %w", err)
+			return
+		}
+
+		// 顺序处理第二句
+		task2Id, err := mockHandleSingleTask(ctx, conn, "第二句文本", [][]byte{{0x05, 0x06}})
+		if err != nil {
+			serverErr = fmt.Errorf("task 2 failed: %w", err)
+			return
+		}
+
+		mu.Lock()
+		taskIds = append(taskIds, task1Id, task2Id)
+		mu.Unlock()
+
+		// 保持连接直到客户端主动发送关闭帧
+		_, _, _ = conn.Read(ctx)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &database.TTSConfig{
+		Endpoint: wsURL,
+		APIKey:   "sk-test-reuse",
+		Model:    TargetTTSModel,
+	}
+
+	client, err := NewTTSClient(cfg, "longxiaochun")
+	if err != nil {
+		t.Fatalf("NewTTSClient error: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream error: %v", err)
+	}
+	defer stream.Close()
+
+	// 1. 合成第一句
+	var pcmSentence1 [][]byte
+	onPCM1 := func(ctx context.Context, data []byte) error {
+		cp := make([]byte, len(data))
+		copy(cp, data)
+		pcmSentence1 = append(pcmSentence1, cp)
+		return nil
+	}
+	if err := stream.SynthesizeSentence(context.Background(), "第一句文本", onPCM1); err != nil {
+		t.Fatalf("sentence 1 SynthesizeSentence failed: %v", err)
+	}
+
+	// 验证第一句 PCM 数据
+	if len(pcmSentence1) != 2 {
+		t.Fatalf("expected 2 pcm chunks for sentence 1, got %d", len(pcmSentence1))
+	}
+	if string(pcmSentence1[0]) != string([]byte{0x01, 0x02}) || string(pcmSentence1[1]) != string([]byte{0x03, 0x04}) {
+		t.Errorf("unexpected sentence 1 pcm: %v", pcmSentence1)
+	}
+
+	// 验证首句 task-finished 后物理连接仍保持打开（服务端尚未断开连接）
+	select {
+	case <-serverDone:
+		t.Fatal("server connection closed prematurely after first sentence")
+	default:
+	}
+
+	// 2. 在同一 Stream 物理连接上合成第二句
+	var pcmSentence2 [][]byte
+	onPCM2 := func(ctx context.Context, data []byte) error {
+		cp := make([]byte, len(data))
+		copy(cp, data)
+		pcmSentence2 = append(pcmSentence2, cp)
+		return nil
+	}
+	if err := stream.SynthesizeSentence(context.Background(), "第二句文本", onPCM2); err != nil {
+		t.Fatalf("sentence 2 SynthesizeSentence failed: %v", err)
+	}
+
+	// 验证第二句 PCM 数据
+	if len(pcmSentence2) != 1 {
+		t.Fatalf("expected 1 pcm chunk for sentence 2, got %d", len(pcmSentence2))
+	}
+	if string(pcmSentence2[0]) != string([]byte{0x05, 0x06}) {
+		t.Errorf("unexpected sentence 2 pcm: %v", pcmSentence2)
+	}
+
+	// 3. 轮末主动关闭 Stream
+	if err := stream.Close(); err != nil {
+		t.Errorf("stream Close error: %v", err)
+	}
+
+	// 等待服务端退出
+	select {
+	case <-serverDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for server handler to complete")
+	}
+
+	if serverErr != nil {
+		t.Fatalf("server error: %v", serverErr)
+	}
+
+	// 验证仅建立了一条物理连接
+	if count := atomic.LoadInt32(&serverConnCount); count != 1 {
+		t.Errorf("expected exactly 1 physical connection, got %d", count)
+	}
+
+	// 验证两句使用了不同的 task_id
+	mu.Lock()
+	defer mu.Unlock()
+	if len(taskIds) != 2 {
+		t.Fatalf("expected 2 task ids, got %d", len(taskIds))
+	}
+	if taskIds[0] == "" || taskIds[1] == "" {
+		t.Errorf("task ids cannot be empty: %v", taskIds)
+	}
+	if taskIds[0] == taskIds[1] {
+		t.Errorf("adjacent sentences must use different task ids, got identical: %s", taskIds[0])
+	}
+}
+
+func TestTTSStream_ConcurrentSynthesize_RejectedImmediately(t *testing.T) {
+	var (
+		serverConnCount int32
+		serverErr       error
+		serverDone      = make(chan struct{})
+		task1StartedCh  = make(chan struct{})
+		releaseTask1Ch  = make(chan struct{})
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			serverErr = fmt.Errorf("accept websocket: %w", err)
+			close(serverDone)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		defer close(serverDone)
+
+		atomic.AddInt32(&serverConnCount, 1)
+		ctx := r.Context()
+
+		// 1. 读取第 1 句 run-task
+		msgType, data, err := conn.Read(ctx)
+		if err != nil {
+			serverErr = fmt.Errorf("read run-task: %w", err)
+			return
+		}
+		if msgType != websocket.MessageText {
+			serverErr = fmt.Errorf("expected text message, got %v", msgType)
+			return
+		}
+		var runMsg ttsRunTaskMessage
+		if err := json.Unmarshal(data, &runMsg); err != nil {
+			serverErr = fmt.Errorf("unmarshal run-task: %w", err)
+			return
+		}
+		task1Id := runMsg.Header.TaskId
+
+		// 通知客户端测试协程：第 1 句任务已进入执行中（非空闲状态）
+		close(task1StartedCh)
+
+		// 挂起，等待并发调用验证完成
+		select {
+		case <-releaseTask1Ch:
+		case <-ctx.Done():
+			serverErr = ctx.Err()
+			return
+		}
+
+		// 发送 task-started
+		startedResp, _ := json.Marshal(map[string]any{
+			"header": map[string]any{
+				"action":  "task-started",
+				"task_id": task1Id,
+				"event":   "task-started",
+			},
+			"payload": map[string]any{},
+		})
+		if err := conn.Write(ctx, websocket.MessageText, startedResp); err != nil {
+			serverErr = fmt.Errorf("write task-started: %w", err)
+			return
+		}
+
+		// 读取 continue-task
+		if _, _, err := conn.Read(ctx); err != nil {
+			serverErr = fmt.Errorf("read continue-task: %w", err)
+			return
+		}
+		// 读取 finish-task
+		if _, _, err := conn.Read(ctx); err != nil {
+			serverErr = fmt.Errorf("read finish-task: %w", err)
+			return
+		}
+
+		// 下发 PCM
+		if err := conn.Write(ctx, websocket.MessageBinary, []byte{0xAA, 0xBB}); err != nil {
+			serverErr = fmt.Errorf("write pcm: %w", err)
+			return
+		}
+
+		// 下发 task-finished
+		finishedResp, _ := json.Marshal(map[string]any{
+			"header": map[string]any{
+				"action":  "task-finished",
+				"task_id": task1Id,
+				"event":   "task-finished",
+			},
+			"payload": map[string]any{},
+		})
+		if err := conn.Write(ctx, websocket.MessageText, finishedResp); err != nil {
+			serverErr = fmt.Errorf("write task-finished: %w", err)
+			return
+		}
+
+		// 处理后续顺序执行的恢复测试任务
+		_, err = mockHandleSingleTask(ctx, conn, "并发拒绝后恢复测试", [][]byte{{0xCC, 0xDD}})
+		if err != nil {
+			serverErr = fmt.Errorf("task after concurrent failed: %w", err)
+			return
+		}
+
+		// 等待客户端主动关闭
+		_, _, _ = conn.Read(ctx)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &database.TTSConfig{
+		Endpoint: wsURL,
+		APIKey:   "sk-test-concurrent",
+		Model:    TargetTTSModel,
+	}
+
+	client, err := NewTTSClient(cfg, "longxiaochun")
+	if err != nil {
+		t.Fatalf("NewTTSClient error: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream error: %v", err)
+	}
+	defer stream.Close()
+
+	// 启动协程 1 执行第一句
+	task1Done := make(chan error, 1)
+	var pcmTask1 [][]byte
+	var pcmTask1Mu sync.Mutex
+	go func() {
+		err := stream.SynthesizeSentence(context.Background(), "正在执行的第一句", func(ctx context.Context, b []byte) error {
+			pcmTask1Mu.Lock()
+			defer pcmTask1Mu.Unlock()
+			pcmTask1 = append(pcmTask1, append([]byte(nil), b...))
+			return nil
+		})
+		task1Done <- err
+	}()
+
+	// 等待第 1 句进入执行中
+	select {
+	case <-task1StartedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for task 1 to start")
+	}
+
+	// 在主协程尝试并发调用 SynthesizeSentence，必须立即被拒绝
+	concurrentCallStart := time.Now()
+	errConcurrent := stream.SynthesizeSentence(context.Background(), "并发调用的第二句", func(ctx context.Context, b []byte) error {
+		return nil
+	})
+	concurrentCallDuration := time.Since(concurrentCallStart)
+
+	if errConcurrent == nil {
+		t.Fatal("expected error on concurrent SynthesizeSentence, got nil")
+	}
+	if !errors.Is(errConcurrent, ErrConcurrentSynthesize) {
+		t.Fatalf("expected ErrConcurrentSynthesize, got: %v", errConcurrent)
+	}
+	if concurrentCallDuration > 100*time.Millisecond {
+		t.Errorf("concurrent call was queued or blocked too long: %v", concurrentCallDuration)
+	}
+
+	// 释放服务端第 1 句处理
+	close(releaseTask1Ch)
+
+	// 等待第 1 句完成
+	select {
+	case err := <-task1Done:
+		if err != nil {
+			t.Fatalf("task 1 failed unexpectedly: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for task 1 to finish")
+	}
+
+	// 验证第 1 句的 PCM 数据完整
+	pcmTask1Mu.Lock()
+	if len(pcmTask1) != 1 || string(pcmTask1[0]) != string([]byte{0xAA, 0xBB}) {
+		t.Errorf("unexpected task 1 pcm: %v", pcmTask1)
+	}
+	pcmTask1Mu.Unlock()
+
+	// 验证第 1 句完成后，Stream 恢复空闲，可继续顺序执行后续任务
+	var pcmRecovery [][]byte
+	errRecovery := stream.SynthesizeSentence(context.Background(), "并发拒绝后恢复测试", func(ctx context.Context, b []byte) error {
+		pcmRecovery = append(pcmRecovery, append([]byte(nil), b...))
+		return nil
+	})
+	if errRecovery != nil {
+		t.Fatalf("recovery sentence SynthesizeSentence failed: %v", errRecovery)
+	}
+	if len(pcmRecovery) != 1 || string(pcmRecovery[0]) != string([]byte{0xCC, 0xDD}) {
+		t.Errorf("unexpected recovery pcm: %v", pcmRecovery)
+	}
+
+	// 轮末主动关闭
+	if err := stream.Close(); err != nil {
+		t.Errorf("stream Close error: %v", err)
+	}
+
+	select {
+	case <-serverDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for server handler to finish")
+	}
+
+	if serverErr != nil {
+		t.Fatalf("server error: %v", serverErr)
+	}
+	if count := atomic.LoadInt32(&serverConnCount); count != 1 {
+		t.Errorf("expected exactly 1 connection, got %d", count)
+	}
+}
+
+func TestTTSStream_ConcurrentSynthesize_MultiGoroutines_RaceProtection(t *testing.T) {
+	var (
+		serverDone = make(chan struct{})
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			close(serverDone)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		defer close(serverDone)
+
+		ctx := r.Context()
+		for {
+			_, err := mockHandleSingleTask(ctx, conn, "", [][]byte{{0x01}})
+			if err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &database.TTSConfig{
+		Endpoint: wsURL,
+		APIKey:   "sk-test-race",
+		Model:    TargetTTSModel,
+	}
+
+	client, err := NewTTSClient(cfg, "longxiaochun")
+	if err != nil {
+		t.Fatalf("NewTTSClient error: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream error: %v", err)
+	}
+	defer stream.Close()
+
+	const numWorkers = 8
+	var wg sync.WaitGroup
+	var concurrentErrCount int32
+	var successCount int32
+
+	startCh := make(chan struct{})
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-startCh
+			err := stream.SynthesizeSentence(context.Background(), fmt.Sprintf("并发句子%d", idx), func(ctx context.Context, b []byte) error {
+				time.Sleep(10 * time.Millisecond)
+				return nil
+			})
+			if err == nil {
+				atomic.AddInt32(&successCount, 1)
+			} else if errors.Is(err, ErrConcurrentSynthesize) {
+				atomic.AddInt32(&concurrentErrCount, 1)
+			}
+		}(i)
+	}
+
+	close(startCh)
+	wg.Wait()
+
+	// 在多协程并发竞争下，必须有调用被并发保护拦截
+	if atomic.LoadInt32(&concurrentErrCount) == 0 {
+		t.Error("expected at least one call to be rejected with ErrConcurrentSynthesize")
 	}
 }

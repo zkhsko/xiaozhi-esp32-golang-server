@@ -23,6 +23,12 @@ const TargetTTSModel = "qwen-audio-3.0-tts-flash"
 // maxTTSReadMessageBytes 定义 DashScope TTS WebSocket 单帧最大读取字节数（1 MiB）。
 const maxTTSReadMessageBytes = 1 * 1024 * 1024
 
+// ErrConcurrentSynthesize 表示同一 Stream 上存在并发的 SynthesizeSentence 调用或当前状态非空闲。
+var ErrConcurrentSynthesize = errors.New("concurrent SynthesizeSentence calls are not allowed")
+
+// ErrStreamClosed 表示流式语音合成会话已经关闭。
+var ErrStreamClosed = errors.New("tts stream is closed")
+
 // TTSClient 实现基于 DashScope WebSocket 流式协议的语音合成客户端。
 type TTSClient struct {
 	endpoint          string
@@ -248,7 +254,7 @@ func (s *TTSStream) SynthesizeSentence(
 	s.mu.Lock()
 	if s.state == stateClosed {
 		s.mu.Unlock()
-		return errors.New("tts stream is closed")
+		return ErrStreamClosed
 	}
 	if s.state == stateFailed {
 		err := s.err
@@ -257,7 +263,7 @@ func (s *TTSStream) SynthesizeSentence(
 	}
 	if s.state != stateIdle {
 		s.mu.Unlock()
-		return errors.New("concurrent SynthesizeSentence calls are not allowed")
+		return ErrConcurrentSynthesize
 	}
 
 	taskId := newUUID()
