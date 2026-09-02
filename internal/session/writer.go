@@ -34,10 +34,22 @@ type DownlinkSender interface {
 	SendText(ctx context.Context, payload []byte) error
 }
 
-// writeMessage 封装待写入 WebSocket 的单条消息载荷与类型。
+// messageSource 定义写入消息的来源类型。
+type messageSource int
+
+const (
+	// messageSourceControl 普通控制与业务帧（如 hello、stt、mcp 等）。
+	messageSourceControl messageSource = iota
+	// messageSourceVoice 语音帧（如 tts 协议文本帧与 Opus 二进制音频帧）。
+	messageSourceVoice
+)
+
+// writeMessage 封装待写入 WebSocket 的单条消息载荷、类型与来源元数据。
 type writeMessage struct {
 	msgType websocket.MessageType
 	payload []byte
+	source  messageSource
+	turnId  uint64
 }
 
 // Writer 负责单个 WebSocket 连接的串行消息下发与背压保护。
@@ -88,21 +100,31 @@ func NewWriter(ctx context.Context, conn WSConn, queueCapacity int, l *slog.Logg
 
 // SendText 复制文本负载并排入串行写队列。
 func (w *Writer) SendText(ctx context.Context, payload []byte) error {
-	return w.enqueue(ctx, websocket.MessageText, payload)
+	return w.enqueue(ctx, messageSourceControl, 0, websocket.MessageText, payload)
 }
 
 // SendTextMessage 复制文本字符串并排入串行写队列。
 func (w *Writer) SendTextMessage(ctx context.Context, text string) error {
-	return w.enqueue(ctx, websocket.MessageText, []byte(text))
+	return w.enqueue(ctx, messageSourceControl, 0, websocket.MessageText, []byte(text))
 }
 
 // SendBinary 复制二进制负载并排入串行写队列。
 func (w *Writer) SendBinary(ctx context.Context, payload []byte) error {
-	return w.enqueue(ctx, websocket.MessageBinary, payload)
+	return w.enqueue(ctx, messageSourceControl, 0, websocket.MessageBinary, payload)
+}
+
+// SendVoiceText 复制语音文本负载并排入串行写队列，携带语音轮次元数据。
+func (w *Writer) SendVoiceText(ctx context.Context, turnId uint64, payload []byte) error {
+	return w.enqueue(ctx, messageSourceVoice, turnId, websocket.MessageText, payload)
+}
+
+// SendVoiceBinary 复制语音二进制负载并排入串行写队列，携带语音轮次元数据。
+func (w *Writer) SendVoiceBinary(ctx context.Context, turnId uint64, payload []byte) error {
+	return w.enqueue(ctx, messageSourceVoice, turnId, websocket.MessageBinary, payload)
 }
 
 // enqueue 执行跨异步边界的数据独立深拷贝，并尝试将消息放入有界队列；队列满时返回 ErrWriteQueueFull。
-func (w *Writer) enqueue(ctx context.Context, msgType websocket.MessageType, payload []byte) error {
+func (w *Writer) enqueue(ctx context.Context, source messageSource, turnId uint64, msgType websocket.MessageType, payload []byte) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -127,6 +149,8 @@ func (w *Writer) enqueue(ctx context.Context, msgType websocket.MessageType, pay
 	item := writeMessage{
 		msgType: msgType,
 		payload: copied,
+		source:  source,
+		turnId:  turnId,
 	}
 
 	w.mu.RLock()
