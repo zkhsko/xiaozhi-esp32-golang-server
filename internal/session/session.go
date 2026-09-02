@@ -581,6 +581,7 @@ func (s *Session) handleAbort(st *runtimeState, reason string) {
 		return
 	}
 
+	oldTurnId := st.currentTurnId
 	st.currentTurnId++
 	s.setState(st, StateReady)
 
@@ -589,11 +590,12 @@ func (s *Session) handleAbort(st *runtimeState, reason string) {
 	s.pipeline.Abort(0)
 
 	if s.writer != nil {
-		s.writer.DrainPending()
+		s.writer.InvalidateVoiceTurn(oldTurnId)
 	}
 
 	s.logger.Info("session aborted and reset to ready",
 		"session_id", st.sessionId,
+		"old_turn_id", oldTurnId,
 		"new_turn_id", st.currentTurnId,
 		"reason", logger.TruncateString(reason),
 	)

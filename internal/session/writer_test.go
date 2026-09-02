@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -383,5 +384,217 @@ func TestWriter_WriteError_RecordsErrAndStops(t *testing.T) {
 
 	if !errors.Is(writer.Err(), expectedErr) {
 		t.Fatalf("expected Err() %v, got %v", expectedErr, writer.Err())
+	}
+}
+
+// TestWriter_InvalidateVoiceTurn_SkipsInvalidatedVoiceFrames 构造旧语音帧、当前语音帧与 MCP 控制帧混排场景，
+// 验证轮次失效后仅旧语音帧被跳过，普通控制帧、MCP 帧与新轮次语音帧仍按原序成功写入。
+func TestWriter_InvalidateVoiceTurn_SkipsInvalidatedVoiceFrames(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var firstWriteStarted sync.Once
+	startedChan := make(chan struct{})
+	proceedChan := make(chan struct{})
+
+	conn := &mockWSConn{
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			firstWriteStarted.Do(func() {
+				close(startedChan)
+				<-proceedChan
+			})
+		},
+	}
+
+	writer := NewWriter(ctx, conn, 50, nil)
+
+	// 1. 发送第一条首帧控制消息，用于挂起 writeLoop
+	if err := writer.SendTextMessage(ctx, `{"type":"hello_ack"}`); err != nil {
+		t.Fatalf("SendTextMessage failed: %v", err)
+	}
+
+	// 等待 writeLoop 取出首帧并在 beforeWrite 中暂停
+	<-startedChan
+
+	// 2. 此时队列中追加：旧轮次语音帧 (turnId=1)、MCP 帧、旧轮次语音帧、普通控制二进制帧
+	if err := writer.SendVoiceText(ctx, 1, []byte(`{"type":"tts","state":"start"}`)); err != nil {
+		t.Fatalf("SendVoiceText 1 failed: %v", err)
+	}
+	if err := writer.SendVoiceBinary(ctx, 1, []byte{0x01, 0x02, 0x03}); err != nil {
+		t.Fatalf("SendVoiceBinary 1 failed: %v", err)
+	}
+	if err := writer.SendTextMessage(ctx, `{"jsonrpc":"2.0","method":"ui/call","id":1}`); err != nil {
+		t.Fatalf("SendTextMessage MCP failed: %v", err)
+	}
+	if err := writer.SendVoiceBinary(ctx, 1, []byte{0x04, 0x05}); err != nil {
+		t.Fatalf("SendVoiceBinary 2 failed: %v", err)
+	}
+	if err := writer.SendBinary(ctx, []byte{0xAA, 0xBB}); err != nil {
+		t.Fatalf("SendBinary failed: %v", err)
+	}
+	if err := writer.SendVoiceText(ctx, 1, []byte(`{"type":"tts","state":"stop"}`)); err != nil {
+		t.Fatalf("SendVoiceText stop failed: %v", err)
+	}
+
+	// 3. 模拟 abort 触发：标记旧轮次 1 失效
+	writer.InvalidateVoiceTurn(1)
+
+	// 4. 继续追加新轮次语音帧 (turnId=2) 与新的 MCP 响应帧
+	if err := writer.SendVoiceText(ctx, 2, []byte(`{"type":"tts","state":"start"}`)); err != nil {
+		t.Fatalf("SendVoiceText turn 2 failed: %v", err)
+	}
+	if err := writer.SendVoiceBinary(ctx, 2, []byte{0x06, 0x07, 0x08}); err != nil {
+		t.Fatalf("SendVoiceBinary turn 2 failed: %v", err)
+	}
+	if err := writer.SendTextMessage(ctx, `{"jsonrpc":"2.0","method":"ui/response","id":2}`); err != nil {
+		t.Fatalf("SendTextMessage MCP 2 failed: %v", err)
+	}
+
+	// 5. 解除 writeLoop 暂停并关闭 writer 排空队列
+	close(proceedChan)
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// 6. 验证写入消息结果
+	messages := conn.getMessages()
+
+	type expectedMsg struct {
+		typ     websocket.MessageType
+		payload []byte
+	}
+
+	expected := []expectedMsg{
+		{typ: websocket.MessageText, payload: []byte(`{"type":"hello_ack"}`)},
+		{typ: websocket.MessageText, payload: []byte(`{"jsonrpc":"2.0","method":"ui/call","id":1}`)},
+		{typ: websocket.MessageBinary, payload: []byte{0xAA, 0xBB}},
+		{typ: websocket.MessageText, payload: []byte(`{"type":"tts","state":"start"}`)},
+		{typ: websocket.MessageBinary, payload: []byte{0x06, 0x07, 0x08}},
+		{typ: websocket.MessageText, payload: []byte(`{"jsonrpc":"2.0","method":"ui/response","id":2}`)},
+	}
+
+	if len(messages) != len(expected) {
+		t.Fatalf("expected %d messages, got %d", len(expected), len(messages))
+	}
+
+	for i, want := range expected {
+		got := messages[i]
+		if got.typ != want.typ {
+			t.Errorf("msg[%d] typ mismatch: expected %v, got %v", i, want.typ, got.typ)
+		}
+		if !bytes.Equal(got.payload, want.payload) {
+			t.Errorf("msg[%d] payload mismatch: expected %s, got %s", i, string(want.payload), string(got.payload))
+		}
+	}
+}
+
+// TestWriter_InvalidateVoiceTurn_MultiTurnInvalidation 验证多次 abort 导致多个历史语音轮次失效的场景。
+func TestWriter_InvalidateVoiceTurn_MultiTurnInvalidation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var firstWriteStarted sync.Once
+	startedChan := make(chan struct{})
+	proceedChan := make(chan struct{})
+
+	conn := &mockWSConn{
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			firstWriteStarted.Do(func() {
+				close(startedChan)
+				<-proceedChan
+			})
+		},
+	}
+
+	writer := NewWriter(ctx, conn, 50, nil)
+
+	if err := writer.SendTextMessage(ctx, `{"type":"init"}`); err != nil {
+		t.Fatalf("SendTextMessage failed: %v", err)
+	}
+
+	<-startedChan
+
+	// turn 1 语音帧与 MCP 1
+	_ = writer.SendVoiceText(ctx, 1, []byte("turn1-voice-text"))
+	_ = writer.SendVoiceBinary(ctx, 1, []byte{1})
+	_ = writer.SendTextMessage(ctx, `{"mcp":1}`)
+
+	// turn 2 语音帧与 MCP 2
+	_ = writer.SendVoiceText(ctx, 2, []byte("turn2-voice-text"))
+	_ = writer.SendVoiceBinary(ctx, 2, []byte{2})
+	_ = writer.SendTextMessage(ctx, `{"mcp":2}`)
+
+	// 失效 turn 1 与 turn 2
+	writer.InvalidateVoiceTurn(1)
+	writer.InvalidateVoiceTurn(2)
+
+	// turn 3 语音帧与 MCP 3
+	_ = writer.SendVoiceText(ctx, 3, []byte("turn3-voice-text"))
+	_ = writer.SendVoiceBinary(ctx, 3, []byte{3})
+	_ = writer.SendTextMessage(ctx, `{"mcp":3}`)
+
+	close(proceedChan)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	messages := conn.getMessages()
+	expectedPayloads := []string{
+		`{"type":"init"}`,
+		`{"mcp":1}`,
+		`{"mcp":2}`,
+		"turn3-voice-text",
+		string([]byte{3}),
+		`{"mcp":3}`,
+	}
+
+	if len(messages) != len(expectedPayloads) {
+		t.Fatalf("expected %d messages, got %d", len(expectedPayloads), len(messages))
+	}
+
+	for i, want := range expectedPayloads {
+		if string(messages[i].payload) != want {
+			t.Errorf("msg[%d] mismatch: expected %q, got %q", i, want, string(messages[i].payload))
+		}
+	}
+}
+
+// TestWriter_InvalidateVoiceTurn_ZeroTurnIdAndNilSafety 验证 turnId=0 不会导致语音帧或控制帧被误失效，
+// 且在 nil Writer 上调用 InvalidateVoiceTurn 安全无 panic。
+func TestWriter_InvalidateVoiceTurn_ZeroTurnIdAndNilSafety(t *testing.T) {
+	// 验证 nil 安全
+	var nilWriter *Writer
+	nilWriter.InvalidateVoiceTurn(1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 10, nil)
+
+	// turnId=0 应当是 no-op
+	writer.InvalidateVoiceTurn(0)
+
+	if err := writer.SendVoiceText(ctx, 1, []byte("valid-voice")); err != nil {
+		t.Fatalf("SendVoiceText failed: %v", err)
+	}
+	if err := writer.SendTextMessage(ctx, "valid-control"); err != nil {
+		t.Fatalf("SendTextMessage failed: %v", err)
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	messages := conn.getMessages()
+	if len(messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(messages))
+	}
+	if string(messages[0].payload) != "valid-voice" {
+		t.Errorf("expected 'valid-voice', got %q", string(messages[0].payload))
+	}
+	if string(messages[1].payload) != "valid-control" {
+		t.Errorf("expected 'valid-control', got %q", string(messages[1].payload))
 	}
 }

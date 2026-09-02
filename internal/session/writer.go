@@ -63,9 +63,10 @@ type Writer struct {
 	closeOnce sync.Once
 	logger    *slog.Logger
 
-	mu      sync.RWMutex
-	closed  bool
-	lastErr error
+	mu                    sync.RWMutex
+	closed                bool
+	lastErr               error
+	invalidatedVoiceTurns map[uint64]struct{}
 }
 
 // NewWriter 创建并启动 WebSocket 串行写流程。
@@ -86,12 +87,13 @@ func NewWriter(ctx context.Context, conn WSConn, queueCapacity int, l *slog.Logg
 
 	writeCtx, cancel := context.WithCancel(ctx)
 	w := &Writer{
-		conn:   conn,
-		queue:  make(chan writeMessage, queueCapacity),
-		ctx:    writeCtx,
-		cancel: cancel,
-		done:   make(chan struct{}),
-		logger: l,
+		conn:                  conn,
+		queue:                 make(chan writeMessage, queueCapacity),
+		ctx:                   writeCtx,
+		cancel:                cancel,
+		done:                  make(chan struct{}),
+		logger:                l,
+		invalidatedVoiceTurns: make(map[uint64]struct{}),
 	}
 
 	go w.writeLoop()
@@ -194,6 +196,9 @@ func (w *Writer) writeLoop() {
 			if !ok {
 				return
 			}
+			if msg.source == messageSourceVoice && w.isVoiceTurnInvalidated(msg.turnId) {
+				continue
+			}
 			if err := w.conn.Write(w.ctx, msg.msgType, msg.payload); err != nil {
 				w.setErr(err)
 				if !errors.Is(err, context.Canceled) {
@@ -252,6 +257,35 @@ func (w *Writer) Close() error {
 	return w.Err()
 }
 
+// InvalidateVoiceTurn 记录已失效的语音轮次。
+// 写循环在向底层连接实际写入前，会跳过属于已失效轮次的语音帧。
+// 普通控制帧和 MCP 帧不受影响，绝不跳过。
+func (w *Writer) InvalidateVoiceTurn(turnId uint64) {
+	if w == nil || turnId == 0 {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.invalidatedVoiceTurns == nil {
+		w.invalidatedVoiceTurns = make(map[uint64]struct{})
+	}
+	w.invalidatedVoiceTurns[turnId] = struct{}{}
+}
+
+// isVoiceTurnInvalidated 查询指定语音轮次是否已被标记为失效。
+func (w *Writer) isVoiceTurnInvalidated(turnId uint64) bool {
+	if turnId == 0 {
+		return false
+	}
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.invalidatedVoiceTurns == nil {
+		return false
+	}
+	_, ok := w.invalidatedVoiceTurns[turnId]
+	return ok
+}
+
 // Stop 立即取消串行写流程、关闭队列并排空未发送消息。
 func (w *Writer) Stop() {
 	if w == nil {
@@ -265,23 +299,6 @@ func (w *Writer) Stop() {
 		w.mu.Unlock()
 	})
 	w.drainQueue()
-}
-
-// DrainPending 快速清空当前写队列中积压的全部未发送消息，用于 abort 或打断时清理旧轮次残留。
-func (w *Writer) DrainPending() {
-	if w == nil {
-		return
-	}
-	for {
-		select {
-		case _, ok := <-w.queue:
-			if !ok {
-				return
-			}
-		default:
-			return
-		}
-	}
 }
 
 // QueueLen 返回当前队列中等待发送的消息数量。

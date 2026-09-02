@@ -1,9 +1,11 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,12 +22,16 @@ type mockWSMsg struct {
 }
 
 type mockWSConn struct {
-	mu       sync.Mutex
-	messages []mockWSMsg
-	writeErr error
+	mu          sync.Mutex
+	messages    []mockWSMsg
+	writeErr    error
+	beforeWrite func(typ websocket.MessageType, p []byte)
 }
 
 func (m *mockWSConn) Write(ctx context.Context, typ websocket.MessageType, p []byte) error {
+	if m.beforeWrite != nil {
+		m.beforeWrite(typ, p)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.writeErr != nil {
@@ -276,6 +282,165 @@ func TestSession_Abort_ResetsToReady(t *testing.T) {
 	}
 
 	sess.Close()
+}
+
+func TestSession_Abort_InvalidatesOldVoiceFramesAndPreservesControlFrames(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var writeHoldStarted sync.Once
+	startedChan := make(chan struct{})
+	proceedChan := make(chan struct{})
+
+	// 在收到 hello 握手回执后，下一条消息进入 beforeWrite 时挂起，以便排入测试混排队列
+	writeCount := 0
+	conn := &mockWSConn{
+		beforeWrite: func(typ websocket.MessageType, p []byte) {
+			writeCount++
+			if writeCount == 2 {
+				writeHoldStarted.Do(func() {
+					close(startedChan)
+					<-proceedChan
+				})
+			}
+		},
+	}
+
+	writer := NewWriter(ctx, conn, 50, nil)
+
+	sess := NewSession(ctx, Options{
+		Writer:       writer,
+		SerialNumber: "SN-12345678",
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	// 1. 完成握手（发送 hello，生成一条 hello 响应并写入，即第 1 次 write）
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+	time.Sleep(50 * time.Millisecond)
+
+	// 2. 发送 listen.start -> 进入 Listening 状态，turnId 递增为 1
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     listenRaw,
+	})
+	time.Sleep(50 * time.Millisecond)
+	if sess.State() != StateListening {
+		t.Fatalf("expected StateListening, got %v", sess.State())
+	}
+
+	// 3. 向 writer 队列排入一条控制帧（触发 writeCount == 2 并暂停 writeLoop）
+	if err := writer.SendTextMessage(ctx, `{"jsonrpc":"2.0","method":"ui/call","id":1}`); err != nil {
+		t.Fatalf("SendTextMessage failed: %v", err)
+	}
+
+	<-startedChan
+
+	// 4. 在 writeLoop 暂停期间，排入属于 turnId=1 的旧语音帧、MCP 控制帧、旧语音二进制帧
+	if err := writer.SendVoiceText(ctx, 1, []byte(`{"type":"tts","state":"sentence_start","text":"旧轮次待跳过语音"}`)); err != nil {
+		t.Fatalf("SendVoiceText turn 1 failed: %v", err)
+	}
+	if err := writer.SendVoiceBinary(ctx, 1, []byte{0xDE, 0xAD, 0xBE, 0xEF}); err != nil {
+		t.Fatalf("SendVoiceBinary turn 1 failed: %v", err)
+	}
+	if err := writer.SendTextMessage(ctx, `{"jsonrpc":"2.0","method":"ui/notification","params":{"key":"val"}}`); err != nil {
+		t.Fatalf("SendTextMessage MCP notification failed: %v", err)
+	}
+
+	// 5. 客户端发送 abort 消息，Session.handleAbort 会递增 currentTurnId 并使旧 turnId=1 失效
+	abortRaw := []byte(`{"type":"abort","reason":"user interrupt"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     abortRaw,
+	})
+	time.Sleep(50 * time.Millisecond)
+	if sess.State() != StateReady {
+		t.Fatalf("expected StateReady after abort, got %v", sess.State())
+	}
+
+	// 6. 此时排入新轮次 (turnId=2) 的语音帧与新的控制帧
+	if err := writer.SendVoiceText(ctx, 2, []byte(`{"type":"tts","state":"sentence_start","text":"新轮次语音"}`)); err != nil {
+		t.Fatalf("SendVoiceText turn 2 failed: %v", err)
+	}
+	if err := writer.SendTextMessage(ctx, `{"jsonrpc":"2.0","method":"ui/response","id":3}`); err != nil {
+		t.Fatalf("SendTextMessage MCP response failed: %v", err)
+	}
+
+	// 7. 恢复 writeLoop 并关闭
+	close(proceedChan)
+	_ = writer.Close()
+	sess.Close()
+
+	// 8. 校验底层连接实际接收到的消息：
+	// 预期包含：Hello 响应、MCP call(id=1)、MCP notification、新轮次语音、MCP response(id=3)
+	// turnId=1 的语音文本和语音二进制必须已被完全跳过
+	messages := conn.getMessages()
+	for _, m := range messages {
+		payloadStr := string(m.payload)
+		if strings.Contains(payloadStr, "旧轮次待跳过语音") {
+			t.Errorf("found invalidated turn 1 voice text in written messages: %s", payloadStr)
+		}
+		if bytes.Equal(m.payload, []byte{0xDE, 0xAD, 0xBE, 0xEF}) {
+			t.Error("found invalidated turn 1 voice binary in written messages")
+		}
+	}
+
+	// 确认 MCP 控制帧和新轮次语音帧存在
+	foundMCP1 := false
+	foundMCPNotification := false
+	foundTurn2Voice := false
+	foundMCP3 := false
+
+	for _, m := range messages {
+		s := string(m.payload)
+		if strings.Contains(s, `"ui/call"`) {
+			foundMCP1 = true
+		}
+		if strings.Contains(s, `"ui/notification"`) {
+			foundMCPNotification = true
+		}
+		if strings.Contains(s, "新轮次语音") {
+			foundTurn2Voice = true
+		}
+		if strings.Contains(s, `"ui/response"`) {
+			foundMCP3 = true
+		}
+	}
+
+	if !foundMCP1 {
+		t.Error("expected MCP call message to be written, but was not found")
+	}
+	if !foundMCPNotification {
+		t.Error("expected MCP notification message to be written, but was not found")
+	}
+	if !foundTurn2Voice {
+		t.Error("expected turn 2 voice message to be written, but was not found")
+	}
+	if !foundMCP3 {
+		t.Error("expected MCP response message to be written, but was not found")
+	}
 }
 
 func TestSession_CloseTool_ClosesSessionAfterTurn(t *testing.T) {
