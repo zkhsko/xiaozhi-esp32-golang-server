@@ -12,7 +12,7 @@ ESP32 播放 <── 编码 (24kHz Opus) <── 百炼 TTS (按句合成) <─�
 
 ## 核心特性
 
-- **双向实时语音**：百炼流式 ASR (VAD)、百炼流式 LLM (`qwen3.7-flash`)、百炼流式 TTS (`qwen-audio-3.0-tts-flash`) 与 Opus 实时下发。
+- **双向实时语音**：百炼流式 ASR (VAD)、百炼流式 LLM (`qwen3.7-flash`)、百炼流式 TTS（如 `qwen-audio-3.0-tts-flash`）与 Opus 实时下发。
 - **设备激活与绑定**：支持 OTA 配置发现、eFuse HMAC 硬件激活、6 位动态码用户绑定与每设备 Access Token 鉴权。
 - **扩展与工具调用**：支持内置服务端工具（时间查询、会话关闭）及 LLM 多轮工具编排。
 - **多数据库持久化**：原生支持 SQLite、MySQL 8 与 PostgreSQL，Goose 自动数据库迁移。

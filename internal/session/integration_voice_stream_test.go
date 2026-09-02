@@ -766,9 +766,8 @@ func TestIntegration_Scenario7_Abort_StaleFrameIsolationAndNextTurnClean(t *test
 	defer writer.Close()
 
 	var (
-		pcmCallback    atomic.Value // func(context.Context, []byte) error
-		turn1AbortSent = make(chan struct{})
-		turn1Stream    = newMockTTSStream()
+		pcmCallback atomic.Value // func(context.Context, []byte) error
+		turn1Stream = newMockTTSStream()
 	)
 
 	turn1Stream.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
@@ -776,12 +775,8 @@ func TestIntegration_Scenario7_Abort_StaleFrameIsolationAndNextTurnClean(t *test
 		// 发送首包 PCM
 		pcm := make([]byte, audio.DownlinkBytesPerFrame)
 		_ = onPCM(ctx, pcm)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-turn1AbortSent:
-			return nil
-		}
+		<-ctx.Done()
+		return ctx.Err()
 	}
 
 	turn2Stream := newMockTTSStream()
@@ -828,7 +823,6 @@ func TestIntegration_Scenario7_Abort_StaleFrameIsolationAndNextTurnClean(t *test
 
 	// 发送 abort 打断
 	sendClientAbort(sess)
-	close(turn1AbortSent)
 	waitForSessionState(t, sess, StateReady, 2*time.Second)
 
 	// 模拟旧轮次的迟到 PCM 数据在 abort 之后尝试写入
@@ -1092,19 +1086,14 @@ func TestIntegration_Scenario10_CloseSession_DelayedCloseAndAbortPriority(t *tes
 
 		var (
 			turnCount atomic.Int32
-			abortSent = make(chan struct{})
 		)
 
 		stream1 := newMockTTSStream()
 		stream1.synthesizeFn = func(ctx context.Context, text string, onPCM func(context.Context, []byte) error) error {
 			pcm := make([]byte, audio.DownlinkBytesPerFrame)
 			_ = onPCM(ctx, pcm)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-abortSent:
-				return nil
-			}
+			<-ctx.Done()
+			return ctx.Err()
 		}
 
 		stream2 := newMockTTSStream()
@@ -1163,7 +1152,6 @@ func TestIntegration_Scenario10_CloseSession_DelayedCloseAndAbortPriority(t *tes
 
 		// 发送 abort 打断退出意图
 		sendClientAbort(sess)
-		close(abortSent)
 
 		// 验证打断后回到 StateReady 而绝非 StateClosed
 		waitForSessionState(t, sess, StateReady, 2*time.Second)
