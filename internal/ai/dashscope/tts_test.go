@@ -1126,3 +1126,405 @@ func TestTTSStream_ConcurrentSynthesize_MultiGoroutines_RaceProtection(t *testin
 		t.Error("expected at least one call to be rejected with ErrConcurrentSynthesize")
 	}
 }
+
+func mockReadRunTask(ctx context.Context, conn *websocket.Conn) (string, error) {
+	msgType, data, err := conn.Read(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read run-task: %w", err)
+	}
+	if msgType != websocket.MessageText {
+		return "", fmt.Errorf("expected text message for run-task, got %v", msgType)
+	}
+	var runMsg ttsRunTaskMessage
+	if err := json.Unmarshal(data, &runMsg); err != nil {
+		return "", fmt.Errorf("unmarshal run-task: %w", err)
+	}
+	if runMsg.Header.TaskId == "" {
+		return "", errors.New("empty task_id in run-task")
+	}
+	return runMsg.Header.TaskId, nil
+}
+
+func mockReadContinueAndFinish(ctx context.Context, conn *websocket.Conn, expectedTaskId string) error {
+	msgType, data, err := conn.Read(ctx)
+	if err != nil {
+		return fmt.Errorf("read continue-task: %w", err)
+	}
+	if msgType != websocket.MessageText {
+		return fmt.Errorf("expected text message for continue-task, got %v", msgType)
+	}
+	var continueMsg ttsContinueTaskMessage
+	if err := json.Unmarshal(data, &continueMsg); err != nil {
+		return fmt.Errorf("unmarshal continue-task: %w", err)
+	}
+	if expectedTaskId != "" && continueMsg.Header.TaskId != expectedTaskId {
+		return fmt.Errorf("continue-task task_id mismatch: got %s, want %s", continueMsg.Header.TaskId, expectedTaskId)
+	}
+
+	msgType, data, err = conn.Read(ctx)
+	if err != nil {
+		return fmt.Errorf("read finish-task: %w", err)
+	}
+	if msgType != websocket.MessageText {
+		return fmt.Errorf("expected text message for finish-task, got %v", msgType)
+	}
+	var finishMsg ttsFinishTaskMessage
+	if err := json.Unmarshal(data, &finishMsg); err != nil {
+		return fmt.Errorf("unmarshal finish-task: %w", err)
+	}
+	if expectedTaskId != "" && finishMsg.Header.TaskId != expectedTaskId {
+		return fmt.Errorf("finish-task task_id mismatch: got %s, want %s", finishMsg.Header.TaskId, expectedTaskId)
+	}
+	return nil
+}
+
+func TestTTSStream_ProtocolErrorsAndTaskFailed(t *testing.T) {
+	tests := []struct {
+		name              string
+		serverHandler     func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error
+		wantErrSubstrings []string
+		checkErr          func(t *testing.T, err error, capturedTaskId string)
+	}{
+		{
+			name: "binary_before_task_started",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				// 在 task-started 前发送二进制数据
+				return conn.Write(ctx, websocket.MessageBinary, []byte{0x01, 0x02})
+			},
+			wantErrSubstrings: []string{"received binary audio message before task-started"},
+		},
+		{
+			name: "invalid_json_in_task_started",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				return conn.Write(ctx, websocket.MessageText, []byte("{invalid-json-response"))
+			},
+			wantErrSubstrings: []string{"unmarshal task-started JSON"},
+		},
+		{
+			name: "missing_task_id_in_task_started",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				resp := `{"header":{"action":"task-started","event":"task-started"}}`
+				return conn.Write(ctx, websocket.MessageText, []byte(resp))
+			},
+			wantErrSubstrings: []string{"missing task_id in task-started response"},
+		},
+		{
+			name: "mismatched_task_id_in_task_started",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				resp := `{"header":{"action":"task-started","event":"task-started","task_id":"wrong-task-id-abc"}}`
+				return conn.Write(ctx, websocket.MessageText, []byte(resp))
+			},
+			wantErrSubstrings: []string{"task_id mismatch in task-started", "wrong-task-id-abc"},
+		},
+		{
+			name: "unexpected_event_in_task_started",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				resp := fmt.Sprintf(`{"header":{"action":"unknown-event","event":"unknown-event","task_id":"%s"}}`, taskId)
+				return conn.Write(ctx, websocket.MessageText, []byte(resp))
+			},
+			wantErrSubstrings: []string{"unexpected event waiting for task-started: unknown-event"},
+		},
+		{
+			name: "task_failed_in_task_started",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				resp := fmt.Sprintf(`{"header":{"action":"task-failed","event":"task-failed","task_id":"%s","error_code":"PrecheckFailed","error_message":"balance exhausted"}}`, taskId)
+				return conn.Write(ctx, websocket.MessageText, []byte(resp))
+			},
+			wantErrSubstrings: []string{"tts task failed:", "PrecheckFailed", "balance exhausted"},
+			checkErr: func(t *testing.T, err error, capturedTaskId string) {
+				if capturedTaskId == "" {
+					t.Fatal("expected capturedTaskId to be non-empty")
+				}
+				if !strings.Contains(err.Error(), capturedTaskId) {
+					t.Errorf("expected error to contain task_id %q, got: %v", capturedTaskId, err)
+				}
+			},
+		},
+		{
+			name: "conn_closed_before_task_started",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				return conn.Close(websocket.StatusGoingAway, "server shutdown")
+			},
+			wantErrSubstrings: []string{"read task-started"},
+		},
+		{
+			name: "invalid_json_in_receiving_audio",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				startedResp := fmt.Sprintf(`{"header":{"action":"task-started","event":"task-started","task_id":"%s"}}`, taskId)
+				if err := conn.Write(ctx, websocket.MessageText, []byte(startedResp)); err != nil {
+					return err
+				}
+				if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+					return err
+				}
+				return conn.Write(ctx, websocket.MessageText, []byte("{corrupted-json-in-stream"))
+			},
+			wantErrSubstrings: []string{"unmarshal tts response JSON"},
+		},
+		{
+			name: "missing_task_id_in_receiving_audio",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				startedResp := fmt.Sprintf(`{"header":{"action":"task-started","event":"task-started","task_id":"%s"}}`, taskId)
+				if err := conn.Write(ctx, websocket.MessageText, []byte(startedResp)); err != nil {
+					return err
+				}
+				if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+					return err
+				}
+				// 文本事件缺少 task_id
+				missingTaskIdResp := `{"header":{"action":"result-generated","event":"result-generated"}}`
+				return conn.Write(ctx, websocket.MessageText, []byte(missingTaskIdResp))
+			},
+			wantErrSubstrings: []string{"missing task_id in tts response"},
+		},
+		{
+			name: "mismatched_task_id_in_receiving_audio",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				startedResp := fmt.Sprintf(`{"header":{"action":"task-started","event":"task-started","task_id":"%s"}}`, taskId)
+				if err := conn.Write(ctx, websocket.MessageText, []byte(startedResp)); err != nil {
+					return err
+				}
+				if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+					return err
+				}
+				// 文本事件携带不匹配的 task_id
+				mismatchedResp := `{"header":{"action":"result-generated","event":"result-generated","task_id":"different-task-id-xyz"}}`
+				return conn.Write(ctx, websocket.MessageText, []byte(mismatchedResp))
+			},
+			wantErrSubstrings: []string{"task_id mismatch", "different-task-id-xyz"},
+		},
+		{
+			name: "unknown_event_in_receiving_audio",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				startedResp := fmt.Sprintf(`{"header":{"action":"task-started","event":"task-started","task_id":"%s"}}`, taskId)
+				if err := conn.Write(ctx, websocket.MessageText, []byte(startedResp)); err != nil {
+					return err
+				}
+				if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+					return err
+				}
+				unknownEventResp := fmt.Sprintf(`{"header":{"action":"unsupported-event","event":"unsupported-event","task_id":"%s"}}`, taskId)
+				return conn.Write(ctx, websocket.MessageText, []byte(unknownEventResp))
+			},
+			wantErrSubstrings: []string{"unknown tts event: unsupported-event"},
+		},
+		{
+			name: "task_failed_in_receiving_audio",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				startedResp := fmt.Sprintf(`{"header":{"action":"task-started","event":"task-started","task_id":"%s"}}`, taskId)
+				if err := conn.Write(ctx, websocket.MessageText, []byte(startedResp)); err != nil {
+					return err
+				}
+				if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+					return err
+				}
+				// 先下发一段 PCM
+				if err := conn.Write(ctx, websocket.MessageBinary, []byte{0x01, 0x02}); err != nil {
+					return err
+				}
+				// 下发 task-failed 事件
+				failedResp := fmt.Sprintf(`{"header":{"action":"task-failed","event":"task-failed","task_id":"%s","error_code":"RateLimitExceeded","error_message":"request rate limit reached"}}`, taskId)
+				return conn.Write(ctx, websocket.MessageText, []byte(failedResp))
+			},
+			wantErrSubstrings: []string{"tts task failed:", "RateLimitExceeded", "request rate limit reached"},
+			checkErr: func(t *testing.T, err error, capturedTaskId string) {
+				if capturedTaskId == "" {
+					t.Fatal("expected capturedTaskId to be non-empty")
+				}
+				if !strings.Contains(err.Error(), capturedTaskId) {
+					t.Errorf("expected error to contain task_id %q, got: %v", capturedTaskId, err)
+				}
+			},
+		},
+		{
+			name: "conn_closed_in_receiving_audio",
+			serverHandler: func(ctx context.Context, conn *websocket.Conn, setTaskId func(string)) error {
+				taskId, err := mockReadRunTask(ctx, conn)
+				if err != nil {
+					return err
+				}
+				setTaskId(taskId)
+				startedResp := fmt.Sprintf(`{"header":{"action":"task-started","event":"task-started","task_id":"%s"}}`, taskId)
+				if err := conn.Write(ctx, websocket.MessageText, []byte(startedResp)); err != nil {
+					return err
+				}
+				if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+					return err
+				}
+				if err := conn.Write(ctx, websocket.MessageBinary, []byte{0x01, 0x02}); err != nil {
+					return err
+				}
+				// 未发 task-finished 异常关闭连接
+				return conn.Close(websocket.StatusInternalError, "server crashed")
+			},
+			wantErrSubstrings: []string{"read tts message"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			serverDone := make(chan struct{})
+			var (
+				capturedTaskId string
+				taskIdMu       sync.Mutex
+			)
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					close(serverDone)
+					return
+				}
+				defer conn.Close(websocket.StatusNormalClosure, "done")
+				defer close(serverDone)
+
+				if tc.serverHandler != nil {
+					_ = tc.serverHandler(r.Context(), conn, func(id string) {
+						taskIdMu.Lock()
+						capturedTaskId = id
+						taskIdMu.Unlock()
+					})
+				}
+			}))
+			defer server.Close()
+
+			wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+			cfg := &database.TTSConfig{
+				Endpoint: wsURL,
+				APIKey:   "sk-test-protocol-error",
+				Model:    TargetTTSModel,
+			}
+
+			client, err := NewTTSClient(cfg, "longxiaochun")
+			if err != nil {
+				t.Fatalf("NewTTSClient error: %v", err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			stream, err := client.CreateStream(ctx)
+			if err != nil {
+				t.Fatalf("CreateStream error: %v", err)
+			}
+			defer stream.Close()
+
+			ttsStream, ok := stream.(*TTSStream)
+			if !ok {
+				t.Fatalf("expected *TTSStream instance, got %T", stream)
+			}
+
+			onPCM := func(c context.Context, b []byte) error {
+				return nil
+			}
+
+			// 执行单句语音合成，预期必须发生协议或任务错误
+			err = stream.SynthesizeSentence(ctx, "测试文本", onPCM)
+			if err == nil {
+				t.Fatalf("expected SynthesizeSentence to fail, got nil")
+			}
+
+			for _, sub := range tc.wantErrSubstrings {
+				if !strings.Contains(err.Error(), sub) {
+					t.Errorf("expected error containing %q, got: %v", sub, err)
+				}
+			}
+
+			taskIdMu.Lock()
+			capturedId := capturedTaskId
+			taskIdMu.Unlock()
+			if tc.checkErr != nil {
+				tc.checkErr(t, err, capturedId)
+			}
+
+			// 验证 Stream 内部状态已标记为 stateFailed
+			ttsStream.mu.Lock()
+			streamStateVal := ttsStream.state
+			ttsStream.mu.Unlock()
+			if streamStateVal != stateFailed {
+				t.Errorf("expected stream state to be stateFailed (%d), got: %d", stateFailed, streamStateVal)
+			}
+
+			// 处于 stateFailed 的 Stream，后续再次调用 SynthesizeSentence 必须被直接拒绝
+			nextErr := stream.SynthesizeSentence(ctx, "后续尝试执行的句子", onPCM)
+			if nextErr == nil {
+				t.Fatal("expected next SynthesizeSentence to be rejected, got nil")
+			}
+			if !errors.Is(nextErr, ErrStreamFailed) {
+				t.Fatalf("expected ErrStreamFailed on subsequent call, got: %v", nextErr)
+			}
+
+			// 验证 Close 幂等安全
+			if err := stream.Close(); err != nil {
+				t.Errorf("stream Close error: %v", err)
+			}
+
+			// 等待服务端测试协程退出
+			select {
+			case <-serverDone:
+			case <-time.After(2 * time.Second):
+				t.Fatal("timeout waiting for server handler to complete")
+			}
+		})
+	}
+}

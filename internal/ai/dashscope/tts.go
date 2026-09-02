@@ -29,6 +29,9 @@ var ErrConcurrentSynthesize = errors.New("concurrent SynthesizeSentence calls ar
 // ErrStreamClosed 表示流式语音合成会话已经关闭。
 var ErrStreamClosed = errors.New("tts stream is closed")
 
+// ErrStreamFailed 表示流式语音合成会话已发生不可恢复错误，连接不可继续使用。
+var ErrStreamFailed = errors.New("tts stream has failed")
+
 // TTSClient 实现基于 DashScope WebSocket 流式协议的语音合成客户端。
 type TTSClient struct {
 	endpoint          string
@@ -225,6 +228,7 @@ type TTSStream struct {
 	state        streamState
 	activeTaskId string
 	err          error
+	connClosed   bool
 	closeOnce    sync.Once
 }
 
@@ -259,7 +263,10 @@ func (s *TTSStream) SynthesizeSentence(
 	if s.state == stateFailed {
 		err := s.err
 		s.mu.Unlock()
-		return fmt.Errorf("tts stream has failed: %w", err)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrStreamFailed, err)
+		}
+		return ErrStreamFailed
 	}
 	if s.state != stateIdle {
 		s.mu.Unlock()
@@ -326,16 +333,28 @@ func (s *TTSStream) SynthesizeSentence(
 		s.markFailed(err)
 		return fmt.Errorf("read task-started: %w", err)
 	}
+	if msgType == websocket.MessageBinary {
+		err := fmt.Errorf("received binary audio message before task-started (task_id: %s)", taskId)
+		s.markFailed(err)
+		return err
+	}
 	if msgType != websocket.MessageText {
-		err := errors.New("expected text message for task-started")
+		err := fmt.Errorf("unexpected websocket message type waiting for task-started: %v (task_id: %s)", msgType, taskId)
 		s.markFailed(err)
 		return err
 	}
 
 	var initResp ttsResponseMessage
 	if err := json.Unmarshal(firstData, &initResp); err != nil {
+		err := fmt.Errorf("unmarshal task-started JSON: %w (task_id: %s)", err, taskId)
 		s.markFailed(err)
-		return fmt.Errorf("unmarshal task-started: %w", err)
+		return err
+	}
+
+	if initResp.Header.TaskId == "" {
+		err := fmt.Errorf("missing task_id in task-started response (expected %s)", taskId)
+		s.markFailed(err)
+		return err
 	}
 
 	if initResp.Header.TaskId != taskId {
@@ -364,7 +383,7 @@ func (s *TTSStream) SynthesizeSentence(
 	}
 
 	if event != "task-started" {
-		err := fmt.Errorf("unexpected event waiting for task-started: %s", event)
+		err := fmt.Errorf("unexpected event waiting for task-started: %s (task_id: %s)", event, taskId)
 		s.markFailed(err)
 		return err
 	}
@@ -442,8 +461,15 @@ func (s *TTSStream) SynthesizeSentence(
 		if msgType == websocket.MessageText {
 			var resp ttsResponseMessage
 			if err := json.Unmarshal(data, &resp); err != nil {
+				err = fmt.Errorf("unmarshal tts response JSON: %w (task_id: %s)", err, taskId)
 				s.markFailed(err)
-				return fmt.Errorf("unmarshal tts response: %w", err)
+				return err
+			}
+
+			if resp.Header.TaskId == "" {
+				err := fmt.Errorf("missing task_id in tts response (expected %s)", taskId)
+				s.markFailed(err)
+				return err
 			}
 
 			if resp.Header.TaskId != taskId {
@@ -459,7 +485,7 @@ func (s *TTSStream) SynthesizeSentence(
 
 			switch event {
 			case "result-generated":
-				// 合法中间事件，忽略并继续
+				// 合法中间事件，忽略接收，不报错也不干扰设备下行
 				continue
 			case "task-finished":
 				return nil
@@ -476,13 +502,13 @@ func (s *TTSStream) SynthesizeSentence(
 				s.markFailed(err)
 				return err
 			default:
-				err := fmt.Errorf("unknown tts event: %s", event)
+				err := fmt.Errorf("unknown tts event: %s (task_id: %s)", event, taskId)
 				s.markFailed(err)
 				return err
 			}
 		}
 
-		err = fmt.Errorf("unexpected websocket message type: %v", msgType)
+		err = fmt.Errorf("unexpected websocket message type: %v (task_id: %s)", msgType, taskId)
 		s.markFailed(err)
 		return err
 	}
@@ -490,17 +516,28 @@ func (s *TTSStream) SynthesizeSentence(
 
 func (s *TTSStream) markFailed(err error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state != stateClosed {
-		s.state = stateFailed
+	if s.state == stateClosed {
+		s.mu.Unlock()
+		return
+	}
+	s.state = stateFailed
+	if s.err == nil {
 		s.err = err
+	}
+	conn := s.conn
+	alreadyClosed := s.connClosed
+	s.connClosed = true
+	s.mu.Unlock()
+
+	if conn != nil && !alreadyClosed {
+		_ = conn.Close(websocket.StatusPolicyViolation, "tts stream failed")
 	}
 }
 
 // Cancel 取消当前活跃单句任务。无活跃任务时幂等返回。不启动第二读取者。
 func (s *TTSStream) Cancel(ctx context.Context) error {
 	s.mu.Lock()
-	if s.state == stateClosed || s.state == stateFailed || s.state == stateIdle {
+	if s.state == stateClosed || s.state == stateFailed || s.state == stateIdle || s.connClosed {
 		s.mu.Unlock()
 		return nil
 	}
@@ -547,11 +584,15 @@ func (s *TTSStream) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
-		s.state = stateClosed
+		if s.state != stateFailed {
+			s.state = stateClosed
+		}
 		conn := s.conn
+		alreadyClosed := s.connClosed
+		s.connClosed = true
 		s.mu.Unlock()
 
-		if conn != nil {
+		if conn != nil && !alreadyClosed {
 			err = conn.Close(websocket.StatusNormalClosure, "stream closed")
 		}
 	})
