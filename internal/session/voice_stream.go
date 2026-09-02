@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
@@ -318,6 +319,9 @@ func (t *voiceStreamTurn) sentenceWorker() {
 
 // processSentence 处理单条句子的建连、状态帧投递、TTS 合成及句末刷新同步。
 func (t *voiceStreamTurn) processSentence(job sentenceJob) error {
+	if isPunctuationOnly(job.text) {
+		return nil
+	}
 	t.hasSentences = true
 
 	// 首句出现时按需建立本轮唯一的物理 TTS 连接
@@ -449,6 +453,16 @@ func (t *voiceStreamTurn) processSentence(job sentenceJob) error {
 	}
 
 	return nil
+}
+
+// isPunctuationOnly 判断文本是否不含任何可朗读字符。
+func isPunctuationOnly(text string) bool {
+	for _, r := range text {
+		if !unicode.IsSpace(r) && !unicode.IsPunct(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // handleTextEnd 处理本轮文本全部输入完成后的收尾流程与写出确认。

@@ -483,6 +483,15 @@ func TestVoiceStream_NoTextTurn_DirectSuccess(t *testing.T) {
 	}
 }
 
+func TestIsPunctuationOnly(t *testing.T) {
+	if !isPunctuationOnly(" ” ") {
+		t.Fatal("expected standalone closing quote to be punctuation-only")
+	}
+	if isPunctuationOnly("这是一句完整文本。") {
+		t.Fatal("expected readable text not to be punctuation-only")
+	}
+}
+
 // TestVoiceStream_ConnectFailure_CleanExit 验证首句建连失败时安全退出并不发送 tts/start。
 func TestVoiceStream_ConnectFailure_CleanExit(t *testing.T) {
 	ttsClient := &mockTTSClient{
