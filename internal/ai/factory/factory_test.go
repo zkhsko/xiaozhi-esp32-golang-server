@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
-	"xiaozhi-esp32-golang-server/internal/ai/dashscope"
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
@@ -119,7 +118,7 @@ func TestFactory_CreateTTSClient(t *testing.T) {
 				Provider:            p,
 				Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
 				APIKey:              "test-api-key",
-				Model:               dashscope.TargetTTSModel,
+				Model:               "qwen-audio-3.0-tts-flash",
 				ConnectTimeoutMS:    5000,
 				FirstAudioTimeoutMS: 5000,
 				SentenceTimeoutMS:   10000,
@@ -151,7 +150,7 @@ func TestFactory_CreateTTSClient(t *testing.T) {
 				Provider: p,
 				Endpoint: "wss://dashscope.aliyuncs.com/api-v1/ws",
 				APIKey:   "test-api-key",
-				Model:    dashscope.TargetTTSModel,
+				Model:    "qwen-audio-3.0-tts-flash",
 			}
 			client, err := CreateTTSClient(cfg, "longxiaochun")
 			if err == nil {
@@ -166,16 +165,13 @@ func TestFactory_CreateTTSClient(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid models", func(t *testing.T) {
-		invalidModels := []string{
+	t.Run("empty models", func(t *testing.T) {
+		emptyModels := []string{
 			"",
 			"   ",
-			"cosyvoice-v1",
-			"sambert-zhichu-v1",
-			"qwen-audio-other",
-			"qwen-audio-3.0-tts",
+			"\t\n",
 		}
-		for _, m := range invalidModels {
+		for _, m := range emptyModels {
 			cfg := &database.TTSConfig{
 				Provider: "dashscope",
 				Endpoint: "wss://dashscope.aliyuncs.com/api-v1/ws",
@@ -184,10 +180,37 @@ func TestFactory_CreateTTSClient(t *testing.T) {
 			}
 			client, err := CreateTTSClient(cfg, "longxiaochun")
 			if err == nil {
-				t.Fatalf("expected error for invalid model %q, got client: %v", m, client)
+				t.Fatalf("expected error for empty model %q, got client: %v", m, client)
 			}
 			if client != nil {
-				t.Fatalf("expected nil client for invalid model %q", m)
+				t.Fatalf("expected nil client for empty model %q", m)
+			}
+			if !strings.Contains(err.Error(), "dashscope tts model is required") {
+				t.Fatalf("expected 'dashscope tts model is required' in error, got: %v", err)
+			}
+		}
+	})
+
+	t.Run("valid diverse models", func(t *testing.T) {
+		models := []string{
+			"qwen-audio-3.0-tts-flash",
+			"cosyvoice-v1",
+			"sambert-zhichu-v1",
+			"custom-tts-model",
+		}
+		for _, m := range models {
+			cfg := &database.TTSConfig{
+				Provider: "dashscope",
+				Endpoint: "wss://dashscope.aliyuncs.com/api-v1/ws",
+				APIKey:   "test-api-key",
+				Model:    m,
+			}
+			client, err := CreateTTSClient(cfg, "longxiaochun")
+			if err != nil {
+				t.Fatalf("CreateTTSClient with model %q failed: %v", m, err)
+			}
+			if client == nil {
+				t.Fatalf("expected non-nil tts client for model %q", m)
 			}
 		}
 	})
@@ -202,7 +225,7 @@ func TestFactory_CreateTTSClient(t *testing.T) {
 			Provider: "dashscope",
 			Endpoint: "wss://dashscope.aliyuncs.com/api-v1/ws",
 			APIKey:   "test-api-key",
-			Model:    dashscope.TargetTTSModel,
+			Model:    "qwen-audio-3.0-tts-flash",
 		}
 		for _, v := range emptyVoices {
 			client, err := CreateTTSClient(cfg, v)
@@ -224,7 +247,7 @@ func TestFactory_CreateTTSClient(t *testing.T) {
 				Provider: "dashscope",
 				Endpoint: "wss://dashscope.aliyuncs.com/api-v1/ws",
 				APIKey:   "test-api-key",
-				Model:    dashscope.TargetTTSModel,
+				Model:    "qwen-audio-3.0-tts-flash",
 			}
 		}
 

@@ -18,9 +18,6 @@ import (
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
-// TargetTTSModel 定义 DashScope TTS 目标模型名称（唯一支持模型）。
-const TargetTTSModel = "qwen-audio-3.0-tts-flash"
-
 // maxTTSReadMessageBytes 定义 DashScope TTS WebSocket 单帧最大读取字节数（1 MiB）。
 const maxTTSReadMessageBytes = 1 * 1024 * 1024
 
@@ -79,9 +76,6 @@ func NewTTSClient(cfg *database.TTSConfig, voice string) (*TTSClient, error) {
 	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
 		return nil, errors.New("dashscope tts model is required")
-	}
-	if model != TargetTTSModel {
-		return nil, fmt.Errorf("unsupported dashscope tts model: %s (only %s is supported)", model, TargetTTSModel)
 	}
 
 	v := strings.TrimSpace(voice)

@@ -36,7 +36,7 @@ func TestNewTTSClient_Validation(t *testing.T) {
 			cfg: &database.TTSConfig{
 				Endpoint: "  ",
 				APIKey:   "sk-test",
-				Model:    TargetTTSModel,
+				Model:    "qwen-audio-3.0-tts-flash",
 			},
 			voice:   "longxiaochun",
 			wantErr: "dashscope ws endpoint is required",
@@ -46,13 +46,23 @@ func TestNewTTSClient_Validation(t *testing.T) {
 			cfg: &database.TTSConfig{
 				Endpoint: "wss://test.maas.aliyuncs.com/api-ws/v1/inference",
 				APIKey:   "   ",
-				Model:    TargetTTSModel,
+				Model:    "qwen-audio-3.0-tts-flash",
 			},
 			voice:   "longxiaochun",
 			wantErr: "dashscope api key is required",
 		},
 		{
-			name: "empty model",
+			name: "empty model empty string",
+			cfg: &database.TTSConfig{
+				Endpoint: "wss://test.maas.aliyuncs.com/api-ws/v1/inference",
+				APIKey:   "sk-test",
+				Model:    "",
+			},
+			voice:   "longxiaochun",
+			wantErr: "dashscope tts model is required",
+		},
+		{
+			name: "empty model spaces",
 			cfg: &database.TTSConfig{
 				Endpoint: "wss://test.maas.aliyuncs.com/api-ws/v1/inference",
 				APIKey:   "sk-test",
@@ -62,21 +72,11 @@ func TestNewTTSClient_Validation(t *testing.T) {
 			wantErr: "dashscope tts model is required",
 		},
 		{
-			name: "unsupported model",
-			cfg: &database.TTSConfig{
-				Endpoint: "wss://test.maas.aliyuncs.com/api-ws/v1/inference",
-				APIKey:   "sk-test",
-				Model:    "cosyvoice-v1",
-			},
-			voice:   "longxiaochun",
-			wantErr: "unsupported dashscope tts model: cosyvoice-v1",
-		},
-		{
 			name: "empty voice",
 			cfg: &database.TTSConfig{
 				Endpoint: "wss://test.maas.aliyuncs.com/api-ws/v1/inference",
 				APIKey:   "sk-test",
-				Model:    TargetTTSModel,
+				Model:    "qwen-audio-3.0-tts-flash",
 			},
 			voice:   "   ",
 			wantErr: "tts voice is required",
@@ -86,7 +86,7 @@ func TestNewTTSClient_Validation(t *testing.T) {
 			cfg: &database.TTSConfig{
 				Endpoint: "wss://test.maas.aliyuncs.com/api-ws/v1/inference",
 				APIKey:   "sk-test",
-				Model:    TargetTTSModel,
+				Model:    "qwen-audio-3.0-tts-flash",
 				ProxyURL: "://invalid-url",
 			},
 			voice:   "longxiaochun",
@@ -97,7 +97,16 @@ func TestNewTTSClient_Validation(t *testing.T) {
 			cfg: &database.TTSConfig{
 				Endpoint: "wss://test.maas.aliyuncs.com/api-ws/v1/inference",
 				APIKey:   "sk-test",
-				Model:    TargetTTSModel,
+				Model:    "qwen-audio-3.0-tts-flash",
+			},
+			voice: "longxiaochun",
+		},
+		{
+			name: "valid config with alternate model and trimmed whitespace",
+			cfg: &database.TTSConfig{
+				Endpoint: "wss://test.maas.aliyuncs.com/api-ws/v1/inference",
+				APIKey:   "sk-test",
+				Model:    "  cosyvoice-v1  ",
 			},
 			voice: "longxiaochun",
 		},
@@ -106,7 +115,7 @@ func TestNewTTSClient_Validation(t *testing.T) {
 			cfg: &database.TTSConfig{
 				Endpoint:            "wss://test.maas.aliyuncs.com/api-ws/v1/inference",
 				APIKey:              "sk-test",
-				Model:               TargetTTSModel,
+				Model:               "qwen-audio-3.0-tts-flash",
 				ProxyURL:            "http://127.0.0.1:8080",
 				ConnectTimeoutMS:    3000,
 				FirstAudioTimeoutMS: 4000,
@@ -134,8 +143,9 @@ func TestNewTTSClient_Validation(t *testing.T) {
 			if client == nil {
 				t.Fatal("expected non-nil client")
 			}
-			if client.model != TargetTTSModel {
-				t.Errorf("expected model %q, got %q", TargetTTSModel, client.model)
+			expectedModel := strings.TrimSpace(tc.cfg.Model)
+			if client.model != expectedModel {
+				t.Errorf("expected model %q, got %q", expectedModel, client.model)
 			}
 			if client.voice != tc.voice {
 				t.Errorf("expected voice %q, got %q", tc.voice, client.voice)
@@ -148,6 +158,189 @@ func TestNewTTSClient_Validation(t *testing.T) {
 			}
 			if client.sentenceTimeout <= 0 {
 				t.Errorf("expected positive sentence timeout, got %v", client.sentenceTimeout)
+			}
+		})
+	}
+}
+
+func TestTTSClient_DynamicModels_RunTaskPayloadVerification(t *testing.T) {
+	// 1. 空模型与纯空白字符校验：必须在构造阶段被拒绝
+	emptyModels := []struct {
+		name  string
+		model string
+	}{
+		{name: "empty string", model: ""},
+		{name: "spaces only", model: "   "},
+		{name: "tabs and newlines", model: "\t\r\n"},
+	}
+	for _, em := range emptyModels {
+		t.Run("rejected_"+em.name, func(t *testing.T) {
+			cfg := &database.TTSConfig{
+				Endpoint: "wss://dashscope.aliyuncs.com/api-v1/ws",
+				APIKey:   "sk-test-key",
+				Model:    em.model,
+			}
+			client, err := NewTTSClient(cfg, "longxiaochun")
+			if err == nil {
+				t.Fatalf("expected error for empty model %q, got client: %v", em.model, client)
+			}
+			if client != nil {
+				t.Fatalf("expected nil client for empty model %q", em.model)
+			}
+			if !strings.Contains(err.Error(), "dashscope tts model is required") {
+				t.Fatalf("expected 'dashscope tts model is required', got: %v", err)
+			}
+		})
+	}
+
+	// 2. 验证任意不同的非空模型均可正常建连，且 run-task 请求体中透传配置的模型名称
+	testCases := []struct {
+		configuredModel string
+		expectedModel   string
+	}{
+		{
+			configuredModel: "qwen-audio-3.0-tts-flash",
+			expectedModel:   "qwen-audio-3.0-tts-flash",
+		},
+		{
+			configuredModel: "cosyvoice-v1",
+			expectedModel:   "cosyvoice-v1",
+		},
+		{
+			configuredModel: "  sambert-zhichu-v1  ",
+			expectedModel:   "sambert-zhichu-v1",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run("model_"+tc.expectedModel, func(t *testing.T) {
+			var (
+				capturedModel string
+				capturedMu    sync.Mutex
+				serverDone    = make(chan struct{})
+			)
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := websocket.Accept(w, r, nil)
+				if err != nil {
+					close(serverDone)
+					return
+				}
+				defer conn.Close(websocket.StatusNormalClosure, "done")
+				defer close(serverDone)
+
+				ctx := r.Context()
+				// 读取 run-task 消息
+				msgType, data, err := conn.Read(ctx)
+				if err != nil || msgType != websocket.MessageText {
+					return
+				}
+
+				var req struct {
+					Header struct {
+						Action string `json:"action"`
+						TaskId string `json:"task_id"`
+					} `json:"header"`
+					Payload struct {
+						Model string `json:"model"`
+					} `json:"payload"`
+				}
+				if err := json.Unmarshal(data, &req); err != nil {
+					return
+				}
+
+				capturedMu.Lock()
+				capturedModel = req.Payload.Model
+				capturedMu.Unlock()
+
+				taskId := req.Header.TaskId
+
+				// 回复 task-started
+				taskStartedResp := map[string]any{
+					"header": map[string]any{
+						"action":     "task-started",
+						"task_id":    taskId,
+						"event":      "task-started",
+						"error_code": "SUCCESS",
+					},
+					"payload": map[string]any{},
+				}
+				startedBytes, _ := json.Marshal(taskStartedResp)
+				if err := conn.Write(ctx, websocket.MessageText, startedBytes); err != nil {
+					return
+				}
+
+				if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+					return
+				}
+
+				// 发送 1 帧有效 PCM
+				if err := conn.Write(ctx, websocket.MessageBinary, []byte("pcm-audio-payload")); err != nil {
+					return
+				}
+
+				// 回复 task-finished
+				taskFinishedResp := map[string]any{
+					"header": map[string]any{
+						"action":     "task-finished",
+						"task_id":    taskId,
+						"event":      "task-finished",
+						"error_code": "SUCCESS",
+					},
+					"payload": map[string]any{},
+				}
+				finishedBytes, _ := json.Marshal(taskFinishedResp)
+				_ = conn.Write(ctx, websocket.MessageText, finishedBytes)
+			}))
+			defer server.Close()
+
+			wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+			cfg := &database.TTSConfig{
+				Endpoint: wsURL,
+				APIKey:   "sk-test-key",
+				Model:    tc.configuredModel,
+			}
+
+			client, err := NewTTSClient(cfg, "longxiaochun")
+			if err != nil {
+				t.Fatalf("NewTTSClient failed for model %q: %v", tc.configuredModel, err)
+			}
+			if client == nil {
+				t.Fatalf("expected non-nil client for model %q", tc.configuredModel)
+			}
+
+			stream, err := client.CreateStream(context.Background())
+			if err != nil {
+				t.Fatalf("CreateStream failed for model %q: %v", tc.configuredModel, err)
+			}
+			defer stream.Close()
+
+			var receivedPCM bool
+			err = stream.SynthesizeSentence(context.Background(), "你好，测试模型透传。", func(ctx context.Context, pcm []byte) error {
+				if len(pcm) > 0 {
+					receivedPCM = true
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("SynthesizeSentence failed: %v", err)
+			}
+			if !receivedPCM {
+				t.Fatal("expected to receive PCM audio")
+			}
+
+			select {
+			case <-serverDone:
+			case <-time.After(3 * time.Second):
+				t.Fatal("timeout waiting for server")
+			}
+
+			capturedMu.Lock()
+			gotModel := capturedModel
+			capturedMu.Unlock()
+
+			if gotModel != tc.expectedModel {
+				t.Errorf("expected run-task model %q, got %q", tc.expectedModel, gotModel)
 			}
 		})
 	}
@@ -184,7 +377,7 @@ func TestTTSClient_CreateStream_HeadersAndDial(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint:         wsURL,
 		APIKey:           "test-api-key-12345",
-		Model:            TargetTTSModel,
+		Model:            "qwen-audio-3.0-tts-flash",
 		ConnectTimeoutMS: 2000,
 	}
 
@@ -221,7 +414,7 @@ func TestTTSClient_CreateStream_DialFailure(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint:         "ws://127.0.0.1:1", // 不可达地址
 		APIKey:           "test-api-key",
-		Model:            TargetTTSModel,
+		Model:            "qwen-audio-3.0-tts-flash",
 		ConnectTimeoutMS: 500,
 	}
 
@@ -382,7 +575,7 @@ func TestTTSStream_SynthesizeSentence_NormalProtocolFlow(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-auth",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -446,8 +639,8 @@ func TestTTSStream_SynthesizeSentence_NormalProtocolFlow(t *testing.T) {
 	if receivedRunTask.Payload.Function != "SpeechSynthesizer" {
 		t.Errorf("expected function 'SpeechSynthesizer', got %s", receivedRunTask.Payload.Function)
 	}
-	if receivedRunTask.Payload.Model != TargetTTSModel {
-		t.Errorf("expected model %s, got %s", TargetTTSModel, receivedRunTask.Payload.Model)
+	if receivedRunTask.Payload.Model != "qwen-audio-3.0-tts-flash" {
+		t.Errorf("expected model %s, got %s", "qwen-audio-3.0-tts-flash", receivedRunTask.Payload.Model)
 	}
 	params := receivedRunTask.Payload.Parameters
 	if params.TextType != "PlainText" {
@@ -520,7 +713,7 @@ func TestTTSStream_SynthesizeSentence_Validation(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -575,7 +768,7 @@ func TestTTSStream_CancelAndClose_Idempotent(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -742,7 +935,7 @@ func TestTTSStream_SequentialReuse_SingleConnectionMultipleSentences(t *testing.
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-reuse",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -949,7 +1142,7 @@ func TestTTSStream_ConcurrentSynthesize_RejectedImmediately(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-concurrent",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -1081,7 +1274,7 @@ func TestTTSStream_ConcurrentSynthesize_MultiGoroutines_RaceProtection(t *testin
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-race",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -1452,7 +1645,7 @@ func TestTTSStream_ProtocolErrorsAndTaskFailed(t *testing.T) {
 			cfg := &database.TTSConfig{
 				Endpoint: wsURL,
 				APIKey:   "sk-test-protocol-error",
-				Model:    TargetTTSModel,
+				Model:    "qwen-audio-3.0-tts-flash",
 			}
 
 			client, err := NewTTSClient(cfg, "longxiaochun")
@@ -1601,7 +1794,7 @@ func TestTTSStream_Timeout_FirstAudioTimeout(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint:            wsURL,
 		APIKey:              "sk-test-timeout",
-		Model:               TargetTTSModel,
+		Model:               "qwen-audio-3.0-tts-flash",
 		FirstAudioTimeoutMS: 50,
 		SentenceTimeoutMS:   2000,
 	}
@@ -1733,7 +1926,7 @@ func TestTTSStream_Timeout_SentenceTimeout(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint:            wsURL,
 		APIKey:              "sk-test-timeout",
-		Model:               TargetTTSModel,
+		Model:               "qwen-audio-3.0-tts-flash",
 		FirstAudioTimeoutMS: 500,
 		SentenceTimeoutMS:   60,
 	}
@@ -1849,7 +2042,7 @@ func TestTTSStream_Validation_NoAudioReceived(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-no-audio",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -1962,7 +2155,7 @@ func TestTTSStream_Validation_EmptyBinaryIgnored(t *testing.T) {
 		cfg := &database.TTSConfig{
 			Endpoint: wsURL,
 			APIKey:   "sk-test-empty-binary",
-			Model:    TargetTTSModel,
+			Model:    "qwen-audio-3.0-tts-flash",
 		}
 
 		client, err := NewTTSClient(cfg, "longxiaochun")
@@ -2057,7 +2250,7 @@ func TestTTSStream_Validation_EmptyBinaryIgnored(t *testing.T) {
 		cfg := &database.TTSConfig{
 			Endpoint: wsURL,
 			APIKey:   "sk-test-empty-binary-valid",
-			Model:    TargetTTSModel,
+			Model:    "qwen-audio-3.0-tts-flash",
 		}
 
 		client, err := NewTTSClient(cfg, "longxiaochun")
@@ -2172,7 +2365,7 @@ func TestTTSStream_Validation_OnPCMCallbackError(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-callback-err",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -2299,7 +2492,7 @@ func TestTTSStream_Cancel_MessagePayloadAndTaskId(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-cancel-payload",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -2459,7 +2652,7 @@ func TestTTSStream_Cancel_SingleReaderAndLatePCMIgnored(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-late-pcm",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -2558,7 +2751,7 @@ func TestTTSStream_Cancel_CleanupTimeout2Seconds(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-cleanup-timeout",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -2682,7 +2875,7 @@ func TestTTSStream_Cancel_Idempotent_MultipleCallsAndStates(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-idempotent",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -2806,7 +2999,7 @@ func TestTTSStream_Cancel_WriteFailure(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-cancel-write-fail",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -2909,7 +3102,7 @@ func TestTTSStream_Cancel_ConnectionClosedBeforeFinish(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-conn-closed-before-finish",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -3056,7 +3249,7 @@ func TestTTSStream_Cancel_ControlMessageAtMostOnce_AndNoMessageAfterTerminal(t *
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-no-msg-after-terminal",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
@@ -3171,7 +3364,7 @@ func TestTTSStream_Cancel_ExplicitMethodCall(t *testing.T) {
 	cfg := &database.TTSConfig{
 		Endpoint: wsURL,
 		APIKey:   "sk-test-explicit-cancel",
-		Model:    TargetTTSModel,
+		Model:    "qwen-audio-3.0-tts-flash",
 	}
 
 	client, err := NewTTSClient(cfg, "longxiaochun")
