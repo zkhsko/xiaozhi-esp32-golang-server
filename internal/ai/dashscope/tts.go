@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -31,6 +32,15 @@ var ErrStreamClosed = errors.New("tts stream is closed")
 
 // ErrStreamFailed 表示流式语音合成会话已发生不可恢复错误，连接不可继续使用。
 var ErrStreamFailed = errors.New("tts stream has failed")
+
+// ErrFirstAudioTimeout 表示等待首包有效音频数据超时。
+var ErrFirstAudioTimeout = errors.New("first audio timeout")
+
+// ErrSentenceTimeout 表示单句语音合成总耗时超时。
+var ErrSentenceTimeout = errors.New("sentence timeout")
+
+// ErrNoAudioReceived 表示单句合成虽正常结束但未收到任何有效音频数据。
+var ErrNoAudioReceived = errors.New("no audio received")
 
 // TTSClient 实现基于 DashScope WebSocket 流式协议的语音合成客户端。
 type TTSClient struct {
@@ -278,6 +288,12 @@ func (s *TTSStream) SynthesizeSentence(
 	s.state = stateWaitingTaskStarted
 	s.mu.Unlock()
 
+	var (
+		firstAudioReceived atomic.Bool
+		firstAudioTimedOut atomic.Bool
+		sentenceTimedOut   atomic.Bool
+	)
+
 	defer func() {
 		s.mu.Lock()
 		if s.state != stateClosed && s.state != stateFailed {
@@ -286,6 +302,13 @@ func (s *TTSStream) SynthesizeSentence(
 		s.activeTaskId = ""
 		s.mu.Unlock()
 	}()
+
+	// 监听外部 context 取消并执行清理
+	stopOuterContext := context.AfterFunc(ctx, func() {
+		s.sendCancelDirect(taskId)
+		s.forceClose()
+	})
+	defer stopOuterContext()
 
 	// 1. 发送 run-task 消息
 	runMsg := ttsRunTaskMessage{
@@ -323,13 +346,32 @@ func (s *TTSStream) SynthesizeSentence(
 	err = s.conn.Write(ctx, websocket.MessageText, runBytes)
 	s.writeMu.Unlock()
 	if err != nil {
+		if ctx.Err() != nil {
+			s.markFailed(ctx.Err())
+			return ctx.Err()
+		}
 		s.markFailed(err)
 		return fmt.Errorf("write run-task: %w", err)
 	}
 
+	// run-task 成功写出后，启动单句总超时定时器
+	sentenceTimer := time.AfterFunc(s.client.sentenceTimeout, func() {
+		sentenceTimedOut.Store(true)
+		s.sendCancelAndScheduleForceClose(taskId)
+	})
+	defer sentenceTimer.Stop()
+
 	// 2. 等待 task-started 响应
 	msgType, firstData, err := s.conn.Read(ctx)
 	if err != nil {
+		if sentenceTimedOut.Load() {
+			s.markFailed(ErrSentenceTimeout)
+			return ErrSentenceTimeout
+		}
+		if ctx.Err() != nil {
+			s.markFailed(ctx.Err())
+			return ctx.Err()
+		}
 		s.markFailed(err)
 		return fmt.Errorf("read task-started: %w", err)
 	}
@@ -433,27 +475,87 @@ func (s *TTSStream) SynthesizeSentence(
 
 	s.writeMu.Lock()
 	err = s.conn.Write(ctx, websocket.MessageText, continueBytes)
-	if err == nil {
-		err = s.conn.Write(ctx, websocket.MessageText, finishBytes)
+	if err != nil {
+		s.writeMu.Unlock()
+		if sentenceTimedOut.Load() {
+			s.markFailed(ErrSentenceTimeout)
+			return ErrSentenceTimeout
+		}
+		if ctx.Err() != nil {
+			s.markFailed(ctx.Err())
+			return ctx.Err()
+		}
+		s.markFailed(err)
+		return fmt.Errorf("write continue-task: %w", err)
 	}
+
+	// continue-task 成功写出后，启动首音频超时定时器
+	firstAudioTimer := time.AfterFunc(s.client.firstAudioTimeout, func() {
+		if !firstAudioReceived.Load() {
+			firstAudioTimedOut.Store(true)
+			s.sendCancelAndScheduleForceClose(taskId)
+		}
+	})
+	defer firstAudioTimer.Stop()
+
+	err = s.conn.Write(ctx, websocket.MessageText, finishBytes)
 	s.writeMu.Unlock()
 	if err != nil {
+		if sentenceTimedOut.Load() {
+			s.markFailed(ErrSentenceTimeout)
+			return ErrSentenceTimeout
+		}
+		if firstAudioTimedOut.Load() {
+			s.markFailed(ErrFirstAudioTimeout)
+			return ErrFirstAudioTimeout
+		}
+		if ctx.Err() != nil {
+			s.markFailed(ctx.Err())
+			return ctx.Err()
+		}
 		s.markFailed(err)
-		return fmt.Errorf("write continue/finish task: %w", err)
+		return fmt.Errorf("write finish-task: %w", err)
 	}
 
 	// 4. 读取 PCM 二进制数据及事件响应，直至 task-finished
+	var nonEmptyAudioCount int
+
 	for {
 		msgType, data, err := s.conn.Read(ctx)
 		if err != nil {
+			if firstAudioTimedOut.Load() {
+				s.markFailed(ErrFirstAudioTimeout)
+				return ErrFirstAudioTimeout
+			}
+			if sentenceTimedOut.Load() {
+				s.markFailed(ErrSentenceTimeout)
+				return ErrSentenceTimeout
+			}
+			if ctx.Err() != nil {
+				s.markFailed(ctx.Err())
+				return ctx.Err()
+			}
 			s.markFailed(err)
 			return fmt.Errorf("read tts message: %w", err)
 		}
 
 		if msgType == websocket.MessageBinary {
+			if len(data) == 0 {
+				// 空二进制消息忽略，不视为有效音频，不停止首音频计时器
+				continue
+			}
+
+			if firstAudioReceived.CompareAndSwap(false, true) {
+				if firstAudioTimer != nil {
+					firstAudioTimer.Stop()
+				}
+			}
+			nonEmptyAudioCount++
+
 			if err := onPCM(ctx, data); err != nil {
+				s.sendCancelDirect(taskId)
 				s.markFailed(err)
-				return fmt.Errorf("onPCM callback: %w", err)
+				return err
 			}
 			continue
 		}
@@ -488,6 +590,18 @@ func (s *TTSStream) SynthesizeSentence(
 				// 合法中间事件，忽略接收，不报错也不干扰设备下行
 				continue
 			case "task-finished":
+				if firstAudioTimedOut.Load() {
+					s.markFailed(ErrFirstAudioTimeout)
+					return ErrFirstAudioTimeout
+				}
+				if sentenceTimedOut.Load() {
+					s.markFailed(ErrSentenceTimeout)
+					return ErrSentenceTimeout
+				}
+				if nonEmptyAudioCount == 0 {
+					s.markFailed(ErrNoAudioReceived)
+					return ErrNoAudioReceived
+				}
 				return nil
 			case "task-failed":
 				code := resp.Header.ErrorCode
@@ -511,6 +625,68 @@ func (s *TTSStream) SynthesizeSentence(
 		err = fmt.Errorf("unexpected websocket message type: %v (task_id: %s)", msgType, taskId)
 		s.markFailed(err)
 		return err
+	}
+}
+
+func (s *TTSStream) sendCancelAndScheduleForceClose(taskId string) {
+	s.sendCancelDirect(taskId)
+	time.AfterFunc(2*time.Second, func() {
+		s.forceClose()
+	})
+}
+
+func (s *TTSStream) sendCancelDirect(taskId string) {
+	if taskId == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.connClosed || s.conn == nil || s.state == stateClosed || s.state == stateFailed {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	cancelMsg := ttsFinishTaskMessage{
+		Header: ttsRequestHeader{
+			Action:    "finish-task",
+			TaskId:    taskId,
+			Streaming: "duplex",
+		},
+		Payload: ttsFinishPayload{
+			Input: struct {
+				Directive string `json:"directive,omitempty"`
+			}{
+				Directive: "cancel",
+			},
+		},
+	}
+	cancelBytes, err := json.Marshal(cancelMsg)
+	if err != nil {
+		return
+	}
+
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cleanupCancel()
+
+	s.writeMu.Lock()
+	s.mu.Lock()
+	closed := s.connClosed || s.conn == nil
+	s.mu.Unlock()
+	if !closed {
+		_ = s.conn.Write(cleanupCtx, websocket.MessageText, cancelBytes)
+	}
+	s.writeMu.Unlock()
+}
+
+func (s *TTSStream) forceClose() {
+	s.mu.Lock()
+	conn := s.conn
+	alreadyClosed := s.connClosed
+	s.connClosed = true
+	s.mu.Unlock()
+
+	if conn != nil && !alreadyClosed {
+		_ = conn.Close(websocket.StatusPolicyViolation, "tts force closed")
 	}
 }
 

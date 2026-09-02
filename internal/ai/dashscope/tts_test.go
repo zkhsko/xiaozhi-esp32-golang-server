@@ -1528,3 +1528,791 @@ func TestTTSStream_ProtocolErrorsAndTaskFailed(t *testing.T) {
 		})
 	}
 }
+
+func TestTTSStream_Timeout_FirstAudioTimeout(t *testing.T) {
+	var (
+		cancelReceived atomic.Bool
+		serverDone     = make(chan struct{})
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			close(serverDone)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		defer close(serverDone)
+
+		ctx := r.Context()
+
+		taskId, err := mockReadRunTask(ctx, conn)
+		if err != nil {
+			return
+		}
+
+		startedResp := map[string]any{
+			"header": map[string]any{
+				"action":  "task-started",
+				"task_id": taskId,
+				"event":   "task-started",
+			},
+			"payload": map[string]any{},
+		}
+		startedBytes, _ := json.Marshal(startedResp)
+		if err := conn.Write(ctx, websocket.MessageText, startedBytes); err != nil {
+			return
+		}
+
+		if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+			return
+		}
+
+		// 故意不发送 PCM 音频数据，持续读取直到客户端超时后发送取消指令或断开连接
+		for {
+			msgType, data, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+			if msgType == websocket.MessageText {
+				var finishMsg ttsFinishTaskMessage
+				if err := json.Unmarshal(data, &finishMsg); err == nil {
+					if finishMsg.Payload.Input.Directive == "cancel" {
+						cancelReceived.Store(true)
+						finishedResp := map[string]any{
+							"header": map[string]any{
+								"action":  "task-finished",
+								"task_id": taskId,
+								"event":   "task-finished",
+							},
+							"payload": map[string]any{},
+						}
+						finishedBytes, _ := json.Marshal(finishedResp)
+						_ = conn.Write(ctx, websocket.MessageText, finishedBytes)
+						return
+					}
+				}
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &database.TTSConfig{
+		Endpoint:            wsURL,
+		APIKey:              "sk-test-timeout",
+		Model:               TargetTTSModel,
+		FirstAudioTimeoutMS: 50,
+		SentenceTimeoutMS:   2000,
+	}
+
+	client, err := NewTTSClient(cfg, "longxiaochun")
+	if err != nil {
+		t.Fatalf("NewTTSClient error: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream error: %v", err)
+	}
+	defer stream.Close()
+
+	err = stream.SynthesizeSentence(context.Background(), "测试首音频超时", func(ctx context.Context, pcm []byte) error {
+		return nil
+	})
+
+	if !errors.Is(err, ErrFirstAudioTimeout) {
+		t.Fatalf("expected ErrFirstAudioTimeout, got: %v", err)
+	}
+
+	ttsStream, ok := stream.(*TTSStream)
+	if !ok {
+		t.Fatalf("expected *TTSStream instance, got %T", stream)
+	}
+
+	ttsStream.mu.Lock()
+	stateVal := ttsStream.state
+	ttsStream.mu.Unlock()
+	if stateVal != stateFailed {
+		t.Errorf("expected stateFailed, got %v", stateVal)
+	}
+
+	// 验证失败后后续调用被拒绝
+	nextErr := stream.SynthesizeSentence(context.Background(), "后续调用应拒绝", func(ctx context.Context, pcm []byte) error {
+		return nil
+	})
+	if !errors.Is(nextErr, ErrStreamFailed) {
+		t.Fatalf("expected ErrStreamFailed on subsequent call, got: %v", nextErr)
+	}
+
+	select {
+	case <-serverDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for server handler to complete")
+	}
+
+	if !cancelReceived.Load() {
+		t.Error("expected server to receive cancel finish-task directive")
+	}
+}
+
+func TestTTSStream_Timeout_SentenceTimeout(t *testing.T) {
+	var (
+		cancelReceived atomic.Bool
+		serverDone     = make(chan struct{})
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			close(serverDone)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		defer close(serverDone)
+
+		ctx := r.Context()
+
+		taskId, err := mockReadRunTask(ctx, conn)
+		if err != nil {
+			return
+		}
+
+		startedResp := map[string]any{
+			"header": map[string]any{
+				"action":  "task-started",
+				"task_id": taskId,
+				"event":   "task-started",
+			},
+			"payload": map[string]any{},
+		}
+		startedBytes, _ := json.Marshal(startedResp)
+		if err := conn.Write(ctx, websocket.MessageText, startedBytes); err != nil {
+			return
+		}
+
+		if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+			return
+		}
+
+		// 发送一包有效 PCM（防止首音频超时），但故意不发送 task-finished
+		if err := conn.Write(ctx, websocket.MessageBinary, []byte{0x01, 0x02}); err != nil {
+			return
+		}
+
+		// 持续读取直到客户端单句超时后发送取消指令或断开连接
+		for {
+			msgType, data, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+			if msgType == websocket.MessageText {
+				var finishMsg ttsFinishTaskMessage
+				if err := json.Unmarshal(data, &finishMsg); err == nil {
+					if finishMsg.Payload.Input.Directive == "cancel" {
+						cancelReceived.Store(true)
+						finishedResp := map[string]any{
+							"header": map[string]any{
+								"action":  "task-finished",
+								"task_id": taskId,
+								"event":   "task-finished",
+							},
+							"payload": map[string]any{},
+						}
+						finishedBytes, _ := json.Marshal(finishedResp)
+						_ = conn.Write(ctx, websocket.MessageText, finishedBytes)
+						return
+					}
+				}
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &database.TTSConfig{
+		Endpoint:            wsURL,
+		APIKey:              "sk-test-timeout",
+		Model:               TargetTTSModel,
+		FirstAudioTimeoutMS: 500,
+		SentenceTimeoutMS:   60,
+	}
+
+	client, err := NewTTSClient(cfg, "longxiaochun")
+	if err != nil {
+		t.Fatalf("NewTTSClient error: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream error: %v", err)
+	}
+	defer stream.Close()
+
+	var pcmCount int
+	err = stream.SynthesizeSentence(context.Background(), "测试单句总超时", func(ctx context.Context, pcm []byte) error {
+		pcmCount++
+		return nil
+	})
+
+	if !errors.Is(err, ErrSentenceTimeout) {
+		t.Fatalf("expected ErrSentenceTimeout, got: %v", err)
+	}
+	if pcmCount != 1 {
+		t.Errorf("expected 1 pcm chunk before sentence timeout, got %d", pcmCount)
+	}
+
+	ttsStream, ok := stream.(*TTSStream)
+	if !ok {
+		t.Fatalf("expected *TTSStream instance, got %T", stream)
+	}
+
+	ttsStream.mu.Lock()
+	stateVal := ttsStream.state
+	ttsStream.mu.Unlock()
+	if stateVal != stateFailed {
+		t.Errorf("expected stateFailed, got %v", stateVal)
+	}
+
+	nextErr := stream.SynthesizeSentence(context.Background(), "后续调用应拒绝", func(ctx context.Context, pcm []byte) error {
+		return nil
+	})
+	if !errors.Is(nextErr, ErrStreamFailed) {
+		t.Fatalf("expected ErrStreamFailed on subsequent call, got: %v", nextErr)
+	}
+
+	select {
+	case <-serverDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for server handler to complete")
+	}
+
+	if !cancelReceived.Load() {
+		t.Error("expected server to receive cancel finish-task directive")
+	}
+}
+
+func TestTTSStream_Validation_NoAudioReceived(t *testing.T) {
+	var serverDone = make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			close(serverDone)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		defer close(serverDone)
+
+		ctx := r.Context()
+
+		taskId, err := mockReadRunTask(ctx, conn)
+		if err != nil {
+			return
+		}
+
+		startedResp := map[string]any{
+			"header": map[string]any{
+				"action":  "task-started",
+				"task_id": taskId,
+				"event":   "task-started",
+			},
+			"payload": map[string]any{},
+		}
+		startedBytes, _ := json.Marshal(startedResp)
+		if err := conn.Write(ctx, websocket.MessageText, startedBytes); err != nil {
+			return
+		}
+
+		if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+			return
+		}
+
+		// 正常协议流程但未下发任何二进制 PCM，直接发送 task-finished 终态
+		finishedResp := map[string]any{
+			"header": map[string]any{
+				"action":  "task-finished",
+				"task_id": taskId,
+				"event":   "task-finished",
+			},
+			"payload": map[string]any{},
+		}
+		finishedBytes, _ := json.Marshal(finishedResp)
+		_ = conn.Write(ctx, websocket.MessageText, finishedBytes)
+
+		// 等待客户端断开连接
+		_, _, _ = conn.Read(ctx)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &database.TTSConfig{
+		Endpoint: wsURL,
+		APIKey:   "sk-test-no-audio",
+		Model:    TargetTTSModel,
+	}
+
+	client, err := NewTTSClient(cfg, "longxiaochun")
+	if err != nil {
+		t.Fatalf("NewTTSClient error: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream error: %v", err)
+	}
+	defer stream.Close()
+
+	var callbackCalled bool
+	err = stream.SynthesizeSentence(context.Background(), "正常终态但无音频", func(ctx context.Context, pcm []byte) error {
+		callbackCalled = true
+		return nil
+	})
+
+	if !errors.Is(err, ErrNoAudioReceived) {
+		t.Fatalf("expected ErrNoAudioReceived, got: %v", err)
+	}
+	if callbackCalled {
+		t.Error("onPCM callback should not have been called")
+	}
+
+	ttsStream, ok := stream.(*TTSStream)
+	if !ok {
+		t.Fatalf("expected *TTSStream instance, got %T", stream)
+	}
+
+	ttsStream.mu.Lock()
+	stateVal := ttsStream.state
+	ttsStream.mu.Unlock()
+	if stateVal != stateFailed {
+		t.Errorf("expected stateFailed, got %v", stateVal)
+	}
+
+	nextErr := stream.SynthesizeSentence(context.Background(), "后续调用应拒绝", func(ctx context.Context, pcm []byte) error {
+		return nil
+	})
+	if !errors.Is(nextErr, ErrStreamFailed) {
+		t.Fatalf("expected ErrStreamFailed on subsequent call, got: %v", nextErr)
+	}
+
+	select {
+	case <-serverDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for server handler to complete")
+	}
+}
+
+func TestTTSStream_Validation_EmptyBinaryIgnored(t *testing.T) {
+	t.Run("only empty binary messages leads to no audio error", func(t *testing.T) {
+		serverDone := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := websocket.Accept(w, r, nil)
+			if err != nil {
+				close(serverDone)
+				return
+			}
+			defer conn.Close(websocket.StatusNormalClosure, "done")
+			defer close(serverDone)
+
+			ctx := r.Context()
+
+			taskId, err := mockReadRunTask(ctx, conn)
+			if err != nil {
+				return
+			}
+
+			startedResp := map[string]any{
+				"header": map[string]any{
+					"action":  "task-started",
+					"task_id": taskId,
+					"event":   "task-started",
+				},
+				"payload": map[string]any{},
+			}
+			startedBytes, _ := json.Marshal(startedResp)
+			if err := conn.Write(ctx, websocket.MessageText, startedBytes); err != nil {
+				return
+			}
+
+			if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+				return
+			}
+
+			// 发送多个空二进制消息
+			_ = conn.Write(ctx, websocket.MessageBinary, []byte{})
+			_ = conn.Write(ctx, websocket.MessageBinary, []byte{})
+
+			// 发送 task-finished 终态
+			finishedResp := map[string]any{
+				"header": map[string]any{
+					"action":  "task-finished",
+					"task_id": taskId,
+					"event":   "task-finished",
+				},
+				"payload": map[string]any{},
+			}
+			finishedBytes, _ := json.Marshal(finishedResp)
+			_ = conn.Write(ctx, websocket.MessageText, finishedBytes)
+
+			_, _, _ = conn.Read(ctx)
+		}))
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		cfg := &database.TTSConfig{
+			Endpoint: wsURL,
+			APIKey:   "sk-test-empty-binary",
+			Model:    TargetTTSModel,
+		}
+
+		client, err := NewTTSClient(cfg, "longxiaochun")
+		if err != nil {
+			t.Fatalf("NewTTSClient error: %v", err)
+		}
+
+		stream, err := client.CreateStream(context.Background())
+		if err != nil {
+			t.Fatalf("CreateStream error: %v", err)
+		}
+		defer stream.Close()
+
+		var callbackCount int
+		err = stream.SynthesizeSentence(context.Background(), "仅有空二进制消息", func(ctx context.Context, pcm []byte) error {
+			callbackCount++
+			return nil
+		})
+
+		if !errors.Is(err, ErrNoAudioReceived) {
+			t.Fatalf("expected ErrNoAudioReceived, got: %v", err)
+		}
+		if callbackCount != 0 {
+			t.Errorf("expected 0 onPCM calls for empty binary, got %d", callbackCount)
+		}
+
+		select {
+		case <-serverDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for server handler to complete")
+		}
+	})
+
+	t.Run("empty binary followed by valid pcm succeeds", func(t *testing.T) {
+		serverDone := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := websocket.Accept(w, r, nil)
+			if err != nil {
+				close(serverDone)
+				return
+			}
+			defer conn.Close(websocket.StatusNormalClosure, "done")
+			defer close(serverDone)
+
+			ctx := r.Context()
+
+			taskId, err := mockReadRunTask(ctx, conn)
+			if err != nil {
+				return
+			}
+
+			startedResp := map[string]any{
+				"header": map[string]any{
+					"action":  "task-started",
+					"task_id": taskId,
+					"event":   "task-started",
+				},
+				"payload": map[string]any{},
+			}
+			startedBytes, _ := json.Marshal(startedResp)
+			if err := conn.Write(ctx, websocket.MessageText, startedBytes); err != nil {
+				return
+			}
+
+			if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+				return
+			}
+
+			// 先发送空二进制帧
+			_ = conn.Write(ctx, websocket.MessageBinary, []byte{})
+
+			// 随后下发非空有效音频
+			_ = conn.Write(ctx, websocket.MessageBinary, []byte{0xAA, 0xBB})
+
+			// 发送 task-finished 终态
+			finishedResp := map[string]any{
+				"header": map[string]any{
+					"action":  "task-finished",
+					"task_id": taskId,
+					"event":   "task-finished",
+				},
+				"payload": map[string]any{},
+			}
+			finishedBytes, _ := json.Marshal(finishedResp)
+			_ = conn.Write(ctx, websocket.MessageText, finishedBytes)
+
+			_, _, _ = conn.Read(ctx)
+		}))
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+		cfg := &database.TTSConfig{
+			Endpoint: wsURL,
+			APIKey:   "sk-test-empty-binary-valid",
+			Model:    TargetTTSModel,
+		}
+
+		client, err := NewTTSClient(cfg, "longxiaochun")
+		if err != nil {
+			t.Fatalf("NewTTSClient error: %v", err)
+		}
+
+		stream, err := client.CreateStream(context.Background())
+		if err != nil {
+			t.Fatalf("CreateStream error: %v", err)
+		}
+		defer stream.Close()
+
+		var receivedPCM []byte
+		err = stream.SynthesizeSentence(context.Background(), "空帧后有有效音频", func(ctx context.Context, pcm []byte) error {
+			receivedPCM = append(receivedPCM, pcm...)
+			return nil
+		})
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(receivedPCM) != 2 || receivedPCM[0] != 0xAA || receivedPCM[1] != 0xBB {
+			t.Fatalf("expected [0xAA, 0xBB], got %v", receivedPCM)
+		}
+
+		_ = stream.Close()
+
+		select {
+		case <-serverDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timeout waiting for server handler to complete")
+		}
+	})
+}
+
+func TestTTSStream_Validation_OnPCMCallbackError(t *testing.T) {
+	var (
+		cancelReceived atomic.Bool
+		serverDone     = make(chan struct{})
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			close(serverDone)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		defer close(serverDone)
+
+		ctx := r.Context()
+
+		taskId, err := mockReadRunTask(ctx, conn)
+		if err != nil {
+			return
+		}
+
+		startedResp := map[string]any{
+			"header": map[string]any{
+				"action":  "task-started",
+				"task_id": taskId,
+				"event":   "task-started",
+			},
+			"payload": map[string]any{},
+		}
+		startedBytes, _ := json.Marshal(startedResp)
+		if err := conn.Write(ctx, websocket.MessageText, startedBytes); err != nil {
+			return
+		}
+
+		if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+			return
+		}
+
+		// 发送第一包音频
+		if err := conn.Write(ctx, websocket.MessageBinary, []byte{0x01, 0x02}); err != nil {
+			return
+		}
+
+		// 持续读取客户端在 onPCM 出错后发出的 cancel 或断开
+		for {
+			msgType, data, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+			if msgType == websocket.MessageText {
+				var finishMsg ttsFinishTaskMessage
+				if err := json.Unmarshal(data, &finishMsg); err == nil {
+					if finishMsg.Payload.Input.Directive == "cancel" {
+						cancelReceived.Store(true)
+					}
+				}
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &database.TTSConfig{
+		Endpoint: wsURL,
+		APIKey:   "sk-test-callback-err",
+		Model:    TargetTTSModel,
+	}
+
+	client, err := NewTTSClient(cfg, "longxiaochun")
+	if err != nil {
+		t.Fatalf("NewTTSClient error: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream error: %v", err)
+	}
+	defer stream.Close()
+
+	customErr := errors.New("custom consumer buffer overflow error")
+	err = stream.SynthesizeSentence(context.Background(), "测试 onPCM 返回错误", func(ctx context.Context, pcm []byte) error {
+		return customErr
+	})
+
+	if !errors.Is(err, customErr) {
+		t.Fatalf("expected custom error %v, got: %v", customErr, err)
+	}
+
+	ttsStream, ok := stream.(*TTSStream)
+	if !ok {
+		t.Fatalf("expected *TTSStream instance, got %T", stream)
+	}
+
+	ttsStream.mu.Lock()
+	stateVal := ttsStream.state
+	ttsStream.mu.Unlock()
+	if stateVal != stateFailed {
+		t.Errorf("expected stateFailed, got %v", stateVal)
+	}
+
+	nextErr := stream.SynthesizeSentence(context.Background(), "后续调用应拒绝", func(ctx context.Context, pcm []byte) error {
+		return nil
+	})
+	if !errors.Is(nextErr, ErrStreamFailed) {
+		t.Fatalf("expected ErrStreamFailed on subsequent call, got: %v", nextErr)
+	}
+
+	select {
+	case <-serverDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for server handler to complete")
+	}
+
+	if !cancelReceived.Load() {
+		t.Error("expected server to receive cancel finish-task directive")
+	}
+}
+
+func TestTTSStream_Cancel_OuterContextCanceled(t *testing.T) {
+	var (
+		cancelReceived atomic.Bool
+		serverDone     = make(chan struct{})
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			close(serverDone)
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+		defer close(serverDone)
+
+		ctx := r.Context()
+
+		taskId, err := mockReadRunTask(ctx, conn)
+		if err != nil {
+			return
+		}
+
+		startedResp := map[string]any{
+			"header": map[string]any{
+				"action":  "task-started",
+				"task_id": taskId,
+				"event":   "task-started",
+			},
+			"payload": map[string]any{},
+		}
+		startedBytes, _ := json.Marshal(startedResp)
+		if err := conn.Write(ctx, websocket.MessageText, startedBytes); err != nil {
+			return
+		}
+
+		if err := mockReadContinueAndFinish(ctx, conn, taskId); err != nil {
+			return
+		}
+
+		for {
+			msgType, data, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+			if msgType == websocket.MessageText {
+				var finishMsg ttsFinishTaskMessage
+				if err := json.Unmarshal(data, &finishMsg); err == nil {
+					if finishMsg.Payload.Input.Directive == "cancel" {
+						cancelReceived.Store(true)
+					}
+				}
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	cfg := &database.TTSConfig{
+		Endpoint: wsURL,
+		APIKey:   "sk-test-ctx-cancel",
+		Model:    TargetTTSModel,
+	}
+
+	client, err := NewTTSClient(cfg, "longxiaochun")
+	if err != nil {
+		t.Fatalf("NewTTSClient error: %v", err)
+	}
+
+	stream, err := client.CreateStream(context.Background())
+	if err != nil {
+		t.Fatalf("CreateStream error: %v", err)
+	}
+	defer stream.Close()
+
+	outerCtx, outerCancel := context.WithCancel(context.Background())
+	time.AfterFunc(30*time.Millisecond, outerCancel)
+
+	err = stream.SynthesizeSentence(outerCtx, "测试外部 context 取消", func(ctx context.Context, pcm []byte) error {
+		return nil
+	})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", err)
+	}
+
+	ttsStream, ok := stream.(*TTSStream)
+	if !ok {
+		t.Fatalf("expected *TTSStream instance, got %T", stream)
+	}
+
+	ttsStream.mu.Lock()
+	stateVal := ttsStream.state
+	ttsStream.mu.Unlock()
+	if stateVal != stateFailed {
+		t.Errorf("expected stateFailed, got %v", stateVal)
+	}
+
+	select {
+	case <-serverDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for server handler to complete")
+	}
+}
