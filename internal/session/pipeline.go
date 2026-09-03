@@ -571,15 +571,12 @@ func (p *TurnPipeline) orchestrateLLMAndTTS(turn *activeTurn, sessionId string, 
 	splitter := NewSentenceSplitter()
 
 	sendSentence := func(sentence string) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case sentenceCh <- sentence:
+			return nil
 		}
-		return nil
 	}
 
 	currentIteration := 0
@@ -623,37 +620,14 @@ func (p *TurnPipeline) orchestrateLLMAndTTS(turn *activeTurn, sessionId string, 
 		return
 	}
 
-	if ctx.Err() != nil {
-		return
-	}
-
 	// 刷新末尾残句
-	remaining := splitter.Flush()
-	for _, sentence := range remaining {
+	for _, sentence := range splitter.Flush() {
 		if err := sendSentence(sentence); err != nil {
-			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
-				return
-			}
-			p.logger.Warn("failed to deliver flushed sentence",
-				"error", err,
-				"session_id", sessionId,
-				"turn_id", turnId,
-			)
-			p.emit(turnEvent{
-				turnId: turnId,
-				typ:    turnEventTurnFailed,
-				err:    err,
-				fatal:  true,
-			})
 			return
 		}
 	}
 
 	closeSentenceCh()
-
-	if ctx.Err() != nil {
-		return
-	}
 
 	select {
 	case <-ctx.Done():
@@ -662,10 +636,6 @@ func (p *TurnPipeline) orchestrateLLMAndTTS(turn *activeTurn, sessionId string, 
 		if pcmErr != nil {
 			return
 		}
-	}
-
-	if ctx.Err() != nil {
-		return
 	}
 
 	// 文本成功提交至历史
