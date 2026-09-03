@@ -35,15 +35,13 @@ func createTestAgent(t *testing.T, db *Database, ctx context.Context, name strin
 	}
 
 	tts := &TTSConfig{
-		Name:                "测试TTS-" + name,
-		Provider:            "dashscope",
-		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
-		Model:               "cosyvoice-v1",
-		Voices:              `["voice1"]`,
-		ConnectTimeoutMS:    5000,
-		FirstAudioTimeoutMS: 5000,
-		SentenceTimeoutMS:   10000,
-		Enabled:             true,
+		Name:             "测试TTS-" + name,
+		Provider:         "dashscope",
+		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+		Model:            "cosyvoice-v1",
+		Voices:           `["voice1"]`,
+		ConnectTimeoutMS: 5000,
+		Enabled:          true,
 	}
 	if err := db.CreateTTSConfig(ctx, tts); err != nil {
 		t.Fatalf("create test tts failed: %v", err)
@@ -379,15 +377,13 @@ func TestResolveAgentRuntimeSnapshotByDeviceType(t *testing.T) {
 	}
 
 	tts := &TTSConfig{
-		Name:                "TTS-Snap",
-		Provider:            "dashscope",
-		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
-		Model:               "cosyvoice-v1",
-		Voices:              `["voice1"]`,
-		ConnectTimeoutMS:    5000,
-		FirstAudioTimeoutMS: 5000,
-		SentenceTimeoutMS:   10000,
-		Enabled:             true,
+		Name:             "TTS-Snap",
+		Provider:         "dashscope",
+		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+		Model:            "cosyvoice-v1",
+		Voices:           `["voice1"]`,
+		ConnectTimeoutMS: 5000,
+		Enabled:          true,
 	}
 	if err := db.CreateTTSConfig(ctx, tts); err != nil {
 		t.Fatalf("create tts: %v", err)

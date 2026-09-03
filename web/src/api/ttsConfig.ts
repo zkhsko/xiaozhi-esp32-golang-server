@@ -8,8 +8,6 @@ export interface TTSConfigItem {
   voices: string
   proxy_url: string
   connect_timeout_ms: number
-  first_audio_timeout_ms: number
-  sentence_timeout_ms: number
   enabled: boolean
   created_at: string
   updated_at: string
@@ -46,8 +44,6 @@ export interface SaveTTSConfigParams {
   voices?: string
   proxy_url?: string
   connect_timeout_ms?: number
-  first_audio_timeout_ms?: number
-  sentence_timeout_ms?: number
   enabled?: boolean
 }
 

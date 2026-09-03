@@ -91,15 +91,13 @@ func TestFactory_CreateClients(t *testing.T) {
 
 	for _, p := range []string{"dashscope", ""} {
 		ttsCfg := &database.TTSConfig{
-			Provider:            p,
-			Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
-			APIKey:              "test-key",
-			Model:               "cosyvoice-v1",
-			Voices:              `["voice1"]`,
-			ConnectTimeoutMS:    5000,
-			FirstAudioTimeoutMS: 5000,
-			SentenceTimeoutMS:   10000,
-			ProxyURL:            "http://127.0.0.1:8080",
+			Provider:         p,
+			Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+			APIKey:           "test-key",
+			Model:            "cosyvoice-v1",
+			Voices:           `["voice1"]`,
+			ConnectTimeoutMS: 5000,
+			ProxyURL:         "http://127.0.0.1:8080",
 		}
 		ttsClient, err := CreateTTSClient(ttsCfg, "voice1", 100)
 		if err != nil {
@@ -111,14 +109,12 @@ func TestFactory_CreateClients(t *testing.T) {
 	}
 
 	testTTSCfg := &database.TTSConfig{
-		Provider:            "dashscope",
-		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
-		APIKey:              "test-key",
-		Model:               "cosyvoice-v1",
-		Voices:              `["voice1"]`,
-		ConnectTimeoutMS:    5000,
-		FirstAudioTimeoutMS: 5000,
-		SentenceTimeoutMS:   10000,
+		Provider:         "dashscope",
+		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+		APIKey:           "test-key",
+		Model:            "cosyvoice-v1",
+		Voices:           `["voice1"]`,
+		ConnectTimeoutMS: 5000,
 	}
 	// 5. TTS Empty voice validation
 	if _, err := CreateTTSClient(testTTSCfg, "  ", 100); err == nil {

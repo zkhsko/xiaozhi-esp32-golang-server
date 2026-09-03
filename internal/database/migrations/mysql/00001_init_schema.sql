@@ -129,8 +129,6 @@ CREATE TABLE IF NOT EXISTS `tts_config` (
     `voices` TEXT NOT NULL COMMENT '支持的音色列表（JSON 格式）',
     `proxy_url` VARCHAR(1024) NOT NULL DEFAULT '' COMMENT '代理地址（非空即启用）',
     `connect_timeout_ms` BIGINT NOT NULL DEFAULT 5000 COMMENT '连接超时毫秒',
-    `first_audio_timeout_ms` BIGINT NOT NULL DEFAULT 5000 COMMENT '首音频超时毫秒',
-    `sentence_timeout_ms` BIGINT NOT NULL DEFAULT 10000 COMMENT '单句超时毫秒',
     `enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否允许 Agent 引用',
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',

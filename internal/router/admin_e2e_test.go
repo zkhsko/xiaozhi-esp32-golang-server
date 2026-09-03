@@ -323,16 +323,14 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 
 	// 21. TTS 配置 E2E 创建
 	createTTSBody, _ := json.Marshal(SaveTTSConfigRequest{
-		Name:                "E2E 百炼 TTS",
-		Provider:            "dashscope",
-		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
-		APIKey:              "sk-e2e-tts-key",
-		Model:               "cosyvoice-v1",
-		Voices:              `["longanlingxi", "longxiaochun"]`,
-		ProxyURL:            "http://127.0.0.1:7890",
-		ConnectTimeoutMS:    5000,
-		FirstAudioTimeoutMS: 5000,
-		SentenceTimeoutMS:   10000,
+		Name:             "E2E 百炼 TTS",
+		Provider:         "dashscope",
+		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+		APIKey:           "sk-e2e-tts-key",
+		Model:            "cosyvoice-v1",
+		Voices:           `["longanlingxi", "longxiaochun"]`,
+		ProxyURL:         "http://127.0.0.1:7890",
+		ConnectTimeoutMS: 5000,
 	})
 	reqTTSCreate := httptest.NewRequest(http.MethodPost, "/admin-api/tts-config/save", bytes.NewReader(createTTSBody))
 	reqTTSCreate.Header.Set("Content-Type", "application/json")
@@ -394,7 +392,7 @@ func TestAdminCredentialEndToEnd(t *testing.T) {
 	_ = db.CreateASRConfig(context.Background(), asrCfg)
 	llmCfg := &database.LLMConfig{Name: "E2E-Agent-LLM", Provider: "dashscope", Endpoint: "https://llm.com", Model: "m2", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
 	_ = db.CreateLLMConfig(context.Background(), llmCfg)
-	ttsCfg := &database.TTSConfig{Name: "E2E-Agent-TTS", Provider: "dashscope", Endpoint: "wss://tts.com", Model: "m3", Voices: "[]", ConnectTimeoutMS: 5000, FirstAudioTimeoutMS: 5000, SentenceTimeoutMS: 10000, Enabled: true}
+	ttsCfg := &database.TTSConfig{Name: "E2E-Agent-TTS", Provider: "dashscope", Endpoint: "wss://tts.com", Model: "m3", Voices: "[]", ConnectTimeoutMS: 5000, Enabled: true}
 	_ = db.CreateTTSConfig(context.Background(), ttsCfg)
 
 	// 26. Agent 配置 E2E 创建

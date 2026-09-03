@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -24,15 +23,13 @@ const maxTTSReadMessageBytes = 4 * 1024 * 1024
 
 // TTSClient 实现基于 DashScope WebSocket 流式协议的语音合成客户端。
 type TTSClient struct {
-	endpoint          string
-	apiKey            string
-	model             string
-	voice             string
-	connectTimeout    time.Duration
-	firstAudioTimeout time.Duration
-	sentenceTimeout   time.Duration
-	queueCapacity     int
-	httpClient        *http.Client
+	endpoint       string
+	apiKey         string
+	model          string
+	voice          string
+	connectTimeout time.Duration
+	queueCapacity  int
+	httpClient     *http.Client
 }
 
 // NewTTSClient 基于数据库 TTS 配置实体与 Agent 指定音色构造 DashScope TTS 客户端实例。
@@ -59,16 +56,6 @@ func NewTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (*TTSClie
 		timeout = 10 * time.Second
 	}
 
-	firstAudioTimeout := time.Duration(cfg.FirstAudioTimeoutMS) * time.Millisecond
-	if firstAudioTimeout <= 0 {
-		firstAudioTimeout = 5 * time.Second
-	}
-
-	sentenceTimeout := time.Duration(cfg.SentenceTimeoutMS) * time.Millisecond
-	if sentenceTimeout <= 0 {
-		sentenceTimeout = 20 * time.Second
-	}
-
 	if queueCap <= 0 {
 		queueCap = 100
 	}
@@ -87,15 +74,13 @@ func NewTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (*TTSClie
 	}
 
 	return &TTSClient{
-		endpoint:          strings.TrimSpace(cfg.Endpoint),
-		apiKey:            strings.TrimSpace(cfg.APIKey),
-		model:             strings.TrimSpace(cfg.Model),
-		voice:             trimmedVoice,
-		connectTimeout:    timeout,
-		firstAudioTimeout: firstAudioTimeout,
-		sentenceTimeout:   sentenceTimeout,
-		queueCapacity:     queueCap,
-		httpClient:        httpClient,
+		endpoint:       strings.TrimSpace(cfg.Endpoint),
+		apiKey:         strings.TrimSpace(cfg.APIKey),
+		model:          strings.TrimSpace(cfg.Model),
+		voice:          trimmedVoice,
+		connectTimeout: timeout,
+		queueCapacity:  queueCap,
+		httpClient:     httpClient,
 	}, nil
 }
 
@@ -261,13 +246,11 @@ func (c *TTSClient) CreateStream(ctx context.Context) (ai.TTSStream, error) {
 	streamCtx, streamCancel := context.WithCancel(ctx)
 
 	stream := &TTSStream{
-		conn:              conn,
-		taskId:            taskId,
-		firstAudioTimeout: c.firstAudioTimeout,
-		sentenceTimeout:   c.sentenceTimeout,
-		ctx:               streamCtx,
-		cancel:            streamCancel,
-		pcmCh:             make(chan []byte, c.queueCapacity),
+		conn:   conn,
+		taskId: taskId,
+		ctx:    streamCtx,
+		cancel: streamCancel,
+		pcmCh:  make(chan []byte, c.queueCapacity),
 	}
 
 	go stream.readLoop()
@@ -280,22 +263,11 @@ type TTSStream struct {
 	conn   *websocket.Conn
 	taskId string
 
-	firstAudioTimeout time.Duration
-	sentenceTimeout   time.Duration
-
 	ctx       context.Context
 	cancel    context.CancelFunc
 	closeOnce sync.Once
 
 	writeMu sync.Mutex
-
-	timerMu            sync.Mutex
-	firstAudioTimer    *time.Timer
-	sentenceTimer      *time.Timer
-	firstAudioSent     bool
-	firstAudioReceived atomic.Bool
-	firstAudioTimedOut atomic.Bool
-	sentenceTimedOut   atomic.Bool
 
 	mu       sync.RWMutex
 	closed   bool
@@ -304,81 +276,8 @@ type TTSStream struct {
 	pcmCh    chan []byte
 }
 
-func (s *TTSStream) handleFirstAudioTimeout() {
-	if s.firstAudioReceived.CompareAndSwap(false, true) {
-		s.firstAudioTimedOut.Store(true)
-		s.recordError(fmt.Errorf("tts first audio timeout (%v): %w", s.firstAudioTimeout, context.DeadlineExceeded))
-		s.cancel()
-		if s.conn != nil {
-			_ = s.conn.Close(websocket.StatusPolicyViolation, "tts first audio timeout")
-		}
-	}
-}
-
-func (s *TTSStream) handleSentenceTimeout() {
-	s.mu.RLock()
-	isClosed := s.closed
-	s.mu.RUnlock()
-	if isClosed || s.ctx.Err() != nil {
-		return
-	}
-
-	s.sentenceTimedOut.Store(true)
-	s.recordError(fmt.Errorf("tts sentence timeout (%v): %w", s.sentenceTimeout, context.DeadlineExceeded))
-	s.cancel()
-	if s.conn != nil {
-		_ = s.conn.Close(websocket.StatusPolicyViolation, "tts sentence timeout")
-	}
-}
-
-func (s *TTSStream) resetSentenceTimer() {
-	if s.sentenceTimeout <= 0 {
-		return
-	}
-
-	s.timerMu.Lock()
-	defer s.timerMu.Unlock()
-
-	s.mu.RLock()
-	isClosed := s.closed
-	s.mu.RUnlock()
-	if isClosed || s.ctx.Err() != nil {
-		return
-	}
-
-	if s.sentenceTimer != nil {
-		s.sentenceTimer.Stop()
-	}
-	s.sentenceTimer = time.AfterFunc(s.sentenceTimeout, s.handleSentenceTimeout)
-}
-
-func (s *TTSStream) stopTimers() {
-	s.timerMu.Lock()
-	defer s.timerMu.Unlock()
-
-	if s.firstAudioTimer != nil {
-		s.firstAudioTimer.Stop()
-		s.firstAudioTimer = nil
-	}
-	if s.sentenceTimer != nil {
-		s.sentenceTimer.Stop()
-		s.sentenceTimer = nil
-	}
-}
-
-func (s *TTSStream) timeoutOrFallbackErr(fallbackErr error) error {
-	if s.firstAudioTimedOut.Load() {
-		return fmt.Errorf("tts first audio timeout (%v): %w", s.firstAudioTimeout, context.DeadlineExceeded)
-	}
-	if s.sentenceTimedOut.Load() {
-		return fmt.Errorf("tts sentence timeout (%v): %w", s.sentenceTimeout, context.DeadlineExceeded)
-	}
-	return fallbackErr
-}
-
 func (s *TTSStream) readLoop() {
 	defer func() {
-		s.stopTimers()
 		if s.conn != nil {
 			_ = s.conn.Close(websocket.StatusNormalClosure, "stream closed")
 		}
@@ -388,13 +287,7 @@ func (s *TTSStream) readLoop() {
 	for {
 		msgType, data, err := s.conn.Read(s.ctx)
 		if err != nil {
-			if s.firstAudioTimedOut.Load() {
-				s.recordError(fmt.Errorf("tts first audio timeout (%v): %w", s.firstAudioTimeout, context.DeadlineExceeded))
-			} else if s.sentenceTimedOut.Load() {
-				s.recordError(fmt.Errorf("tts sentence timeout (%v): %w", s.sentenceTimeout, context.DeadlineExceeded))
-			} else {
-				s.recordError(fmt.Errorf("read dashscope tts websocket: %w", err))
-			}
+			s.recordError(fmt.Errorf("read dashscope tts websocket: %w", err))
 			return
 		}
 
@@ -402,17 +295,6 @@ func (s *TTSStream) readLoop() {
 			if len(data) == 0 {
 				continue
 			}
-
-			if s.firstAudioReceived.CompareAndSwap(false, true) {
-				s.timerMu.Lock()
-				if s.firstAudioTimer != nil {
-					s.firstAudioTimer.Stop()
-					s.firstAudioTimer = nil
-				}
-				s.timerMu.Unlock()
-			}
-
-			s.resetSentenceTimer()
 
 			chunk := make([]byte, len(data))
 			copy(chunk, data)
@@ -438,11 +320,9 @@ func (s *TTSStream) readLoop() {
 
 			switch event {
 			case "task-finished":
-				s.stopTimers()
 				return
 
 			case "task-failed":
-				s.stopTimers()
 				code := resp.Header.ErrorCode
 				if code == "" {
 					code = "UNKNOWN_ERROR"
@@ -465,11 +345,7 @@ func (s *TTSStream) recordError(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err == nil {
-		if s.firstAudioTimedOut.Load() {
-			s.err = fmt.Errorf("tts first audio timeout (%v): %w", s.firstAudioTimeout, context.DeadlineExceeded)
-		} else if s.sentenceTimedOut.Load() {
-			s.err = fmt.Errorf("tts sentence timeout (%v): %w", s.sentenceTimeout, context.DeadlineExceeded)
-		} else if s.closed {
+		if s.closed {
 			s.err = context.Canceled
 		} else if s.ctx.Err() != nil {
 			s.err = s.ctx.Err()
@@ -489,7 +365,7 @@ func (s *TTSStream) SendSentence(ctx context.Context, text string) error {
 		return err
 	}
 	if err := s.ctx.Err(); err != nil {
-		return s.timeoutOrFallbackErr(err)
+		return err
 	}
 
 	s.mu.RLock()
@@ -553,17 +429,6 @@ func (s *TTSStream) SendSentence(ctx context.Context, text string) error {
 		return fmt.Errorf("write continue-task: %w", err)
 	}
 
-	s.timerMu.Lock()
-	if !s.firstAudioSent {
-		s.firstAudioSent = true
-		if s.firstAudioTimeout > 0 && !s.firstAudioReceived.Load() {
-			s.firstAudioTimer = time.AfterFunc(s.firstAudioTimeout, s.handleFirstAudioTimeout)
-		}
-	}
-	s.timerMu.Unlock()
-
-	s.resetSentenceTimer()
-
 	return nil
 }
 
@@ -573,7 +438,7 @@ func (s *TTSStream) Finish(ctx context.Context) error {
 		return err
 	}
 	if err := s.ctx.Err(); err != nil {
-		return s.timeoutOrFallbackErr(err)
+		return err
 	}
 
 	s.writeMu.Lock()
@@ -614,8 +479,6 @@ func (s *TTSStream) Finish(ctx context.Context) error {
 		return fmt.Errorf("write finish-task: %w", err)
 	}
 
-	s.resetSentenceTimer()
-
 	return nil
 }
 
@@ -626,12 +489,6 @@ func (s *TTSStream) NextPCM(ctx context.Context) ([]byte, error) {
 	select {
 	case chunk, ok := <-s.pcmCh:
 		if !ok {
-			if s.firstAudioTimedOut.Load() {
-				return nil, fmt.Errorf("tts first audio timeout (%v): %w", s.firstAudioTimeout, context.DeadlineExceeded)
-			}
-			if s.sentenceTimedOut.Load() {
-				return nil, fmt.Errorf("tts sentence timeout (%v): %w", s.sentenceTimeout, context.DeadlineExceeded)
-			}
 			s.mu.RLock()
 			err := s.err
 			closed := s.closed
@@ -661,13 +518,6 @@ func (s *TTSStream) NextPCM(ctx context.Context) ([]byte, error) {
 		default:
 		}
 
-		if s.firstAudioTimedOut.Load() {
-			return nil, fmt.Errorf("tts first audio timeout (%v): %w", s.firstAudioTimeout, context.DeadlineExceeded)
-		}
-		if s.sentenceTimedOut.Load() {
-			return nil, fmt.Errorf("tts sentence timeout (%v): %w", s.sentenceTimeout, context.DeadlineExceeded)
-		}
-
 		s.mu.RLock()
 		err := s.err
 		closed := s.closed
@@ -684,8 +534,6 @@ func (s *TTSStream) NextPCM(ctx context.Context) ([]byte, error) {
 
 // Cancel 尝试向 DashScope 服务端发送 cancel-task 结束指令并安全关闭会话。
 func (s *TTSStream) Cancel(ctx context.Context) error {
-	s.stopTimers()
-
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -715,8 +563,6 @@ func (s *TTSStream) Cancel(ctx context.Context) error {
 func (s *TTSStream) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
-		s.stopTimers()
-
 		s.mu.Lock()
 		s.closed = true
 		s.mu.Unlock()

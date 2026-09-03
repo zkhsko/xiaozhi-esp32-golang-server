@@ -46,16 +46,14 @@ func TestWebSocketDynamicLoading_EndToEnd(t *testing.T) {
 	}
 
 	ttsA := &database.TTSConfig{
-		Name:                "TTS-A",
-		Provider:            "dashscope",
-		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
-		APIKey:              "key-a",
-		Model:               "cosyvoice-v1",
-		Voices:              `["voice-a"]`,
-		ConnectTimeoutMS:    5000,
-		FirstAudioTimeoutMS: 5000,
-		SentenceTimeoutMS:   10000,
-		Enabled:             true,
+		Name:             "TTS-A",
+		Provider:         "dashscope",
+		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+		APIKey:           "key-a",
+		Model:            "cosyvoice-v1",
+		Voices:           `["voice-a"]`,
+		ConnectTimeoutMS: 5000,
+		Enabled:          true,
 	}
 	if err := db.CreateTTSConfig(ctx, ttsA); err != nil {
 		t.Fatalf("create ttsA: %v", err)
@@ -103,16 +101,14 @@ func TestWebSocketDynamicLoading_EndToEnd(t *testing.T) {
 	}
 
 	ttsB := &database.TTSConfig{
-		Name:                "TTS-B",
-		Provider:            "dashscope",
-		Endpoint:            "wss://dashscope.aliyuncs.com/api-v1/ws",
-		APIKey:              "key-b",
-		Model:               "cosyvoice-v2",
-		Voices:              `["voice-b"]`,
-		ConnectTimeoutMS:    6000,
-		FirstAudioTimeoutMS: 6000,
-		SentenceTimeoutMS:   12000,
-		Enabled:             true,
+		Name:             "TTS-B",
+		Provider:         "dashscope",
+		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
+		APIKey:           "key-b",
+		Model:            "cosyvoice-v2",
+		Voices:           `["voice-b"]`,
+		ConnectTimeoutMS: 6000,
+		Enabled:          true,
 	}
 	if err := db.CreateTTSConfig(ctx, ttsB); err != nil {
 		t.Fatalf("create ttsB: %v", err)

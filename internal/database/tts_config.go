@@ -50,10 +50,6 @@ var (
 	ErrInvalidTTSProxyURLScheme = errors.New("tts proxy_url scheme must be http, https, socks5, or socks5h")
 	// ErrInvalidTTSConnectTimeout 表示 TTS 连接超时不在合法范围（3000 ~ 30000 毫秒）。
 	ErrInvalidTTSConnectTimeout = errors.New("tts connect_timeout_ms must be between 3000 and 30000 ms")
-	// ErrInvalidTTSFirstAudioTimeout 表示 TTS 首音频超时不在合法范围（3000 ~ 30000 毫秒）。
-	ErrInvalidTTSFirstAudioTimeout = errors.New("tts first_audio_timeout_ms must be between 3000 and 30000 ms")
-	// ErrInvalidTTSSentenceTimeout 表示 TTS 单句超时不在合法范围（5000 ~ 60000 毫秒）。
-	ErrInvalidTTSSentenceTimeout = errors.New("tts sentence_timeout_ms must be between 5000 and 60000 ms")
 )
 
 // TTSConfig 映射 tts_config 语音合成 TTS 配置表。
@@ -72,26 +68,22 @@ var (
 // - voices: 支持的音色列表（限制 JSON 格式，最大 1MB，默认为 '[]'），文本类型。
 // - proxy_url: 代理服务器地址（支持 http/https/socks5/socks5h，非空即启用），最大 1024 字节。
 // - connect_timeout_ms: 连接超时时间（毫秒），合法范围 3000 ~ 30000。
-// - first_audio_timeout_ms: 首音频超时时间（毫秒），合法范围 3000 ~ 30000。
-// - sentence_timeout_ms: 单句超时时间（毫秒），合法范围 5000 ~ 60000。
 // - enabled: 是否允许 Agent 引用（布尔值，默认 true）。
 // - created_at: 创建时间。
 // - updated_at: 更新时间。
 type TTSConfig struct {
-	Id                  uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	Name                string    `gorm:"column:name;size:128;not null" json:"name"`
-	Provider            string    `gorm:"column:provider;size:64;not null;default:''" json:"provider"`
-	Endpoint            string    `gorm:"column:endpoint;size:1024;not null" json:"endpoint"`
-	APIKey              string    `gorm:"column:api_key;size:1024;not null;default:''" json:"-"`
-	Model               string    `gorm:"column:model;size:255;not null" json:"model"`
-	Voices              string    `gorm:"column:voices;type:text;not null" json:"voices"`
-	ProxyURL            string    `gorm:"column:proxy_url;size:1024;not null;default:''" json:"proxy_url"`
-	ConnectTimeoutMS    int64     `gorm:"column:connect_timeout_ms;not null;default:5000" json:"connect_timeout_ms"`
-	FirstAudioTimeoutMS int64     `gorm:"column:first_audio_timeout_ms;not null;default:5000" json:"first_audio_timeout_ms"`
-	SentenceTimeoutMS   int64     `gorm:"column:sentence_timeout_ms;not null;default:10000" json:"sentence_timeout_ms"`
-	Enabled             bool      `gorm:"column:enabled;not null" json:"enabled"`
-	CreatedAt           time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
-	UpdatedAt           time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
+	Id               uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Name             string    `gorm:"column:name;size:128;not null" json:"name"`
+	Provider         string    `gorm:"column:provider;size:64;not null;default:''" json:"provider"`
+	Endpoint         string    `gorm:"column:endpoint;size:1024;not null" json:"endpoint"`
+	APIKey           string    `gorm:"column:api_key;size:1024;not null;default:''" json:"-"`
+	Model            string    `gorm:"column:model;size:255;not null" json:"model"`
+	Voices           string    `gorm:"column:voices;type:text;not null" json:"voices"`
+	ProxyURL         string    `gorm:"column:proxy_url;size:1024;not null;default:''" json:"proxy_url"`
+	ConnectTimeoutMS int64     `gorm:"column:connect_timeout_ms;not null;default:5000" json:"connect_timeout_ms"`
+	Enabled          bool      `gorm:"column:enabled;not null" json:"enabled"`
+	CreatedAt        time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
+	UpdatedAt        time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
 }
 
 // TableName 指定 TTSConfig 对应的表名。
@@ -168,14 +160,6 @@ func (c *TTSConfig) Validate() error {
 
 	if c.ConnectTimeoutMS < 3000 || c.ConnectTimeoutMS > 30000 {
 		return ErrInvalidTTSConnectTimeout
-	}
-
-	if c.FirstAudioTimeoutMS < 3000 || c.FirstAudioTimeoutMS > 30000 {
-		return ErrInvalidTTSFirstAudioTimeout
-	}
-
-	if c.SentenceTimeoutMS < 5000 || c.SentenceTimeoutMS > 60000 {
-		return ErrInvalidTTSSentenceTimeout
 	}
 
 	return nil
@@ -255,18 +239,16 @@ func (d *Database) UpdateTTSConfigById(ctx context.Context, cfg *TTSConfig) erro
 	}
 
 	updates := map[string]any{
-		"name":                   strings.TrimSpace(cfg.Name),
-		"provider":               strings.TrimSpace(cfg.Provider),
-		"endpoint":               strings.TrimSpace(cfg.Endpoint),
-		"api_key":                cfg.APIKey,
-		"model":                  strings.TrimSpace(cfg.Model),
-		"voices":                 cfg.Voices,
-		"proxy_url":              strings.TrimSpace(cfg.ProxyURL),
-		"connect_timeout_ms":     cfg.ConnectTimeoutMS,
-		"first_audio_timeout_ms": cfg.FirstAudioTimeoutMS,
-		"sentence_timeout_ms":    cfg.SentenceTimeoutMS,
-		"enabled":                cfg.Enabled,
-		"updated_at":             time.Now(),
+		"name":               strings.TrimSpace(cfg.Name),
+		"provider":           strings.TrimSpace(cfg.Provider),
+		"endpoint":           strings.TrimSpace(cfg.Endpoint),
+		"api_key":            cfg.APIKey,
+		"model":              strings.TrimSpace(cfg.Model),
+		"voices":             cfg.Voices,
+		"proxy_url":          strings.TrimSpace(cfg.ProxyURL),
+		"connect_timeout_ms": cfg.ConnectTimeoutMS,
+		"enabled":            cfg.Enabled,
+		"updated_at":         time.Now(),
 	}
 
 	res := d.gormDB.WithContext(ctx).
