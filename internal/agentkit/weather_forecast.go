@@ -44,7 +44,7 @@ type WeatherForecastConfig struct {
 type GetWeatherForecastInput struct {
 	Location string `json:"location,omitempty" jsonschema:"description=要查询天气预报的城市名称、拼音或地点代码（可选，未指定时默认使用预设地点）"`
 	Start    *int   `json:"start,omitempty" jsonschema:"description=预报起始天偏移（可选，0表示今天，1表示明天，2表示后天，默认0）"`
-	Days     *int   `json:"days,omitempty" jsonschema:"description=查询未来预报天数（可选，1-15天，默认3天）"`
+	Days     *int   `json:"days,omitempty" jsonschema:"description=查询预报天数（可选，1-15天，默认3天，用来获取最近15天的天气）"`
 }
 
 // WeatherDailyInfo 描述单日的天气预报详细信息。
@@ -364,7 +364,7 @@ func ParseWeatherForecastInput(input any) GetWeatherForecastInput {
 func GetWeatherForecastTool(client *WeatherForecastClient) ai.Tool {
 	return ai.Tool{
 		Name:        ToolGetWeatherForecast,
-		Description: "获取指定地点或预设地点的未来几天天气预报（包括每日白天与夜间天气现象、最高最低气温、风向风力、降水概率等）。当用户询问未来天气预报、明天/后天天气、未来几天气温趋势等问题时调用此工具",
+		Description: "获取指定地点或预设地点最近15天的天气预报（包括每日白天与夜间天气现象、最高最低气温、风向风力、降水概率等）。用来获取最近15天的天气预报，包括今天的天气也用此工具查询。当用户询问今天天气如何、今天最高/最低气温、明天/后天天气、未来几天天气预报、近期15天天气趋势等问题时调用此工具",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -374,7 +374,7 @@ func GetWeatherForecastTool(client *WeatherForecastClient) ai.Tool {
 				},
 				"days": map[string]any{
 					"type":        "integer",
-					"description": "预报天数（1-15天，可选，默认3天）",
+					"description": "预报天数（1-15天，可选，默认3天，用来获取最近15天的天气）",
 				},
 				"start": map[string]any{
 					"type":        "integer",

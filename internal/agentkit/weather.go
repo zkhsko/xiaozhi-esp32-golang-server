@@ -48,7 +48,7 @@ type WeatherConfig struct {
 
 // GetCurrentWeatherInput 定义大模型调用获取实时天气工具的入参。
 type GetCurrentWeatherInput struct {
-	Location string `json:"location,omitempty" jsonschema:"description=要查询天气的城市名称、拼音或地点代码（可选，未指定时默认使用预设地点）"`
+	Location string `json:"location,omitempty" jsonschema:"description=要查询实时天气的城市名称、拼音或地点代码（可选，未指定时默认使用预设地点）"`
 }
 
 // WeatherLocationInfo 描述天气查询返回的地理位置信息。
@@ -298,13 +298,13 @@ func ParseCurrentWeatherInput(input any) GetCurrentWeatherInput {
 func GetWeatherTool(client *WeatherClient) ai.Tool {
 	return ai.Tool{
 		Name:        ToolGetCurrentWeather,
-		Description: "获取指定地点或预设地点的实时天气情况（包括天气现象、温度和更新时间）。当用户询问天气、气温、下雨没、冷不冷等天气相关问题时调用此工具",
+		Description: "获取指定地点或预设地点的当前实时天气信息（包括当前时刻的天气现象、当前气温和更新时间）。当用户询问现在的实时天气、当前气温、此刻是否下雨、现在冷不冷等实时天气信息时调用此工具。若要查询包括今天在内的整天天气预报或未来预报，请使用 server.get_weather_forecast",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"location": map[string]any{
 					"type":        "string",
-					"description": "要查询天气的城市名称、拼音或城市ID（可选，不填则查询默认地点）",
+					"description": "要查询实时天气的城市名称、拼音或城市ID（可选，不填则查询默认地点）",
 				},
 			},
 		},
