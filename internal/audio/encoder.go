@@ -64,11 +64,6 @@ func NewEncoder(maxPacketBytes int) (*Encoder, error) {
 	}, nil
 }
 
-// MaxPacketBytes 返回当前编码器配置的单包最大字节数上限。
-func (e *Encoder) MaxPacketBytes() int {
-	return e.maxPacketBytes
-}
-
 // Encode 将单帧 2880 字节 16-bit signed little-endian PCM 编码为单个 Opus 包。
 // 传入数据必须严格为 2880 字节；返回的切片为独立分配的内存，确保跨异步边界安全。
 func (e *Encoder) Encode(pcmFrame []byte) ([]byte, error) {
@@ -85,26 +80,6 @@ func (e *Encoder) Encode(pcmFrame []byte) ([]byte, error) {
 	}
 
 	n, err := e.enc.Encode(e.pcmBuf, e.opusBuf)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrEncodeFailed, err)
-	}
-
-	packet := make([]byte, n)
-	copy(packet, e.opusBuf[:n])
-	return packet, nil
-}
-
-// EncodeSamples 将 1440 个 int16 采样点直接编码为单个 Opus 包。
-func (e *Encoder) EncodeSamples(samples []int16) ([]byte, error) {
-	if e == nil || e.enc == nil {
-		return nil, ErrEncoderClosed
-	}
-
-	if len(samples) != DownlinkSamplesPerFrame {
-		return nil, fmt.Errorf("%w: expected %d samples, got %d", ErrInvalidSampleCount, DownlinkSamplesPerFrame, len(samples))
-	}
-
-	n, err := e.enc.Encode(samples, e.opusBuf)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEncodeFailed, err)
 	}
@@ -176,16 +151,6 @@ func (f *PCMFramer) Flush() [][]byte {
 	return [][]byte{frame}
 }
 
-// Reset 清空分帧器内部缓冲区。
-func (f *PCMFramer) Reset() {
-	f.buf = f.buf[:0]
-}
-
-// BufferedBytes 返回当前缓冲区中尚未成帧的残余字节数。
-func (f *PCMFramer) BufferedBytes() int {
-	return len(f.buf)
-}
-
 // StreamEncoder 组合了 Opus 编码器与 PCM 分帧器，支持流式输入任意大小的 PCM 块并输出编码后的 Opus 包。
 type StreamEncoder struct {
 	encoder *Encoder
@@ -243,21 +208,6 @@ func (s *StreamEncoder) Flush() ([][]byte, error) {
 		packets = append(packets, pkt)
 	}
 	return packets, nil
-}
-
-// Reset 清空内部未成帧的残余数据。
-func (s *StreamEncoder) Reset() {
-	s.framer.Reset()
-}
-
-// BufferedBytes 返回内部尚未成帧的 PCM 残余字节数。
-func (s *StreamEncoder) BufferedBytes() int {
-	return s.framer.BufferedBytes()
-}
-
-// Encoder 返回底层持有的 Opus 编码器。
-func (s *StreamEncoder) Encoder() *Encoder {
-	return s.encoder
 }
 
 // Close 释放流式分帧编码器及其底层编码器。

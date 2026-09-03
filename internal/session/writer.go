@@ -86,11 +86,6 @@ func (w *Writer) SendText(ctx context.Context, payload []byte) error {
 	return w.enqueue(ctx, websocket.MessageText, payload)
 }
 
-// SendTextMessage 复制文本字符串并排入串行写队列。
-func (w *Writer) SendTextMessage(ctx context.Context, text string) error {
-	return w.enqueue(ctx, websocket.MessageText, []byte(text))
-}
-
 // SendBinary 复制二进制负载并排入串行写队列。
 func (w *Writer) SendBinary(ctx context.Context, payload []byte) error {
 	return w.enqueue(ctx, websocket.MessageBinary, payload)
