@@ -136,7 +136,8 @@ func TestLLMClient_Generate_StreamingAndThinkingCheck(t *testing.T) {
 
 	var streamedText strings.Builder
 	var chunkCount int
-	finalText, err := client.Generate(
+	chunksCh := make(chan ai.LLMChunk, 100)
+	res, err := client.Generate(
 		context.Background(),
 		ai.LLMRequest{
 			Messages: []ai.Message{
@@ -144,19 +145,21 @@ func TestLLMClient_Generate_StreamingAndThinkingCheck(t *testing.T) {
 				{Role: ai.RoleUser, Content: "Hello"},
 			},
 		},
-		func(ctx context.Context, chunk ai.LLMChunk) error {
-			chunkCount++
-			streamedText.WriteString(chunk.Text)
-			return nil
-		},
+		chunksCh,
 	)
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
 	}
 
+	for len(chunksCh) > 0 {
+		chunk := <-chunksCh
+		chunkCount++
+		streamedText.WriteString(chunk.Text)
+	}
+
 	expectedText := "你好，我是小智。"
-	if finalText != expectedText {
-		t.Fatalf("expected finalText %q, got %q", expectedText, finalText)
+	if res.FinalText != expectedText {
+		t.Fatalf("expected finalText %q, got %q", expectedText, res.FinalText)
 	}
 	if streamedText.String() != expectedText {
 		t.Fatalf("expected streamedText %q, got %q", expectedText, streamedText.String())
@@ -238,7 +241,8 @@ func TestLLMClient_Generate_ToolCalls_ExecutionAndLoop(t *testing.T) {
 	}
 
 	var receivedChunks []ai.LLMChunk
-	finalText, err := client.Generate(
+	chunksCh := make(chan ai.LLMChunk, 100)
+	res, err := client.Generate(
 		context.Background(),
 		ai.LLMRequest{
 			Messages: []ai.Message{
@@ -248,13 +252,13 @@ func TestLLMClient_Generate_ToolCalls_ExecutionAndLoop(t *testing.T) {
 			Tools:    []ai.Tool{timeTool},
 			MaxTurns: 8,
 		},
-		func(ctx context.Context, chunk ai.LLMChunk) error {
-			receivedChunks = append(receivedChunks, chunk)
-			return nil
-		},
+		chunksCh,
 	)
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
+	}
+	for len(chunksCh) > 0 {
+		receivedChunks = append(receivedChunks, <-chunksCh)
 	}
 
 	if !toolExecuted.Load() {
@@ -263,8 +267,8 @@ func TestLLMClient_Generate_ToolCalls_ExecutionAndLoop(t *testing.T) {
 	if requestCount.Load() != 2 {
 		t.Fatalf("expected 2 requests, got %d", requestCount.Load())
 	}
-	if finalText != "当前时间是 10:00。" {
-		t.Fatalf("expected '当前时间是 10:00。', got %q", finalText)
+	if res.FinalText != "当前时间是 10:00。" {
+		t.Fatalf("expected '当前时间是 10:00。', got %q", res.FinalText)
 	}
 	if len(receivedChunks) != 1 || receivedChunks[0].Text != "当前时间是 10:00。" {
 		t.Fatalf("unexpected received chunks: %v", receivedChunks)
@@ -612,7 +616,7 @@ func TestLLMClient_Generate_ConcurrentToolExecution(t *testing.T) {
 		},
 	}
 
-	finalText, err := client.Generate(
+	res, err := client.Generate(
 		context.Background(),
 		ai.LLMRequest{
 			Messages: []ai.Message{{Role: ai.RoleUser, Content: "test"}},
@@ -624,8 +628,8 @@ func TestLLMClient_Generate_ConcurrentToolExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate failed: %v", err)
 	}
-	if finalText != "双工具执行完毕。" {
-		t.Fatalf("expected '双工具执行完毕。', got %q", finalText)
+	if res.FinalText != "双工具执行完毕。" {
+		t.Fatalf("expected '双工具执行完毕。', got %q", res.FinalText)
 	}
 	if !tool1Executed.Load() || !tool2Executed.Load() {
 		t.Fatal("expected both tools to be executed")
@@ -832,7 +836,7 @@ func TestLLMClient_Generate_TypedStructToolResult(t *testing.T) {
 		},
 	}
 
-	finalText, err := client.Generate(
+	res, err := client.Generate(
 		context.Background(),
 		ai.LLMRequest{
 			Messages: []ai.Message{
@@ -846,8 +850,8 @@ func TestLLMClient_Generate_TypedStructToolResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate with struct tool result failed: %v", err)
 	}
-	if finalText != "当前系统时间获取完毕。" {
-		t.Fatalf("unexpected finalText %q", finalText)
+	if res.FinalText != "当前系统时间获取完毕。" {
+		t.Fatalf("unexpected finalText %q", res.FinalText)
 	}
 
 	// 验证第二轮请求中，typed struct 被正确序列化并填入 tool message
@@ -1027,7 +1031,7 @@ func TestLLMClient_Generate_DynamicDeviceMCPTool_EndToEnd(t *testing.T) {
 	}
 
 	// 3. 执行流式 Generate
-	finalText, err := llmClient.Generate(
+	res, err := llmClient.Generate(
 		ctx,
 		ai.LLMRequest{
 			Messages: []ai.Message{
@@ -1044,8 +1048,8 @@ func TestLLMClient_Generate_DynamicDeviceMCPTool_EndToEnd(t *testing.T) {
 	}
 
 	// 4. 校验最终生成的文本
-	if finalText != "音量已调节为 80。" {
-		t.Fatalf("expected final text '音量已调节为 80。', got %q", finalText)
+	if res.FinalText != "音量已调节为 80。" {
+		t.Fatalf("expected final text '音量已调节为 80。', got %q", res.FinalText)
 	}
 
 	// 5. 校验设备是否收到 tools/call 且参数为 volume: 80

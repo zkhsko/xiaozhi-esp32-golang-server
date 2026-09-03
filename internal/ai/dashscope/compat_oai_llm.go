@@ -102,17 +102,17 @@ func NewLLMClient(cfg *database.LLMConfig, opts ...option.RequestOption) (*LLMCl
 	}, nil
 }
 
-// Generate 基于上下文、请求与流式回调执行完整的模型生成与工具调用循环。
+// Generate 基于上下文、请求与流式增量通道执行完整的模型生成与工具调用循环。
 func (c *LLMClient) Generate(
 	ctx context.Context,
 	request ai.LLMRequest,
-	callback ai.LLMStreamCallback,
-) (string, error) {
+	chunks chan<- ai.LLMChunk,
+) (ai.LLMResult, error) {
 	if ctx == nil {
-		return "", errors.New("context cannot be nil")
+		return ai.LLMResult{}, errors.New("context cannot be nil")
 	}
 	if len(request.Messages) == 0 {
-		return "", errors.New("messages cannot be empty")
+		return ai.LLMResult{}, errors.New("messages cannot be empty")
 	}
 
 	genkitMessages := make([]*genkitai.Message, 0, len(request.Messages))
@@ -232,11 +232,15 @@ func (c *LLMClient) Generate(
 		if text == "" {
 			return nil
 		}
-		if callback != nil {
-			return callback(ctx, ai.LLMChunk{
+		if chunks != nil {
+			select {
+			case chunks <- ai.LLMChunk{
 				Text:      text,
 				Iteration: int(currentIteration.Load()),
-			})
+			}:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		return nil
 	}
@@ -266,23 +270,23 @@ func (c *LLMClient) Generate(
 
 	if err != nil {
 		if errors.Is(err, ai.ErrFirstTokenTimeout) || firstTokenTimedOut.Load() {
-			return "", fmt.Errorf("%w (%v): %w", ai.ErrFirstTokenTimeout, c.firstTokenTimeout, err)
+			return ai.LLMResult{}, fmt.Errorf("%w (%v): %w", ai.ErrFirstTokenTimeout, c.firstTokenTimeout, err)
 		}
 		if errors.Is(err, genkitai.ErrMaxTurnsExceeded) {
-			return "", fmt.Errorf("%w: %w", ai.ErrMaxTurnsExceeded, err)
+			return ai.LLMResult{}, fmt.Errorf("%w: %w", ai.ErrMaxTurnsExceeded, err)
 		}
 		if errors.Is(overallCtx.Err(), context.DeadlineExceeded) {
-			return "", fmt.Errorf("%w (%v): %w", ai.ErrOverallTimeout, c.overallTimeout, overallCtx.Err())
+			return ai.LLMResult{}, fmt.Errorf("%w (%v): %w", ai.ErrOverallTimeout, c.overallTimeout, overallCtx.Err())
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
-			return "", ctx.Err()
+			return ai.LLMResult{}, ctx.Err()
 		}
-		return "", fmt.Errorf("dashscope generate: %w", err)
+		return ai.LLMResult{}, fmt.Errorf("dashscope generate: %w", err)
 	}
 
 	if resp == nil {
-		return "", errors.New("empty response from dashscope")
+		return ai.LLMResult{}, errors.New("empty response from dashscope")
 	}
 
-	return resp.Text(), nil
+	return ai.LLMResult{FinalText: resp.Text()}, nil
 }

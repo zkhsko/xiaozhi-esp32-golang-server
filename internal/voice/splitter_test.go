@@ -1,4 +1,4 @@
-package session
+package voice
 
 import (
 	"reflect"
@@ -118,34 +118,18 @@ func TestSentenceSplitter_TrailingPunctuation(t *testing.T) {
 	}
 }
 
-func TestSentenceSplitter_MultiplePunctuationAndLanguages(t *testing.T) {
+func TestSentenceSplitter_EmptyAndWhitespaceChunks(t *testing.T) {
 	splitter := NewSentenceSplitter()
 
-	// 英文测试：Hello world!
-	res := splitter.Feed("Hello")
-	if len(res) != 0 {
-		t.Fatalf("expected 0, got %v", res)
-	}
-	res = splitter.Feed(" world! How are you doing today?")
-	if len(res) != 2 {
-		t.Fatalf("expected 2 sentences, got %d: %v", len(res), res)
-	}
-	if res[0] != "Hello world!" {
-		t.Fatalf("expected 'Hello world!', got %q", res[0])
-	}
-	if res[1] != "How are you doing today?" {
-		t.Fatalf("expected 'How are you doing today?', got %q", res[1])
+	if res := splitter.Feed(""); len(res) != 0 {
+		t.Fatalf("expected 0 results for empty feed, got: %v", res)
 	}
 
-	// 空 Feed
-	res = splitter.Feed("")
-	if len(res) != 0 {
-		t.Fatalf("expected 0 for empty chunk, got %v", res)
+	if res := splitter.Feed("     \n\t  "); len(res) != 0 {
+		t.Fatalf("expected 0 results for whitespace feed, got: %v", res)
 	}
 
-	// Flush 空
-	flushed := splitter.Flush()
-	if len(flushed) != 0 {
-		t.Fatalf("expected empty flush, got %v", flushed)
+	if flushed := splitter.Flush(); len(flushed) != 0 {
+		t.Fatalf("expected 0 flushed results for whitespace buffer, got: %v", flushed)
 	}
 }

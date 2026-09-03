@@ -28,9 +28,10 @@
 - `internal/config`：基础设施与会话静态配置的加载、校验及敏感连接信息注入边界。
 - `internal/database`：数据库连接、迁移、设备生命周期数据、AI 运行时配置及会话配置快照的数据访问边界。
 - `internal/router`：设备生命周期、管理配置和用户操作等 HTTP API 的路由与 Handler 装配。
-- `internal/session`：WebSocket 生命周期、鉴权、按设备类型加载 Agent 运行时配置、状态机、语音对话编排与工具调用编排。
+- `internal/session`：WebSocket 生命周期、鉴权、按设备类型加载 Agent 运行时配置、Session Actor 与 Outbound Actor 串行下发管理。
+- `internal/voice`：语音轮次终极流水线编排层（TurnEngine、阶段 Worker、增量分句与 60ms 节拍转发）。
 - `internal/agentkit`：供大模型调用的统一工具能力层，负责内置 Agent 工具的定义与执行；不拥有 WebSocket 连接或会话生命周期。
-- `internal/audio`：音频编解码、缓冲和实时下发节奏控制。
+- `internal/audio`：音频编解码（Opus 16kHz 解码与 24kHz 流式编码）。
 - `internal/ai`：ASR、LLM、TTS 的统一抽象、值对象及供应商适配边界。
 - `internal/logger`：结构化日志、安全脱敏和诊断限流。
 - `internal/server`：HTTP 服务生命周期封装。
@@ -43,12 +44,13 @@ HTTP / WebSocket 入口 (internal/router)
   ├── Admin API       ──>  internal/database (设备与 AI 配置)
   └── WebSocket Session (internal/session)
         ├── internal/database (鉴权与 Agent 运行时快照)
-        ├── internal/audio
-        ├── internal/agentkit (内置 Agent 工具)
-        └── internal/ai
+        ├── internal/voice (Turn 编排与流式流水线)
+        │     ├── internal/audio (Opus 编解码)
+        │     └── internal/ai (ASR/LLM/TTS 适配)
+        └── internal/agentkit (内置 Agent 工具)
 ```
 
-依赖方向固定为 `session -> agentkit -> ai`。AgentKit 不得反向依赖 `internal/session`、会话 Writer 或具体 WebSocket 实现。供应商适配器、具体工具和基础设施同样不得反向依赖 `internal/session`。
+依赖方向固定为 `session -> voice -> ai / audio`，以及 `session -> agentkit`。`internal/voice` 不得反向依赖 `internal/session`。AgentKit 不得反向依赖 `internal/session`、会话 Outbound 或具体 WebSocket 实现。供应商适配器、具体工具和基础设施同样不得反向依赖 `internal/session`。
 
 ### 3.3 AgentKit 结构及职责
 
@@ -155,14 +157,15 @@ internal/agentkit/
 ### 8.1 会话状态机
 
 ```text
-CONNECTED -> READY -> LISTENING -> PROCESSING -> SPEAKING
-                 ^                       |           |
-                 +-----------------------+-----------+
+StateAwaitHello ──> StateReady ──> StateTurnActive ──> StateReady
+                                         │
+                                         ▼
+                                    StateClosed
 ```
 
-- 会话状态变更由统一监督流程管理，避免多个异步任务直接竞争状态所有权。
-- 中止、错误、超时和连接断开可以从任意状态进入清理流程。
-- 每轮交互使用代次隔离，过期异步结果不得影响后续轮次。
+- 会话状态变更由 Session Actor 独占管理，不向外部暴露细粒度并发锁或原子状态镜像。
+- 中止、错误、超时和连接断开均具备统一权威终态收口。
+- 每轮交互使用 `turnId` 精准隔离，旧轮次的迟到事件、消息和副作用直接丢弃。
 
 ### 8.2 资源与并发原则
 

@@ -52,15 +52,17 @@ type LLMRequest struct {
 	MaxTurns int
 }
 
-// LLMStreamCallback 定义大语言模型流式增量回调函数。
-type LLMStreamCallback func(ctx context.Context, chunk LLMChunk) error
+// LLMResult 表示大语言模型生成的最终汇总结果。
+type LLMResult struct {
+	FinalText string
+}
 
 // LLMClient 定义流式大语言模型客户端接口。
 type LLMClient interface {
-	// Generate 基于上下文、请求与流式回调执行完整的模型生成与工具调用循环。
+	// Generate 基于上下文、请求与流式增量通道执行完整的模型生成与工具调用循环。
 	Generate(
 		ctx context.Context,
-		request LLMRequest,
-		callback LLMStreamCallback,
-	) (finalText string, err error)
+		req LLMRequest,
+		chunks chan<- LLMChunk,
+	) (LLMResult, error)
 }

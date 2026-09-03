@@ -3,62 +3,110 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/hraban/opus"
+
 	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
 )
 
-type mockASRStream struct {
-	mu     sync.Mutex
-	text   string
-	err    error
-	closed bool
+func createValid16kOpusPacket() []byte {
+	enc, err := opus.NewEncoder(16000, 1, opus.AppVoIP)
+	if err != nil {
+		return nil
+	}
+	pcm := make([]int16, 960)
+	out := make([]byte, 1024)
+	n, err := enc.Encode(pcm, out)
+	if err != nil {
+		return nil
+	}
+	return out[:n]
 }
 
-func (m *mockASRStream) Result(ctx context.Context) (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+type mockASRClient struct {
+	text string
+	err  error
+}
+
+func (m *mockASRClient) Recognize(ctx context.Context, req ai.ASRRequest, pcm <-chan []byte) (string, error) {
 	if m.err != nil {
 		return "", m.err
 	}
 	return m.text, nil
 }
 
-func (m *mockASRStream) WritePCM(ctx context.Context, pcm []byte) error {
-	return nil
+type mockLLMClient struct {
+	chunks    []ai.LLMChunk
+	finalText string
+	err       error
+	onRunTool func(ctx context.Context, req ai.LLMRequest)
 }
 
-func (m *mockASRStream) Finish(ctx context.Context) error {
-	return nil
-}
-
-func (m *mockASRStream) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.closed = true
-	return nil
-}
-
-type mockASRClient struct {
-	mu     sync.Mutex
-	stream *mockASRStream
-	err    error
-}
-
-func (m *mockASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *mockLLMClient) Generate(ctx context.Context, req ai.LLMRequest, chunks chan<- ai.LLMChunk) (ai.LLMResult, error) {
+	if m.onRunTool != nil {
+		m.onRunTool(ctx, req)
+	}
 	if m.err != nil {
-		return nil, m.err
+		return ai.LLMResult{}, m.err
 	}
-	if m.stream != nil {
-		return m.stream, nil
+	if chunks != nil {
+		for _, c := range m.chunks {
+			select {
+			case chunks <- c:
+			case <-ctx.Done():
+				return ai.LLMResult{}, ctx.Err()
+			}
+		}
 	}
-	return &mockASRStream{text: "你好测试"}, nil
+	return ai.LLMResult{FinalText: m.finalText}, nil
+}
+
+type mockTTSClient struct {
+	mu           sync.Mutex
+	sessionCount int
+}
+
+func (m *mockTTSClient) CreateSession(ctx context.Context) (ai.TTSSession, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessionCount++
+	return &mockTTSSessionImpl{}, nil
+}
+
+type mockTTSSessionImpl struct{}
+
+func (s *mockTTSSessionImpl) Synthesize(ctx context.Context, text string, pcm chan<- ai.PCMChunk) error {
+	chunk := ai.PCMChunk{
+		Data:          make([]byte, 2880),
+		SentenceStart: text,
+	}
+	select {
+	case pcm <- chunk:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *mockTTSSessionImpl) Close() error {
+	return nil
+}
+
+func waitForCondition(timeout time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return cond()
 }
 
 func TestSession_Handshake_Success(t *testing.T) {
@@ -66,11 +114,9 @@ func TestSession_Handshake_Success(t *testing.T) {
 	defer cancel()
 
 	conn := &mockWSConn{}
-	writer := NewWriter(ctx, conn, 10, nil)
-	defer writer.Close()
-
 	sess := NewSession(ctx, Options{
-		Writer:       writer,
+		Conn:         nil,
+		Outbound:     NewOutboundActor(ctx, conn, 10, 5*time.Second, nil, nil),
 		SerialNumber: "SN-12345678",
 		Logger:       slog.Default(),
 	})
@@ -98,20 +144,14 @@ func TestSession_Handshake_Success(t *testing.T) {
 		data:     raw,
 	})
 
-	time.Sleep(50 * time.Millisecond)
-
-	if sess.State() != StateReady {
-		t.Fatalf("expected state StateReady, got %v", sess.State())
-	}
-	if sess.SessionId() == "" {
-		t.Fatal("expected non-empty session_id")
+	ok := waitForCondition(2*time.Second, func() bool {
+		return sess.SessionId() != "" && len(conn.getMessages()) == 1
+	})
+	if !ok {
+		t.Fatal("handshake timed out")
 	}
 
 	msgs := conn.getMessages()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message sent, got %d", len(msgs))
-	}
-
 	var resp ServerHelloMessage
 	if err := json.Unmarshal(msgs[0].payload, &resp); err != nil {
 		t.Fatalf("unmarshal server hello failed: %v", err)
@@ -121,6 +161,7 @@ func TestSession_Handshake_Success(t *testing.T) {
 	}
 
 	sess.Close()
+	<-sess.Done()
 }
 
 func TestSession_DuplicateHello_Rejected(t *testing.T) {
@@ -128,11 +169,9 @@ func TestSession_DuplicateHello_Rejected(t *testing.T) {
 	defer cancel()
 
 	conn := &mockWSConn{}
-	writer := NewWriter(ctx, conn, 10, nil)
-	defer writer.Close()
-
 	sess := NewSession(ctx, Options{
-		Writer:       writer,
+		Conn:         nil,
+		Outbound:     NewOutboundActor(ctx, conn, 10, 5*time.Second, nil, nil),
 		SerialNumber: "SN-12345678",
 		Logger:       slog.Default(),
 	})
@@ -161,10 +200,9 @@ func TestSession_DuplicateHello_Rejected(t *testing.T) {
 		data:     raw,
 	})
 
-	time.Sleep(50 * time.Millisecond)
-	if sess.State() != StateReady {
-		t.Fatalf("expected StateReady, got %v", sess.State())
-	}
+	waitForCondition(time.Second, func() bool {
+		return sess.SessionId() != ""
+	})
 
 	// 第二次 hello
 	sess.postEvent(sessionEvent{
@@ -173,23 +211,126 @@ func TestSession_DuplicateHello_Rejected(t *testing.T) {
 		data:     raw,
 	})
 
-	time.Sleep(50 * time.Millisecond)
-	if sess.State() != StateClosed {
-		t.Fatalf("expected StateClosed after duplicate hello, got %v", sess.State())
+	select {
+	case <-sess.Done():
+		// 正常关闭
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected session to close after duplicate hello")
 	}
 }
 
-func TestSession_Abort_ResetsToReady(t *testing.T) {
+func TestSession_AutoTurn_FullCycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	conn := &mockWSConn{}
-	writer := NewWriter(ctx, conn, 10, nil)
-	defer writer.Close()
+	asr := &mockASRClient{text: "你好小智"}
+	llm := &mockLLMClient{
+		chunks: []ai.LLMChunk{
+			{Text: "你好！有什么我可以帮你的吗？"},
+		},
+	}
+	tts := &mockTTSClient{}
 
 	sess := NewSession(ctx, Options{
-		Writer:       writer,
+		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
 		SerialNumber: "SN-12345678",
+		ASRClient:    asr,
+		LLMClient:    llm,
+		TTSClient:    tts,
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	// 1. 握手
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	waitForCondition(time.Second, func() bool {
+		return sess.SessionId() != ""
+	})
+
+	// 2. 发送 listen.start (auto 模式)
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     listenRaw,
+	})
+
+	// 3. 发送一帧合法上行音频
+	validOpus := createValid16kOpusPacket()
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: true,
+		data:     validOpus,
+	})
+
+	// 等待完整流程跑完（STT, TTS start, sentence_start, audio, tts.stop）
+	ok := waitForCondition(3*time.Second, func() bool {
+		msgs := conn.getMessages()
+		// hello (1) + STT (1) + tts.start (1) + sentence_start (1) + opus (1) + tts.stop (1) = 6
+		return len(msgs) >= 6
+	})
+
+	if !ok {
+		msgs := conn.getMessages()
+		t.Fatalf("expected at least 6 messages, got %d", len(msgs))
+	}
+
+	sess.Close()
+	<-sess.Done()
+
+	// 验证历史记录已提交
+	if sess.runtime.history.Len() != 2 {
+		t.Fatalf("expected 2 history messages (user + assistant), got %d", sess.runtime.history.Len())
+	}
+}
+
+func TestSession_CloseSession_Tool_ClosesSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	asr := &mockASRClient{text: "退出会话"}
+	llm := &mockLLMClient{
+		chunks: []ai.LLMChunk{
+			{Text: "好的，再见！"},
+		},
+		onRunTool: func(ctx context.Context, req ai.LLMRequest) {
+			for _, tool := range req.Tools {
+				if tool.Name == agentkit.ToolCloseSession {
+					_, _ = tool.Run(ctx, map[string]any{"reason": "用户要求退出"})
+				}
+			}
+		},
+	}
+	tts := &mockTTSClient{}
+
+	sess := NewSession(ctx, Options{
+		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+		SerialNumber: "SN-12345678",
+		ASRClient:    asr,
+		LLMClient:    llm,
+		TTSClient:    tts,
 		Logger:       slog.Default(),
 	})
 
@@ -215,19 +356,82 @@ func TestSession_Abort_ResetsToReady(t *testing.T) {
 		isBinary: false,
 		data:     raw,
 	})
-	time.Sleep(50 * time.Millisecond)
 
-	// 发送 listen.start (manual 模式直接进入收音)
-	listenRaw := []byte(`{"type":"listen","state":"start","mode":"manual"}`)
+	waitForCondition(time.Second, func() bool {
+		return sess.SessionId() != ""
+	})
+
+	// listen.start
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
 	sess.postEvent(sessionEvent{
 		kind:     eventKindClientFrame,
 		isBinary: false,
 		data:     listenRaw,
 	})
-	time.Sleep(50 * time.Millisecond)
-	if sess.State() != StateListening {
-		t.Fatalf("expected StateListening, got %v", sess.State())
+
+	// 会话应在 Turn 播报完成交付后优雅关闭
+	select {
+	case <-sess.Done():
+		// 成功关闭
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected session to close after close_session tool execution")
 	}
+}
+
+func TestSession_Abort(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	asr := &mockASRClient{text: "测试打断"}
+	llm := &mockLLMClient{
+		chunks: []ai.LLMChunk{{Text: "正在回复..."}},
+	}
+	tts := &mockTTSClient{}
+
+	sess := NewSession(ctx, Options{
+		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+		SerialNumber: "SN-12345678",
+		ASRClient:    asr,
+		LLMClient:    llm,
+		TTSClient:    tts,
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	// 握手
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	waitForCondition(time.Second, func() bool {
+		return sess.SessionId() != ""
+	})
+
+	// listen.start
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     listenRaw,
+	})
 
 	// 发送 abort
 	abortRaw := []byte(`{"type":"abort","reason":"user interrupt"}`)
@@ -237,42 +441,31 @@ func TestSession_Abort_ResetsToReady(t *testing.T) {
 		data:     abortRaw,
 	})
 
-	time.Sleep(50 * time.Millisecond)
-	if sess.State() != StateReady {
-		t.Fatalf("expected StateReady after abort, got %v", sess.State())
-	}
+	time.Sleep(100 * time.Millisecond)
 
 	sess.Close()
+	<-sess.Done()
+
+	if sess.runtime.history.Len() != 0 {
+		t.Fatalf("expected 0 history items after abort, got %d", sess.runtime.history.Len())
+	}
 }
 
-func TestSession_CloseTool_ClosesSessionAfterTurn(t *testing.T) {
+func TestSession_Manual_NoSpeech_ResetsToReady(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	conn := &mockWSConn{}
-	writer := NewWriter(ctx, conn, 10, nil)
-	defer writer.Close()
-
-	mockTTS := &mockTTSClient{}
-	mockLLM := &mockLLMClient{
-		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
-			for _, tool := range req.Tools {
-				if tool.Name == agentkit.ToolCloseSession {
-					_, _ = tool.Run(ctx, map[string]any{"reason": "再见"})
-				}
-			}
-			if callback != nil {
-				_ = callback(ctx, ai.LLMChunk{Text: "再见！", Iteration: 0})
-			}
-			return "再见！", nil
-		},
-	}
+	asr := &mockASRClient{text: ""} // manual 模式无有效识别文本
+	llm := &mockLLMClient{}
+	tts := &mockTTSClient{}
 
 	sess := NewSession(ctx, Options{
-		Writer:       writer,
+		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
 		SerialNumber: "SN-12345678",
-		LLMClient:    mockLLM,
-		TTSClient:    mockTTS,
+		ASRClient:    asr,
+		LLMClient:    llm,
+		TTSClient:    tts,
 		Logger:       slog.Default(),
 	})
 
@@ -298,89 +491,52 @@ func TestSession_CloseTool_ClosesSessionAfterTurn(t *testing.T) {
 		isBinary: false,
 		data:     raw,
 	})
-	time.Sleep(50 * time.Millisecond)
 
-	// 发送 listen.start (manual 模式直接进入收音)
-	listenRaw := []byte(`{"type":"listen","state":"start","mode":"manual"}`)
+	waitForCondition(time.Second, func() bool {
+		return sess.SessionId() != ""
+	})
+
+	// start (manual)
+	listenStartRaw := []byte(`{"type":"listen","state":"start","mode":"manual"}`)
 	sess.postEvent(sessionEvent{
 		kind:     eventKindClientFrame,
 		isBinary: false,
-		data:     listenRaw,
+		data:     listenStartRaw,
 	})
-	time.Sleep(50 * time.Millisecond)
 
-	// 触发 ASR 识别结果
+	// stop (manual)
+	listenStopRaw := []byte(`{"type":"listen","state":"stop"}`)
 	sess.postEvent(sessionEvent{
-		kind: eventKindTurnEvent,
-		turnEv: turnEvent{
-			turnId: 1,
-			typ:    turnEventASRFinal,
-			text:   "退出会话",
-		},
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     listenStopRaw,
 	})
 
 	time.Sleep(100 * time.Millisecond)
 
-	// 等待直到会话因 close_session 工具指令关闭
-	for i := 0; i < 20; i++ {
-		if sess.State() == StateClosed {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	sess.Close()
+	<-sess.Done()
 
-	if sess.State() != StateClosed {
-		t.Fatalf("expected session to be closed after close_session tool turn, got %v", sess.State())
+	if sess.runtime.history.Len() != 0 {
+		t.Fatalf("expected 0 history items, got %d", sess.runtime.history.Len())
 	}
 }
 
-func TestSession_History_MaintainedCorrectly(t *testing.T) {
-	hist := NewConversationHistory(2) // 最多保留 2 轮（4 条消息）
-
-	hist.AppendTurn("你好", "你好！")
-	hist.AppendTurn("今天天气", "天气晴朗。")
-	if hist.Len() != 4 {
-		t.Fatalf("expected 4 messages, got %d", hist.Len())
-	}
-
-	// 追加第 3 轮，触发淘汰第 1 轮
-	hist.AppendTurn("讲个笑话", "这是一个笑话。")
-	if hist.Len() != 4 {
-		t.Fatalf("expected 4 messages after eviction, got %d", hist.Len())
-	}
-
-	msgs := hist.Messages()
-	if msgs[0].Content != "今天天气" || msgs[1].Content != "天气晴朗。" {
-		t.Fatalf("unexpected oldest turn remaining: %+v", msgs)
-	}
-	if msgs[2].Content != "讲个笑话" || msgs[3].Content != "这是一个笑话。" {
-		t.Fatalf("unexpected latest turn: %+v", msgs)
-	}
-
-	// 验证 BuildLLMMessages
-	fullMsgs := hist.BuildLLMMessages("系统提示词", "新问题")
-	if len(fullMsgs) != 6 { // 1 system + 4 history + 1 user
-		t.Fatalf("expected 6 messages, got %d", len(fullMsgs))
-	}
-	if fullMsgs[0].Role != ai.RoleSystem || fullMsgs[0].Content != "系统提示词" {
-		t.Fatalf("unexpected system message: %+v", fullMsgs[0])
-	}
-	if fullMsgs[5].Role != ai.RoleUser || fullMsgs[5].Content != "新问题" {
-		t.Fatalf("unexpected user message: %+v", fullMsgs[5])
-	}
-}
-
-func TestSession_AutoMode_PlaysPromptBeforeListening(t *testing.T) {
+func TestSession_TurnFailed_ClosesSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	conn := &mockWSConn{}
-	writer := NewWriter(ctx, conn, 100, nil)
-	defer writer.Close()
+	asr := &mockASRClient{err: errors.New("asr service unavailable")}
+	llm := &mockLLMClient{}
+	tts := &mockTTSClient{}
 
 	sess := NewSession(ctx, Options{
-		Writer:       writer,
+		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
 		SerialNumber: "SN-12345678",
+		ASRClient:    asr,
+		LLMClient:    llm,
+		TTSClient:    tts,
 		Logger:       slog.Default(),
 	})
 
@@ -406,46 +562,23 @@ func TestSession_AutoMode_PlaysPromptBeforeListening(t *testing.T) {
 		isBinary: false,
 		data:     raw,
 	})
-	time.Sleep(50 * time.Millisecond)
-	if sess.State() != StateReady {
-		t.Fatalf("expected StateReady after handshake, got %v", sess.State())
-	}
 
-	// 首次发送 listen.start (auto 模式)，固定播放提示音进入 Speaking
-	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	waitForCondition(time.Second, func() bool {
+		return sess.SessionId() != ""
+	})
+
+	// start
+	listenStartRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
 	sess.postEvent(sessionEvent{
 		kind:     eventKindClientFrame,
 		isBinary: false,
-		data:     listenRaw,
+		data:     listenStartRaw,
 	})
-	time.Sleep(50 * time.Millisecond)
-	if sess.State() != StateSpeaking {
-		t.Fatalf("expected StateSpeaking when playing prompt in auto mode, got %v", sess.State())
-	}
 
-	// 模拟提示音播放完成事件
-	sess.postEvent(sessionEvent{
-		kind: eventKindTurnEvent,
-		turnEv: turnEvent{
-			turnId: 1,
-			typ:    turnEventTurnCompleted,
-		},
-	})
-	time.Sleep(50 * time.Millisecond)
-	if sess.State() != StateReady {
-		t.Fatalf("expected StateReady after prompt completed, got %v", sess.State())
+	select {
+	case <-sess.Done():
+		// 正常关闭
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected session to close on turn failure")
 	}
-
-	// 固件再次发送 listen.start (auto 模式)，此时应直接进入 Listening
-	sess.postEvent(sessionEvent{
-		kind:     eventKindClientFrame,
-		isBinary: false,
-		data:     listenRaw,
-	})
-	time.Sleep(50 * time.Millisecond)
-	if sess.State() != StateListening {
-		t.Fatalf("expected StateListening on second auto listen.start, got %v", sess.State())
-	}
-
-	sess.Close()
 }

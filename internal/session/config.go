@@ -2,17 +2,19 @@ package session
 
 import (
 	"time"
-
-	"xiaozhi-esp32-golang-server/internal/audio"
 )
 
 // 会话管理相关的默认常量。
 const (
-	DefaultMaxOpusPacketBytes   = 1024
-	DefaultMaxListeningDuration = 30 * time.Second
-	DefaultASRResultTimeout     = 5 * time.Second
-	DefaultMaxHistoryTurns      = 6
-	DefaultEventChannelCapacity = 100
+	DefaultMaxOpusPacketBytes       = 1024
+	DefaultMaxListeningDuration     = 30 * time.Second
+	DefaultASRResultTimeout         = 5 * time.Second
+	DefaultMaxHistoryTurns          = 6
+	DefaultEventChannelCapacity     = 100
+	DefaultWebsocketWriteTimeout    = 5 * time.Second
+	DefaultTTSSentenceTimeout       = 30 * time.Second
+	DefaultASRPCMQueueCapacity      = 100
+	DefaultWriteQueueCapacity       = 100
 )
 
 // SessionConfig 定义单个会话运行所需的不可变配置参数。
@@ -25,6 +27,8 @@ type SessionConfig struct {
 	ASRPCMQueueCapacity       int
 	DownlinkOpusQueueCapacity int
 	MaxHistoryTurns           int
+	WebsocketWriteTimeout     time.Duration
+	TTSSentenceTimeout        time.Duration
 }
 
 // NormalizeConfig 对传入的会话配置进行防御性校验并补齐默认值。
@@ -45,13 +49,19 @@ func NormalizeConfig(cfg SessionConfig) SessionConfig {
 		cfg.ASRResultTimeout = DefaultASRResultTimeout
 	}
 	if cfg.ASRPCMQueueCapacity <= 0 {
-		cfg.ASRPCMQueueCapacity = audio.DefaultASRPCMQueueCapacity
+		cfg.ASRPCMQueueCapacity = DefaultASRPCMQueueCapacity
 	}
 	if cfg.DownlinkOpusQueueCapacity <= 0 {
 		cfg.DownlinkOpusQueueCapacity = DefaultWriteQueueCapacity
 	}
 	if cfg.MaxHistoryTurns <= 0 {
 		cfg.MaxHistoryTurns = DefaultMaxHistoryTurns
+	}
+	if cfg.WebsocketWriteTimeout <= 0 {
+		cfg.WebsocketWriteTimeout = DefaultWebsocketWriteTimeout
+	}
+	if cfg.TTSSentenceTimeout <= 0 {
+		cfg.TTSSentenceTimeout = DefaultTTSSentenceTimeout
 	}
 	return cfg
 }

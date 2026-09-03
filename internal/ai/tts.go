@@ -16,23 +16,23 @@ type TTSOptions struct {
 	ConnectTimeout time.Duration
 }
 
-// TTSPacketStream 表示单句语音合成生成的下行音频包流。
-type TTSPacketStream interface {
-	// NextPacket 接收下一个已编码的 Opus 音频包。
-	// 当该句全部音频合成并编码完毕时返回 nil, io.EOF。
-	// 当流发生错误、超时或被取消时返回 nil, err。
-	NextPacket(ctx context.Context) ([]byte, error)
-
-	// Close 释放流占用的网络与编解码资源。
-	Close() error
+// PCMChunk 表示 TTS 输出的 24 kHz 单声道 16-bit PCM 片段。
+type PCMChunk struct {
+	Data          []byte
+	SentenceStart string
 }
 
 // TTSSession 表示单轮问答中独占的流式语音合成会话，在单轮生命周期内复用底层长连接。
 type TTSSession interface {
-	// Synthesize 发起单句语音合成，复用当前会话连接，返回该句的 Opus 数据包流。
-	Synthesize(ctx context.Context, text string) (TTSPacketStream, error)
+	// Synthesize 发起单句语音合成，复用当前会话长连接，流式输出 PCM 片段到 pcm 通道。
+	// 该方法为同步调用，返回前结束该句所有内部读写任务。
+	Synthesize(
+		ctx context.Context,
+		text string,
+		pcm chan<- PCMChunk,
+	) error
 
-	// Close 关闭底层连接并释放该轮所占用的网络与会话资源。
+	// Close 关闭底层长连接并释放该轮所占用的网络与会话资源。
 	Close() error
 }
 

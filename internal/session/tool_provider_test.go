@@ -12,6 +12,7 @@ import (
 	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/database"
+	"xiaozhi-esp32-golang-server/internal/voice"
 )
 
 type dummySender struct {
@@ -20,7 +21,7 @@ type dummySender struct {
 	onSend func(ctx context.Context, payload json.RawMessage) error
 }
 
-func (d *dummySender) SendText(ctx context.Context, payload []byte) error {
+func (d *dummySender) SendTextSession(ctx context.Context, payload []byte) error {
 	d.mu.Lock()
 	d.sent = append(d.sent, append([]byte(nil), payload...))
 	onSend := d.onSend
@@ -31,18 +32,6 @@ func (d *dummySender) SendText(ctx context.Context, payload []byte) error {
 		return onSend(ctx, m.Payload)
 	}
 	return nil
-}
-
-func (d *dummySender) SendBinary(ctx context.Context, payload []byte) error {
-	return nil
-}
-
-func (d *dummySender) SendTextSync(ctx context.Context, payload []byte) error {
-	return d.SendText(ctx, payload)
-}
-
-func (d *dummySender) SendBinarySync(ctx context.Context, payload []byte) error {
-	return d.SendBinary(ctx, payload)
 }
 
 type customCloserResult struct {
@@ -58,8 +47,8 @@ func TestToolProvider_BuildSnapshot_BuiltinToolsOnly(t *testing.T) {
 	defer cancel()
 
 	provider := NewToolProvider(nil, nil, slog.Default())
-	effects := &TurnEffects{}
-	tools := provider.BuildSnapshot(ctx, 1, "sess-tools-test", effects)
+	effectsCh := make(chan voice.TurnEffect, 8)
+	tools := provider.BuildSnapshot(ctx, 1, "sess-tools-test", effectsCh)
 
 	// 预期仅包含两个内置工具：server.get_current_time, server.close_session
 	if len(tools) != 2 {
@@ -110,8 +99,8 @@ func TestToolProvider_BuildSnapshot_WithCustomBuiltinTools(t *testing.T) {
 	}
 
 	provider := NewToolProvider(nil, store, slog.Default())
-	effects := &TurnEffects{}
-	tools := provider.BuildSnapshot(ctx, 1, "sess-custom-tools-test", effects)
+	effectsCh := make(chan voice.TurnEffect, 8)
+	tools := provider.BuildSnapshot(ctx, 1, "sess-custom-tools-test", effectsCh)
 
 	if len(tools) != 3 {
 		t.Fatalf("expected 3 available tools, got %d", len(tools))
@@ -137,8 +126,8 @@ func TestToolProvider_BuildSnapshot_ExecuteServerToolClosure(t *testing.T) {
 	defer cancel()
 
 	provider := NewToolProvider(nil, nil, slog.Default())
-	effects := &TurnEffects{}
-	tools := provider.BuildSnapshot(ctx, 1, "sess-tool-closure-test", effects)
+	effectsCh := make(chan voice.TurnEffect, 8)
+	tools := provider.BuildSnapshot(ctx, 1, "sess-tool-closure-test", effectsCh)
 
 	var closeTool *ai.Tool
 	for i := range tools {
@@ -152,10 +141,6 @@ func TestToolProvider_BuildSnapshot_ExecuteServerToolClosure(t *testing.T) {
 		t.Fatal("closeTool not found")
 	}
 
-	if effects.CloseSession {
-		t.Fatal("effects.CloseSession should initially be false")
-	}
-
 	res, err := closeTool.Run(ctx, map[string]any{})
 	if err != nil {
 		t.Fatalf("closeTool.Run failed: %v", err)
@@ -165,8 +150,17 @@ func TestToolProvider_BuildSnapshot_ExecuteServerToolClosure(t *testing.T) {
 		t.Fatalf("expected *CloseSessionOutput with status 'success', got %T (%+v)", res, res)
 	}
 
-	if !effects.CloseSession {
-		t.Fatal("expected effects.CloseSession to be true after executing close_session")
+	var hasCloseEffect bool
+	select {
+	case eff := <-effectsCh:
+		if eff.Type == voice.EffectCloseSession {
+			hasCloseEffect = true
+		}
+	default:
+	}
+
+	if !hasCloseEffect {
+		t.Fatal("expected EffectCloseSession after executing close_session")
 	}
 }
 
@@ -175,7 +169,7 @@ func TestToolProvider_WrapToolRun_CustomSessionCloserInterface(t *testing.T) {
 	defer cancel()
 
 	provider := NewToolProvider(nil, nil, slog.Default())
-	effects := &TurnEffects{}
+	effectsCh := make(chan voice.TurnEffect, 8)
 
 	customTool := ai.Tool{
 		Name:        "custom.power_off",
@@ -185,7 +179,7 @@ func TestToolProvider_WrapToolRun_CustomSessionCloserInterface(t *testing.T) {
 		},
 	}
 
-	wrappedFunc := provider.wrapToolRun("sess-custom-closer", 1, customTool, false, nil, effects)
+	wrappedFunc := provider.wrapToolRun("sess-custom-closer", 1, customTool, false, nil, effectsCh)
 	res, err := wrappedFunc(ctx, nil)
 	if err != nil {
 		t.Fatalf("wrappedFunc failed: %v", err)
@@ -194,8 +188,18 @@ func TestToolProvider_WrapToolRun_CustomSessionCloserInterface(t *testing.T) {
 	if !ok || !closer.closed {
 		t.Fatalf("expected *customCloserResult with closed=true, got %+v", res)
 	}
-	if !effects.CloseSession {
-		t.Fatal("expected effects.CloseSession to be true after custom SessionCloser execution")
+
+	var hasCloseEffect bool
+	select {
+	case eff := <-effectsCh:
+		if eff.Type == voice.EffectCloseSession {
+			hasCloseEffect = true
+		}
+	default:
+	}
+
+	if !hasCloseEffect {
+		t.Fatal("expected EffectCloseSession after custom SessionCloser execution")
 	}
 }
 
@@ -204,8 +208,8 @@ func TestToolProvider_ExecuteSnapshotTool_ContextCanceled(t *testing.T) {
 	cancel() // 立即取消
 
 	provider := NewToolProvider(nil, nil, slog.Default())
-	effects := &TurnEffects{}
-	tools := provider.BuildSnapshot(context.Background(), 1, "sess-cancel-test", effects)
+	effectsCh := make(chan voice.TurnEffect, 8)
+	tools := provider.BuildSnapshot(context.Background(), 1, "sess-cancel-test", effectsCh)
 	if len(tools) == 0 {
 		t.Fatal("expected tools in snapshot")
 	}
@@ -243,12 +247,12 @@ func TestToolProvider_DeviceToolCallLimit_8PerGeneration(t *testing.T) {
 		return nil
 	}
 
-	bridge.Enable("sess-limit-test", sender)
+	bridge.Enable(ctx, "sess-limit-test", sender)
 	_ = bridge.WaitReady(ctx)
 
 	provider := NewToolProvider(bridge, nil, slog.Default())
-	effects := &TurnEffects{}
-	tools := provider.BuildSnapshot(ctx, 1, "sess-limit-test", effects)
+	effectsCh := make(chan voice.TurnEffect, 8)
+	tools := provider.BuildSnapshot(ctx, 1, "sess-limit-test", effectsCh)
 
 	var deviceTool *ai.Tool
 	for i := range tools {

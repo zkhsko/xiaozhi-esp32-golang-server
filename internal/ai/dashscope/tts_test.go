@@ -3,8 +3,6 @@ package dashscope
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -81,15 +79,13 @@ func TestTTSSession_EmptyText(t *testing.T) {
 	}
 	defer sess.Close()
 
-	stream, err := sess.Synthesize(context.Background(), "")
+	pcmCh := make(chan ai.PCMChunk, 10)
+	err = sess.Synthesize(context.Background(), "", pcmCh)
 	if err != nil {
 		t.Fatalf("Synthesize empty text failed: %v", err)
 	}
-	defer stream.Close()
-
-	pkt, err := stream.NextPacket(context.Background())
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("expected io.EOF for empty text, got pkt=%v, err=%v", pkt, err)
+	if len(pcmCh) != 0 {
+		t.Fatalf("expected 0 pcm chunks, got %d", len(pcmCh))
 	}
 }
 
@@ -195,29 +191,26 @@ func TestTTSSession_MockWSServer_MultiSentenceReuse(t *testing.T) {
 	}
 
 	for i, sentence := range sentences {
-		stream, err := sess.Synthesize(context.Background(), sentence)
+		pcmCh := make(chan ai.PCMChunk, 10)
+		err := sess.Synthesize(context.Background(), sentence, pcmCh)
 		if err != nil {
 			t.Fatalf("sentence %d Synthesize failed: %v", i+1, err)
 		}
 
-		packetCount := 0
-		for {
-			pkt, err := stream.NextPacket(context.Background())
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				t.Fatalf("sentence %d error reading packet: %v", i+1, err)
-			}
-			if len(pkt) > 0 {
-				packetCount++
-			}
+		var chunks []ai.PCMChunk
+		for len(pcmCh) > 0 {
+			chunks = append(chunks, <-pcmCh)
 		}
 
-		if packetCount == 0 {
-			t.Fatalf("sentence %d: expected at least 1 Opus packet, got 0", i+1)
+		if len(chunks) == 0 {
+			t.Fatalf("sentence %d: expected at least 1 PCM chunk, got 0", i+1)
 		}
-		_ = stream.Close()
+		if chunks[0].SentenceStart != sentence {
+			t.Fatalf("sentence %d: expected SentenceStart %q, got %q", i+1, sentence, chunks[0].SentenceStart)
+		}
+		if len(chunks[0].Data) != 2880 {
+			t.Fatalf("sentence %d: expected 2880 bytes PCM, got %d", i+1, len(chunks[0].Data))
+		}
 	}
 
 	// 关键断言：整轮仅建立 1 次底层连接，执行了 2 次单句 Task
@@ -226,6 +219,72 @@ func TestTTSSession_MockWSServer_MultiSentenceReuse(t *testing.T) {
 	}
 	if tasks := taskCount.Load(); tasks != 2 {
 		t.Fatalf("expected 2 tasks executed on same connection, got %d", tasks)
+	}
+}
+
+func TestTTSSession_ZeroPCMError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "done")
+
+		_, msgData, _ := conn.Read(r.Context())
+		var runMsg ttsClientMessage
+		_ = json.Unmarshal(msgData, &runMsg)
+
+		startedResp := map[string]any{
+			"header": map[string]any{
+				"action":  "task-started",
+				"task_id": runMsg.Header.TaskId,
+				"event":   "task-started",
+			},
+		}
+		startedBytes, _ := json.Marshal(startedResp)
+		_ = conn.Write(r.Context(), websocket.MessageText, startedBytes)
+
+		_, _, _ = conn.Read(r.Context()) // continue-task
+		_, _, _ = conn.Read(r.Context()) // finish-task
+
+		// 直接发送 task-finished，没有 PCM 二进制数据
+		finishedResp := map[string]any{
+			"header": map[string]any{
+				"action":  "task-finished",
+				"task_id": runMsg.Header.TaskId,
+				"event":   "task-finished",
+			},
+		}
+		finishedBytes, _ := json.Marshal(finishedResp)
+		_ = conn.Write(r.Context(), websocket.MessageText, finishedBytes)
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	cli, err := NewTTSClient(ai.TTSOptions{
+		APIKey:   "test-key",
+		Endpoint: wsURL,
+		Model:    "cosyvoice-v1",
+		Voice:    "longxiaochun",
+	})
+	if err != nil {
+		t.Fatalf("NewTTSClient failed: %v", err)
+	}
+
+	sess, err := cli.CreateSession(context.Background())
+	if err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+	defer sess.Close()
+
+	pcmCh := make(chan ai.PCMChunk, 10)
+	err = sess.Synthesize(context.Background(), "非空文本", pcmCh)
+	if err == nil {
+		t.Fatal("expected error on zero pcm for non-empty sentence, got nil")
+	}
+	if !strings.Contains(err.Error(), "zero pcm") {
+		t.Fatalf("unexpected error message: %v", err)
 	}
 }
 
@@ -273,7 +332,8 @@ func TestTTSSession_TaskFailed(t *testing.T) {
 	}
 	defer sess.Close()
 
-	_, err = sess.Synthesize(context.Background(), "测试失败")
+	pcmCh := make(chan ai.PCMChunk, 10)
+	err = sess.Synthesize(context.Background(), "测试失败", pcmCh)
 	if err == nil {
 		t.Fatal("expected error on task-failed, got nil")
 	}

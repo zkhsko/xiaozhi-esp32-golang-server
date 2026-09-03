@@ -136,8 +136,12 @@ type asrResponseMessage struct {
 	Payload asrResponsePayload `json:"payload"`
 }
 
-// CreateStream 创建并启动一条 DashScope 流式语音识别会话。
-func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
+// Recognize 消费 16 kHz 单声道 PCM 帧流，返回 DashScope 最终识别文本。
+func (c *ASRClient) Recognize(
+	ctx context.Context,
+	req ai.ASRRequest,
+	pcm <-chan []byte,
+) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -154,11 +158,17 @@ func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 
 	conn, _, err := websocket.Dial(dialCtx, c.endpoint, opts)
 	if err != nil {
-		return nil, fmt.Errorf("dial dashscope asr websocket: %w", err)
+		return "", fmt.Errorf("dial dashscope asr websocket: %w", err)
 	}
+	defer conn.Close(websocket.StatusNormalClosure, "asr recognize completed")
 	conn.SetReadLimit(maxASRReadMessageBytes)
 
-	taskId := newUUID()
+	sampleRate := req.SampleRate
+	if sampleRate <= 0 {
+		sampleRate = 16000
+	}
+
+	taskId := newUuid()
 	runMsg := asrRunTaskMessage{
 		Header: asrRequestHeader{
 			Action:    "run-task",
@@ -172,36 +182,31 @@ func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 			Model:     c.model,
 			Parameters: asrParameters{
 				Format:     "pcm",
-				SampleRate: 16000,
+				SampleRate: sampleRate,
 			},
 		},
 	}
 
 	runBytes, err := json.Marshal(runMsg)
 	if err != nil {
-		_ = conn.Close(websocket.StatusInternalError, "marshal run-task failed")
-		return nil, fmt.Errorf("marshal run-task: %w", err)
+		return "", fmt.Errorf("marshal run-task: %w", err)
 	}
 
 	if err := conn.Write(dialCtx, websocket.MessageText, runBytes); err != nil {
-		_ = conn.Close(websocket.StatusInternalError, "write run-task failed")
-		return nil, fmt.Errorf("write run-task: %w", err)
+		return "", fmt.Errorf("write run-task: %w", err)
 	}
 
 	msgType, firstData, err := conn.Read(dialCtx)
 	if err != nil {
-		_ = conn.Close(websocket.StatusInternalError, "read task-started failed")
-		return nil, fmt.Errorf("read task-started: %w", err)
+		return "", fmt.Errorf("read task-started: %w", err)
 	}
 	if msgType != websocket.MessageText {
-		_ = conn.Close(websocket.StatusUnsupportedData, "expected text message for task-started")
-		return nil, errors.New("expected text message for task-started")
+		return "", errors.New("expected text message for task-started")
 	}
 
 	var initResp asrResponseMessage
 	if err := json.Unmarshal(firstData, &initResp); err != nil {
-		_ = conn.Close(websocket.StatusPolicyViolation, "invalid task-started response json")
-		return nil, fmt.Errorf("unmarshal task-started: %w", err)
+		return "", fmt.Errorf("unmarshal task-started: %w", err)
 	}
 
 	event := initResp.Header.Event
@@ -218,381 +223,235 @@ func (c *ASRClient) CreateStream(ctx context.Context) (ai.ASRStream, error) {
 		if msg == "" {
 			msg = "task start failed"
 		}
-		_ = conn.Close(websocket.StatusNormalClosure, "task-failed")
-		return nil, fmt.Errorf("asr task start failed: [%s] %s", code, msg)
+		return "", fmt.Errorf("asr task start failed: [%s] %s", code, msg)
 	}
 
 	if event != "task-started" {
-		_ = conn.Close(websocket.StatusPolicyViolation, "unexpected initial event: "+event)
-		return nil, fmt.Errorf("unexpected initial event: %s", event)
+		return "", fmt.Errorf("unexpected initial event: %s", event)
 	}
 
-	streamCtx, streamCancel := context.WithCancel(ctx)
+	opCtx, opCancel := context.WithCancel(ctx)
+	defer opCancel()
 
-	stream := &ASRStream{
-		conn:           conn,
-		taskId:         taskId,
-		ctx:            streamCtx,
-		cancel:         streamCancel,
-		vadReady:       make(chan struct{}),
-		taskFinishedCh: make(chan struct{}),
-	}
+	var (
+		mu          sync.Mutex
+		finalText   string
+		partialText string
+		readerErr   error
+		vadReady    = make(chan struct{})
+		taskDone    = make(chan struct{})
+	)
 
-	go stream.readLoop()
+	// 启动后台读取协程
+	go func() {
+		defer close(taskDone)
+		for {
+			mType, data, rErr := conn.Read(opCtx)
+			if rErr != nil {
+				mu.Lock()
+				if readerErr == nil && opCtx.Err() == nil {
+					readerErr = fmt.Errorf("read dashscope asr websocket: %w", rErr)
+				}
+				mu.Unlock()
+				return
+			}
 
-	return stream, nil
-}
+			if mType != websocket.MessageText {
+				continue
+			}
 
-// ASRStream 实现 DashScope 流式语音识别会话。
-type ASRStream struct {
-	conn   *websocket.Conn
-	taskId string
+			var resp asrResponseMessage
+			if err := json.Unmarshal(data, &resp); err != nil {
+				continue
+			}
 
-	ctx       context.Context
-	cancel    context.CancelFunc
-	closeOnce sync.Once
+			ev := resp.Header.Event
+			if ev == "" {
+				ev = resp.Header.Action
+			}
 
-	writeMu sync.Mutex
+			switch ev {
+			case "result-generated":
+				sentence := resp.Payload.Output.Sentence
+				if sentence != nil {
+					if sentence.SentenceEnd {
+						var t string
+						if resp.Payload.Output.Text != "" {
+							t = resp.Payload.Output.Text
+						} else if sentence.Text != "" {
+							t = sentence.Text
+						}
+						if t != "" {
+							mu.Lock()
+							finalText = t
+							mu.Unlock()
+							select {
+							case <-vadReady:
+							default:
+								close(vadReady)
+							}
+						}
+					} else {
+						mu.Lock()
+						if resp.Payload.Output.Text != "" {
+							partialText = resp.Payload.Output.Text
+						} else if sentence.Text != "" {
+							partialText = sentence.Text
+						}
+						mu.Unlock()
+					}
+				} else if resp.Payload.Output.Text != "" {
+					mu.Lock()
+					partialText = resp.Payload.Output.Text
+					mu.Unlock()
+				}
 
-	mu             sync.RWMutex
-	closed         bool
-	finished       bool
-	finishCalled   bool
-	partialText    string
-	finalText      string
-	err            error
-	vadReady       chan struct{}
-	taskFinishedCh chan struct{}
-}
+			case "task-finished":
+				mu.Lock()
+				if resp.Payload.Output.Text != "" {
+					finalText = resp.Payload.Output.Text
+				} else if resp.Payload.Output.Sentence != nil && resp.Payload.Output.Sentence.Text != "" {
+					finalText = resp.Payload.Output.Sentence.Text
+				} else if finalText == "" && partialText != "" {
+					finalText = partialText
+				}
+				mu.Unlock()
+				select {
+				case <-vadReady:
+				default:
+					close(vadReady)
+				}
+				return
 
-func (s *ASRStream) readLoop() {
-	defer func() {
-		if s.conn != nil {
-			_ = s.conn.Close(websocket.StatusNormalClosure, "stream closed")
+			case "task-failed":
+				code := resp.Header.ErrorCode
+				if code == "" {
+					code = "UNKNOWN_ERROR"
+				}
+				msg := resp.Header.ErrorMessage
+				if msg == "" {
+					msg = "asr task failed on server"
+				}
+				mu.Lock()
+				readerErr = fmt.Errorf("dashscope asr task failed: [%s] %s", code, msg)
+				mu.Unlock()
+				return
+
+			default:
+				// 忽略未知事件
+			}
 		}
-		s.mu.Lock()
-		select {
-		case <-s.vadReady:
-		default:
-			close(s.vadReady)
-		}
-		select {
-		case <-s.taskFinishedCh:
-		default:
-			close(s.taskFinishedCh)
-		}
-		s.mu.Unlock()
 	}()
 
+	// 写入循环
+	var finishSent bool
+	var writeErr error
+
+sendLoop:
 	for {
-		msgType, data, err := s.conn.Read(s.ctx)
-		if err != nil {
-			s.recordError(fmt.Errorf("read dashscope asr websocket: %w", err))
-			return
-		}
-
-		if msgType != websocket.MessageText {
-			continue
-		}
-
-		var resp asrResponseMessage
-		if err := json.Unmarshal(data, &resp); err != nil {
-			continue
-		}
-
-		event := resp.Header.Event
-		if event == "" {
-			event = resp.Header.Action
-		}
-
-		switch event {
-		case "result-generated":
-			sentence := resp.Payload.Output.Sentence
-			if sentence != nil {
-				if sentence.SentenceEnd {
-					var text string
-					if resp.Payload.Output.Text != "" {
-						text = resp.Payload.Output.Text
-					} else if sentence.Text != "" {
-						text = sentence.Text
-					}
-					if text != "" {
-						s.updateFinalText(text)
-						s.markVADReady()
-					} else {
-						s.mu.RLock()
-						hasFinal := (s.finalText != "")
-						s.mu.RUnlock()
-						if hasFinal {
-							s.markVADReady()
+		if req.Mode == ai.ASRModeAuto {
+			select {
+			case <-opCtx.Done():
+				break sendLoop
+			case <-taskDone:
+				break sendLoop
+			case <-vadReady:
+				// Auto VAD 已识别完毕
+				break sendLoop
+			case pcmData, ok := <-pcm:
+				if !ok {
+					// 输入通道关闭，发送 finish-task
+					if !finishSent {
+						finishSent = true
+						finishMsg := asrFinishTaskMessage{
+							Header: asrRequestHeader{
+								Action:    "finish-task",
+								TaskId:    taskId,
+								Streaming: "duplex",
+							},
+						}
+						if fBytes, fErr := json.Marshal(finishMsg); fErr == nil {
+							_ = conn.Write(opCtx, websocket.MessageText, fBytes)
 						}
 					}
-				} else {
-					if resp.Payload.Output.Text != "" {
-						s.updatePartialText(resp.Payload.Output.Text)
-					} else if sentence.Text != "" {
-						s.updatePartialText(sentence.Text)
+					break sendLoop
+				}
+				if len(pcmData) > 0 {
+					if wErr := conn.Write(opCtx, websocket.MessageBinary, pcmData); wErr != nil {
+						writeErr = fmt.Errorf("write pcm binary: %w", wErr)
+						break sendLoop
 					}
 				}
-			} else if resp.Payload.Output.Text != "" {
-				s.updatePartialText(resp.Payload.Output.Text)
 			}
-
-		case "task-finished":
-			if resp.Payload.Output.Text != "" {
-				s.updateFinalText(resp.Payload.Output.Text)
-			} else if resp.Payload.Output.Sentence != nil && resp.Payload.Output.Sentence.Text != "" {
-				s.updateFinalText(resp.Payload.Output.Sentence.Text)
-			} else {
-				s.mu.Lock()
-				if s.finalText == "" && s.partialText != "" {
-					s.finalText = s.partialText
-				}
-				s.mu.Unlock()
-			}
-			s.markFinished()
-			return
-
-		case "task-failed":
-			code := resp.Header.ErrorCode
-			if code == "" {
-				code = "UNKNOWN_ERROR"
-			}
-			msg := resp.Header.ErrorMessage
-			if msg == "" {
-				msg = "asr task failed on server"
-			}
-			s.recordError(fmt.Errorf("dashscope asr task failed: [%s] %s", code, msg))
-			return
-
-		default:
-			// 忽略 DashScope 未知事件，保证状态不混乱、不崩溃
-		}
-	}
-}
-
-func (s *ASRStream) updatePartialText(text string) {
-	if text == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.partialText = text
-}
-
-func (s *ASRStream) updateFinalText(text string) {
-	if text == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.finalText = text
-}
-
-func (s *ASRStream) recordError(err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.err == nil {
-		if s.closed || s.ctx.Err() != nil {
-			s.err = context.Canceled
 		} else {
-			s.err = err
+			// Manual 模式
+			select {
+			case <-opCtx.Done():
+				break sendLoop
+			case <-taskDone:
+				break sendLoop
+			case pcmData, ok := <-pcm:
+				if !ok {
+					// Manual stop，发送 finish-task 并等待 task-finished
+					if !finishSent {
+						finishSent = true
+						finishMsg := asrFinishTaskMessage{
+							Header: asrRequestHeader{
+								Action:    "finish-task",
+								TaskId:    taskId,
+								Streaming: "duplex",
+							},
+						}
+						if fBytes, fErr := json.Marshal(finishMsg); fErr == nil {
+							if fErr := conn.Write(opCtx, websocket.MessageText, fBytes); fErr != nil {
+								writeErr = fmt.Errorf("write finish-task: %w", fErr)
+							}
+						}
+					}
+					// 持续等待 reader 读完 task-finished
+					select {
+					case <-opCtx.Done():
+					case <-taskDone:
+					}
+					break sendLoop
+				}
+				if len(pcmData) > 0 {
+					if wErr := conn.Write(opCtx, websocket.MessageBinary, pcmData); wErr != nil {
+						writeErr = fmt.Errorf("write pcm binary: %w", wErr)
+						break sendLoop
+					}
+				}
+			}
 		}
 	}
-	select {
-	case <-s.vadReady:
-	default:
-		close(s.vadReady)
-	}
-	select {
-	case <-s.taskFinishedCh:
-	default:
-		close(s.taskFinishedCh)
-	}
-}
 
-func (s *ASRStream) markVADReady() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	select {
-	case <-s.vadReady:
-	default:
-		close(s.vadReady)
-	}
-}
+	// 退出前等待 reader 协程结束
+	opCancel()
+	<-taskDone
 
-func (s *ASRStream) markFinished() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	select {
-	case <-s.vadReady:
-	default:
-		close(s.vadReady)
-	}
-	select {
-	case <-s.taskFinishedCh:
-	default:
-		close(s.taskFinishedCh)
-	}
-}
+	mu.Lock()
+	rErr := readerErr
+	fText := strings.TrimSpace(finalText)
+	mu.Unlock()
 
-// WritePCM 流式写入 PCM 二进制音频帧（16000 Hz、16-bit、单声道小端）。
-func (s *ASRStream) WritePCM(ctx context.Context, data []byte) error {
-	if len(data) == 0 {
-		return nil
+	if writeErr != nil && !errors.Is(writeErr, context.Canceled) {
+		return "", writeErr
 	}
-
-	s.mu.RLock()
-	if s.closed {
-		s.mu.RUnlock()
-		return errors.New("asr stream is closed")
+	if rErr != nil && !errors.Is(rErr, context.Canceled) {
+		return "", rErr
 	}
-	if s.finished {
-		s.mu.RUnlock()
-		return errors.New("cannot write pcm to finished asr stream")
-	}
-	if s.err != nil {
-		err := s.err
-		s.mu.RUnlock()
-		return err
-	}
-	s.mu.RUnlock()
-
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	s.mu.RLock()
-	if s.closed {
-		s.mu.RUnlock()
-		return errors.New("asr stream is closed")
-	}
-	if s.err != nil {
-		err := s.err
-		s.mu.RUnlock()
-		return err
-	}
-	s.mu.RUnlock()
-
-	if err := s.conn.Write(ctx, websocket.MessageBinary, data); err != nil {
-		s.recordError(fmt.Errorf("write pcm binary: %w", err))
-		return fmt.Errorf("write pcm binary: %w", err)
-	}
-	return nil
-}
-
-// Finish 通知 DashScope 服务端音频流输入已结束。
-func (s *ASRStream) Finish(ctx context.Context) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return errors.New("asr stream is closed")
-	}
-	s.finishCalled = true
-	if s.finished {
-		s.mu.Unlock()
-		return nil
-	}
-	if s.err != nil {
-		err := s.err
-		s.mu.Unlock()
-		return err
-	}
-	taskId := s.taskId
-	s.mu.Unlock()
-
-	finishMsg := asrFinishTaskMessage{
-		Header: asrRequestHeader{
-			Action:    "finish-task",
-			TaskId:    taskId,
-			Streaming: "duplex",
-		},
-	}
-	msgBytes, err := json.Marshal(finishMsg)
-	if err != nil {
-		return fmt.Errorf("marshal finish-task: %w", err)
-	}
-
-	if err := s.conn.Write(ctx, websocket.MessageText, msgBytes); err != nil {
-		s.recordError(fmt.Errorf("write finish-task: %w", err))
-		return fmt.Errorf("write finish-task: %w", err)
-	}
-	return nil
-}
-
-// Result 等待并返回最终非空识别文本。
-func (s *ASRStream) Result(ctx context.Context) (string, error) {
-	s.mu.RLock()
-	finishCalled := s.finishCalled
-	s.mu.RUnlock()
-
-	var waitCh chan struct{}
-	if finishCalled {
-		waitCh = s.taskFinishedCh
-	} else {
-		waitCh = s.vadReady
-	}
-
-	select {
-	case <-waitCh:
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		if s.err != nil {
-			return "", s.err
-		}
-		return s.finalText, nil
-	case <-s.taskFinishedCh:
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		if s.err != nil {
-			return "", s.err
-		}
-		return s.finalText, nil
-	case <-ctx.Done():
+	if opCtx.Err() != nil && errors.Is(ctx.Err(), context.Canceled) {
 		return "", ctx.Err()
-	case <-s.ctx.Done():
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		if s.err != nil {
-			return "", s.err
-		}
-		return s.finalText, s.ctx.Err()
 	}
+
+	if req.Mode == ai.ASRModeAuto && fText == "" {
+		return "", errors.New("dashscope asr returned empty text in auto mode")
+	}
+
+	return fText, nil
 }
 
-// Close 关闭并释放流式识别会话的所有网络与内存资源。
-func (s *ASRStream) Close() error {
-	var err error
-	s.closeOnce.Do(func() {
-		s.mu.Lock()
-		s.closed = true
-		s.mu.Unlock()
-
-		s.cancel()
-
-		if s.conn != nil {
-			err = s.conn.Close(websocket.StatusNormalClosure, "stream closed")
-		}
-
-		s.mu.Lock()
-		select {
-		case <-s.vadReady:
-		default:
-			close(s.vadReady)
-		}
-		select {
-		case <-s.taskFinishedCh:
-		default:
-			close(s.taskFinishedCh)
-		}
-		s.mu.Unlock()
-	})
-	return err
-}
-
-func newUUID() string {
+func newUuid() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
 	b[6] = (b[6] & 0x0f) | 0x40

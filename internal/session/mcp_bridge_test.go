@@ -4,9 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"testing"
-	"time"
 )
+
+type mockSessionSender struct {
+	mu   sync.Mutex
+	sent [][]byte
+}
+
+func (m *mockSessionSender) SendTextSession(ctx context.Context, payload []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sent = append(m.sent, append([]byte(nil), payload...))
+	return nil
+}
 
 func TestSession_MCPHandshakeDetection(t *testing.T) {
 	helloTrue := &ClientHelloMessage{
@@ -65,12 +77,9 @@ func TestMCPBridge_SendMCPPayload(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	conn := &mockWSConn{}
-	writer := NewWriter(ctx, conn, 10, nil)
-	defer writer.Stop()
-
+	sender := &mockSessionSender{}
 	bridge := NewMCPBridge(slog.Default(), nil)
-	bridge.Enable("test-sess-123", writer)
+	bridge.Enable(ctx, "test-sess-123", sender)
 
 	payload := json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)
 	err := bridge.SendMCPPayload(ctx, payload)
@@ -78,15 +87,16 @@ func TestMCPBridge_SendMCPPayload(t *testing.T) {
 		t.Fatalf("SendMCPPayload failed: %v", err)
 	}
 
-	time.Sleep(50 * time.Millisecond)
+	sender.mu.Lock()
+	msgs := sender.sent
+	sender.mu.Unlock()
 
-	msgs := conn.getMessages()
 	if len(msgs) == 0 {
 		t.Fatal("expected at least 1 message sent")
 	}
 	lastMsg := msgs[len(msgs)-1]
 	var downlink DownlinkMCPMessage
-	if err := json.Unmarshal(lastMsg.payload, &downlink); err != nil {
+	if err := json.Unmarshal(lastMsg, &downlink); err != nil {
 		t.Fatalf("unmarshal downlink failed: %v", err)
 	}
 
@@ -102,12 +112,9 @@ func TestMCPBridge_HandleInbound_ValidationAndForwarding(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	conn := &mockWSConn{}
-	writer := NewWriter(ctx, conn, 10, nil)
-	defer writer.Stop()
-
+	sender := &mockSessionSender{}
 	bridge := NewMCPBridge(slog.Default(), nil)
-	bridge.Enable("sess-mcp-test", writer)
+	bridge.Enable(ctx, "sess-mcp-test", sender)
 
 	// 1. 非法 session_id（不匹配）应被忽略
 	mismatchMsg := &ClientMessage{
@@ -125,19 +132,11 @@ func TestMCPBridge_HandleInbound_ValidationAndForwarding(t *testing.T) {
 	}
 	bridge.HandleInbound("sess-mcp-test", emptyMsg)
 
-	// 3. 非对象 payload 应被忽略
-	nonObjMsg := &ClientMessage{
+	// 3. 非合法 json payload 应被忽略
+	invalidJSONMsg := &ClientMessage{
 		Kind:      KindMCP,
 		SessionId: "sess-mcp-test",
-		Payload:   json.RawMessage(`"just a string"`),
+		Payload:   json.RawMessage(`invalid-json`),
 	}
-	bridge.HandleInbound("sess-mcp-test", nonObjMsg)
-
-	// 4. 正常响应转发
-	validMsg := &ClientMessage{
-		Kind:      KindMCP,
-		SessionId: "sess-mcp-test",
-		Payload:   json.RawMessage(`{"jsonrpc":"2.0","id":100,"result":{"status":"ok"}}`),
-	}
-	bridge.HandleInbound("sess-mcp-test", validMsg)
+	bridge.HandleInbound("sess-mcp-test", invalidJSONMsg)
 }

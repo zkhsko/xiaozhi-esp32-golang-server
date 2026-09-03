@@ -56,6 +56,12 @@ const (
 	minASRResultTimeout = 1 * time.Second
 	maxASRResultTimeout = 30 * time.Second
 
+	minWebsocketWriteTimeout = 500 * time.Millisecond
+	maxWebsocketWriteTimeout = 30 * time.Second
+
+	minTTSSentenceTimeout = 1 * time.Second
+	maxTTSSentenceTimeout = 120 * time.Second
+
 	minDatabaseConns       = 1
 	maxDatabaseConns       = 1000
 	minDatabasePingTimeout = 500 * time.Millisecond
@@ -86,6 +92,8 @@ type SessionConfig struct {
 	ASRPCMQueueCapacity       int           `yaml:"asr_pcm_queue_capacity"`
 	DownlinkOpusQueueCapacity int           `yaml:"downlink_opus_queue_capacity"`
 	MaxHistoryTurns           int           `yaml:"max_history_turns"`
+	WebsocketWriteTimeout     time.Duration `yaml:"websocket_write_timeout,omitempty"`
+	TTSSentenceTimeout        time.Duration `yaml:"tts_sentence_timeout,omitempty"`
 }
 
 // DatabaseConfig 定义数据库连接与连接池配置。
@@ -204,6 +212,16 @@ func (c *Config) validateSession() error {
 	}
 	if err := validateInt("max_history_turns", c.Session.MaxHistoryTurns, minHistoryTurns, maxHistoryTurns); err != nil {
 		return err
+	}
+	if c.Session.WebsocketWriteTimeout > 0 {
+		if err := validateDuration("websocket_write_timeout", c.Session.WebsocketWriteTimeout, minWebsocketWriteTimeout, maxWebsocketWriteTimeout); err != nil {
+			return err
+		}
+	}
+	if c.Session.TTSSentenceTimeout > 0 {
+		if err := validateDuration("tts_sentence_timeout", c.Session.TTSSentenceTimeout, minTTSSentenceTimeout, maxTTSSentenceTimeout); err != nil {
+			return err
+		}
 	}
 	return nil
 }

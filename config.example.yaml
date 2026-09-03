@@ -17,6 +17,8 @@ session:
   asr_pcm_queue_capacity: 100
   downlink_opus_queue_capacity: 100
   max_history_turns: 6
+  websocket_write_timeout: 5s
+  tts_sentence_timeout: 30s
 
 database:
   driver: "sqlite"

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,14 +14,10 @@ import (
 	"github.com/coder/websocket"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
-	"xiaozhi-esp32-golang-server/internal/audio"
 )
 
-// maxTTSReadMessageBytes 定义 DashScope TTS WebSocket 单帧最大读取字节数（4 MiB），满足 24 kHz PCM 块下发需求。
+// maxTTSReadMessageBytes 定义 DashScope TTS WebSocket 单帧最大读取字节数（4 MiB）。
 const maxTTSReadMessageBytes = 4 * 1024 * 1024
-
-// defaultPacketQueueCapacity 定义单句 Opus 音频包缓冲通道容量。
-const defaultPacketQueueCapacity = 100
 
 // TTSClient 实现基于 DashScope WebSocket 流式协议的语音合成客户端。
 type TTSClient struct {
@@ -148,7 +143,6 @@ type TTSSession struct {
 
 	writeMu sync.Mutex
 	mu      sync.Mutex
-	stream  *dashscopePacketStream
 	closed  bool
 }
 
@@ -166,76 +160,75 @@ func (s *TTSSession) writeJSON(ctx context.Context, v any) error {
 }
 
 func (s *TTSSession) readTaskStarted(ctx context.Context, expectedTaskId string) error {
-	msgType, firstData, err := s.conn.Read(ctx)
-	if err != nil {
-		return fmt.Errorf("read task-started: %w", err)
-	}
-	if msgType != websocket.MessageText {
-		return errors.New("expected text message for task-started")
-	}
-
-	var initResp ttsResponseMessage
-	if err := json.Unmarshal(firstData, &initResp); err != nil {
-		return fmt.Errorf("unmarshal task-started: %w", err)
-	}
-
-	event := initResp.Header.Event
-	if event == "" {
-		event = initResp.Header.Action
-	}
-
-	if event == "task-failed" {
-		code := initResp.Header.ErrorCode
-		if code == "" {
-			code = "UNKNOWN_ERROR"
+	for {
+		msgType, firstData, err := s.conn.Read(ctx)
+		if err != nil {
+			return fmt.Errorf("read task-started: %w", err)
 		}
-		msg := initResp.Header.ErrorMessage
-		if msg == "" {
-			msg = "task start failed"
+		if msgType != websocket.MessageText {
+			continue
 		}
-		return fmt.Errorf("tts task start failed: [%s] %s", code, msg)
-	}
 
-	if event != "task-started" {
-		return fmt.Errorf("unexpected initial event: %s", event)
+		var initResp ttsResponseMessage
+		if err := json.Unmarshal(firstData, &initResp); err != nil {
+			return fmt.Errorf("unmarshal task-started: %w", err)
+		}
+
+		if initResp.Header.TaskId != "" && initResp.Header.TaskId != expectedTaskId {
+			// 忽略非当前任务的消息
+			continue
+		}
+
+		event := initResp.Header.Event
+		if event == "" {
+			event = initResp.Header.Action
+		}
+
+		if event == "task-failed" {
+			code := initResp.Header.ErrorCode
+			if code == "" {
+				code = "UNKNOWN_ERROR"
+			}
+			msg := initResp.Header.ErrorMessage
+			if msg == "" {
+				msg = "task start failed"
+			}
+			return fmt.Errorf("tts task start failed: [%s] %s", code, msg)
+		}
+
+		if event == "task-started" {
+			return nil
+		}
 	}
-	return nil
 }
 
-// Synthesize 在当前 WebSocket 会话连接上发起单句流式语音合成。
-func (s *TTSSession) Synthesize(ctx context.Context, text string) (ai.TTSPacketStream, error) {
+// Synthesize 在当前 WebSocket 会话连接上发起单句流式语音合成，同步阻塞直至该句音频全部输出。
+func (s *TTSSession) Synthesize(ctx context.Context, text string, pcm chan<- ai.PCMChunk) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	if text == "" {
-		return newEmptyPacketStream(), nil
+	trimmedText := strings.TrimSpace(text)
+	if trimmedText == "" {
+		return nil
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.closed {
-		return nil, errors.New("tts session is closed")
+		s.mu.Unlock()
+		return errors.New("tts session is closed")
 	}
 	if s.ctx.Err() != nil {
-		return nil, s.ctx.Err()
+		s.mu.Unlock()
+		return s.ctx.Err()
 	}
+	s.mu.Unlock()
 
-	// 若前一个单句流仍在运行，强制等待并关闭它，确保连接读写状态单一
-	if s.stream != nil {
-		oldStream := s.stream
-		s.stream = nil
-		_ = oldStream.Close()
-	}
+	// 保证同一 session 串行合成
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
-	encoder, err := audio.NewEncoder(audio.DefaultMaxOpusPacketBytes)
-	if err != nil {
-		return nil, fmt.Errorf("create opus encoder: %w", err)
-	}
-	streamEncoder := audio.NewStreamEncoder(encoder)
-
-	taskId := newUUID()
+	taskId := newUuid()
 	runMsg := ttsClientMessage{
 		Header: ttsRequestHeader{
 			Action:    "run-task",
@@ -257,14 +250,16 @@ func (s *TTSSession) Synthesize(ctx context.Context, text string) (ai.TTSPacketS
 		},
 	}
 
-	if err := s.writeJSON(ctx, runMsg); err != nil {
-		_ = encoder.Close()
-		return nil, fmt.Errorf("write run-task: %w", err)
+	runData, err := json.Marshal(runMsg)
+	if err != nil {
+		return fmt.Errorf("marshal run-task: %w", err)
+	}
+	if err := s.conn.Write(ctx, websocket.MessageText, runData); err != nil {
+		return fmt.Errorf("write run-task: %w", err)
 	}
 
 	if err := s.readTaskStarted(ctx, taskId); err != nil {
-		_ = encoder.Close()
-		return nil, err
+		return err
 	}
 
 	continueMsg := ttsClientMessage{
@@ -275,13 +270,16 @@ func (s *TTSSession) Synthesize(ctx context.Context, text string) (ai.TTSPacketS
 		},
 		Payload: map[string]any{
 			"input": map[string]string{
-				"text": text,
+				"text": trimmedText,
 			},
 		},
 	}
-	if err := s.writeJSON(ctx, continueMsg); err != nil {
-		_ = encoder.Close()
-		return nil, fmt.Errorf("write continue-task: %w", err)
+	continueData, err := json.Marshal(continueMsg)
+	if err != nil {
+		return fmt.Errorf("marshal continue-task: %w", err)
+	}
+	if err := s.conn.Write(ctx, websocket.MessageText, continueData); err != nil {
+		return fmt.Errorf("write continue-task: %w", err)
 	}
 
 	finishMsg := ttsClientMessage{
@@ -294,107 +292,45 @@ func (s *TTSSession) Synthesize(ctx context.Context, text string) (ai.TTSPacketS
 			"input": map[string]any{},
 		},
 	}
-	if err := s.writeJSON(ctx, finishMsg); err != nil {
-		_ = encoder.Close()
-		return nil, fmt.Errorf("write finish-task: %w", err)
+	finishData, err := json.Marshal(finishMsg)
+	if err != nil {
+		return fmt.Errorf("marshal finish-task: %w", err)
+	}
+	if err := s.conn.Write(ctx, websocket.MessageText, finishData); err != nil {
+		return fmt.Errorf("write finish-task: %w", err)
 	}
 
-	streamCtx, streamCancel := context.WithCancel(s.ctx)
-	stream := &dashscopePacketStream{
-		session:       s,
-		taskId:        taskId,
-		encoder:       encoder,
-		streamEncoder: streamEncoder,
-		ctx:           streamCtx,
-		cancel:        streamCancel,
-		packetCh:      make(chan []byte, defaultPacketQueueCapacity),
-	}
-	s.stream = stream
-
-	go stream.readLoop()
-
-	return stream, nil
-}
-
-// Close 关闭底层 WebSocket 连接并释放会话所持有的全部资源。
-func (s *TTSSession) Close() error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil
-	}
-	s.closed = true
-	st := s.stream
-	s.stream = nil
-	s.mu.Unlock()
-
-	s.cancel()
-
-	if st != nil {
-		_ = st.Close()
-	}
-
-	var err error
-	if s.conn != nil {
-		err = s.conn.Close(websocket.StatusNormalClosure, "session closed")
-	}
-	return err
-}
-
-// dashscopePacketStream 实现单句 DashScope Opus 音频包合成流。
-type dashscopePacketStream struct {
-	session       *TTSSession
-	taskId        string
-	encoder       *audio.Encoder
-	streamEncoder *audio.StreamEncoder
-
-	ctx       context.Context
-	cancel    context.CancelFunc
-	closeOnce sync.Once
-
-	mu       sync.RWMutex
-	closed   bool
-	err      error
-	packetCh chan []byte
-}
-
-func (s *dashscopePacketStream) readLoop() {
-	defer func() {
-		if s.encoder != nil {
-			_ = s.encoder.Close()
-		}
-		close(s.packetCh)
-		s.session.mu.Lock()
-		if s.session.stream == s {
-			s.session.stream = nil
-		}
-		s.session.mu.Unlock()
-	}()
+	var (
+		totalPCMBytes int
+		firstChunk    = true
+	)
 
 	for {
-		msgType, data, err := s.session.conn.Read(s.ctx)
+		msgType, data, err := s.conn.Read(ctx)
 		if err != nil {
-			s.recordError(fmt.Errorf("read dashscope tts websocket: %w", err))
-			return
+			return fmt.Errorf("read dashscope tts websocket: %w", err)
 		}
 
 		if msgType == websocket.MessageBinary {
 			if len(data) == 0 {
 				continue
 			}
+			totalPCMBytes += len(data)
 
-			pkts, encErr := s.streamEncoder.Feed(data)
-			if encErr != nil {
-				s.recordError(fmt.Errorf("feed pcm to opus encoder: %w", encErr))
-				return
+			chunk := ai.PCMChunk{
+				Data: data,
+			}
+			if firstChunk {
+				chunk.SentenceStart = trimmedText
+				firstChunk = false
 			}
 
-			for _, pkt := range pkts {
-				select {
-				case s.packetCh <- pkt:
-				case <-s.ctx.Done():
-					return
-				}
+			select {
+			case pcm <- chunk:
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-s.ctx.Done():
+				return s.ctx.Err()
 			}
 			continue
 		}
@@ -405,6 +341,10 @@ func (s *dashscopePacketStream) readLoop() {
 				continue
 			}
 
+			if resp.Header.TaskId != "" && resp.Header.TaskId != taskId {
+				continue
+			}
+
 			event := resp.Header.Event
 			if event == "" {
 				event = resp.Header.Action
@@ -412,19 +352,10 @@ func (s *dashscopePacketStream) readLoop() {
 
 			switch event {
 			case "task-finished":
-				flushPkts, flushErr := s.streamEncoder.Flush()
-				if flushErr != nil {
-					s.recordError(fmt.Errorf("flush opus encoder: %w", flushErr))
-					return
+				if totalPCMBytes == 0 {
+					return errors.New("non-empty sentence yielded zero pcm")
 				}
-				for _, pkt := range flushPkts {
-					select {
-					case s.packetCh <- pkt:
-					case <-s.ctx.Done():
-						return
-					}
-				}
-				return
+				return nil
 
 			case "task-failed":
 				code := resp.Header.ErrorCode
@@ -435,95 +366,30 @@ func (s *dashscopePacketStream) readLoop() {
 				if msg == "" {
 					msg = "tts task failed on server"
 				}
-				s.recordError(fmt.Errorf("dashscope tts task failed: [%s] %s", code, msg))
-				return
+				return fmt.Errorf("dashscope tts task failed: [%s] %s", code, msg)
 
 			default:
-				// 忽略未知 DashScope 事件
+				// 忽略未知事件
 			}
 		}
 	}
 }
 
-func (s *dashscopePacketStream) recordError(err error) {
+// Close 关闭底层 WebSocket 连接并释放会话所持有的全部资源。
+func (s *TTSSession) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.err == nil {
-		if s.closed {
-			s.err = context.Canceled
-		} else if s.ctx.Err() != nil {
-			s.err = s.ctx.Err()
-		} else {
-			s.err = err
-		}
-	}
-}
-
-// NextPacket 接收下一个合成并编码完成的 Opus 音频包。
-func (s *dashscopePacketStream) NextPacket(ctx context.Context) ([]byte, error) {
-	select {
-	case pkt, ok := <-s.packetCh:
-		if !ok {
-			s.mu.RLock()
-			defer s.mu.RUnlock()
-			if s.closed {
-				return nil, errors.New("tts stream is closed")
-			}
-			if s.err != nil {
-				return nil, s.err
-			}
-			if s.ctx.Err() != nil {
-				return nil, s.ctx.Err()
-			}
-			return nil, io.EOF
-		}
-		return pkt, nil
-
-	case <-ctx.Done():
-		return nil, ctx.Err()
-
-	case <-s.ctx.Done():
-		s.mu.RLock()
-		defer s.mu.RUnlock()
-		if s.closed {
-			return nil, errors.New("tts stream is closed")
-		}
-		if s.err != nil {
-			return nil, s.err
-		}
-		return nil, s.ctx.Err()
-	}
-}
-
-// Close 释放当前句的流资源。注意：不关闭底层 session 的 WebSocket 连接。
-func (s *dashscopePacketStream) Close() error {
-	s.closeOnce.Do(func() {
-		s.mu.Lock()
-		s.closed = true
+	if s.closed {
 		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.mu.Unlock()
 
-		s.cancel()
+	s.cancel()
 
-		s.session.mu.Lock()
-		if s.session.stream == s {
-			s.session.stream = nil
-		}
-		s.session.mu.Unlock()
-	})
-	return nil
-}
-
-// emptyPacketStream 提供针对空文本的空流实现。
-type emptyPacketStream struct{}
-
-func newEmptyPacketStream() *emptyPacketStream {
-	return &emptyPacketStream{}
-}
-
-func (e *emptyPacketStream) NextPacket(ctx context.Context) ([]byte, error) {
-	return nil, io.EOF
-}
-
-func (e *emptyPacketStream) Close() error {
-	return nil
+	var err error
+	if s.conn != nil {
+		err = s.conn.Close(websocket.StatusNormalClosure, "session closed")
+	}
+	return err
 }

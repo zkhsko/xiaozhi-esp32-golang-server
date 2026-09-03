@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadValidConfig(t *testing.T) {
@@ -103,5 +104,60 @@ func TestLoadExampleConfigFile(t *testing.T) {
 	}
 	if cfg.Database.DSN != "file:xiaozhi-dev.db?_journal_mode=WAL&_busy_timeout=5000" {
 		t.Errorf("unexpected dsn: %s", cfg.Database.DSN)
+	}
+}
+
+func TestSessionTimeoutsValidation(t *testing.T) {
+	validYAML := `
+server:
+  listen_addr: ":8080"
+  websocket_url: "wss://example.com/xiaozhi/v1/"
+  max_concurrent_sessions: 10
+  shutdown_timeout: 10s
+  http_read_timeout: 15s
+  http_write_timeout: 30s
+  http_idle_timeout: 60s
+  max_http_body_bytes: 65536
+  max_http_header_bytes: 1024
+
+session:
+  hello_timeout: 10s
+  max_ws_text_message_bytes: 32768
+  max_opus_packet_bytes: 1024
+  max_listening_duration: 30s
+  asr_pcm_queue_capacity: 100
+  downlink_opus_queue_capacity: 100
+  max_history_turns: 6
+  websocket_write_timeout: 5s
+  tts_sentence_timeout: 30s
+
+database:
+  driver: "sqlite"
+  dsn: "file::memory:?cache=shared"
+  max_open_conns: 1
+  max_idle_conns: 1
+  connection_max_lifetime: 0s
+  connection_max_idle_time: 0s
+  ping_timeout: 3s
+`
+	cfg, err := LoadFromReader(strings.NewReader(validYAML))
+	if err != nil {
+		t.Fatalf("expected valid config, got error: %v", err)
+	}
+	if cfg.Session.WebsocketWriteTimeout != 5*time.Second {
+		t.Errorf("expected websocket_write_timeout 5s, got %v", cfg.Session.WebsocketWriteTimeout)
+	}
+	if cfg.Session.TTSSentenceTimeout != 30*time.Second {
+		t.Errorf("expected tts_sentence_timeout 30s, got %v", cfg.Session.TTSSentenceTimeout)
+	}
+
+	invalidWriteTimeoutYAML := strings.Replace(validYAML, "websocket_write_timeout: 5s", "websocket_write_timeout: 100ms", 1)
+	if _, err := LoadFromReader(strings.NewReader(invalidWriteTimeoutYAML)); err == nil {
+		t.Fatal("expected error for too small websocket_write_timeout, got nil")
+	}
+
+	invalidTTSTimeoutYAML := strings.Replace(validYAML, "tts_sentence_timeout: 30s", "tts_sentence_timeout: 300s", 1)
+	if _, err := LoadFromReader(strings.NewReader(invalidTTSTimeoutYAML)); err == nil {
+		t.Fatal("expected error for too large tts_sentence_timeout, got nil")
 	}
 }

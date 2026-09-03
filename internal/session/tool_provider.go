@@ -11,17 +11,13 @@ import (
 	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/database"
+	"xiaozhi-esp32-golang-server/internal/voice"
 )
 
 // 每轮次设备工具调用的最大执行次数。
 const (
 	MaxGenerationDeviceToolCalls = 8
 )
-
-// TurnEffects 记录单轮问答中工具执行所产生的副作用。
-type TurnEffects struct {
-	CloseSession bool
-}
 
 // AgentKitStore 定义 ToolProvider 加载内建工具配置所需的窄接口。
 type AgentKitStore interface {
@@ -48,7 +44,7 @@ func NewToolProvider(bridge *MCPBridge, store AgentKitStore, l *slog.Logger) *To
 }
 
 // BuildSnapshot 构造当前代次专属的不可变工具快照副本。
-func (p *ToolProvider) BuildSnapshot(ctx context.Context, turnId uint64, sessionId string, effects *TurnEffects) []ai.Tool {
+func (p *ToolProvider) BuildSnapshot(ctx context.Context, turnId uint64, sessionId string, effectsCh chan<- voice.TurnEffect) []ai.Tool {
 	var deviceTools []ai.Tool
 	if p.mcpBridge != nil && p.mcpBridge.IsEnabled() {
 		// 首轮等待发现完成，最多等待 5 秒
@@ -78,7 +74,7 @@ func (p *ToolProvider) BuildSnapshot(ctx context.Context, turnId uint64, session
 			Name:        rawTool.Name,
 			Description: rawTool.Description,
 			Parameters:  rawTool.Parameters,
-			Run:         p.wrapToolRun(sessionId, turnId, rawTool, isDevice, &deviceCallCount, effects),
+			Run:         p.wrapToolRun(sessionId, turnId, rawTool, isDevice, &deviceCallCount, effectsCh),
 		})
 	}
 
@@ -92,7 +88,7 @@ func (p *ToolProvider) wrapToolRun(
 	rawTool ai.Tool,
 	isDevice bool,
 	deviceCallCount *atomic.Int32,
-	effects *TurnEffects,
+	effectsCh chan<- voice.TurnEffect,
 ) ai.ToolFunc {
 	return func(ctx context.Context, input any) (any, error) {
 		if err := ctx.Err(); err != nil {
@@ -166,8 +162,11 @@ func (p *ToolProvider) wrapToolRun(
 
 		// 检查工具返回值是否声明了会话关闭意图
 		if closer, ok := result.(agentkit.SessionCloser); ok && closer.ShouldCloseSession() {
-			if effects != nil {
-				effects.CloseSession = true
+			if effectsCh != nil {
+				select {
+				case effectsCh <- voice.TurnEffect{Type: voice.EffectCloseSession}:
+				default:
+				}
 			}
 		}
 

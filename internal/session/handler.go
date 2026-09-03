@@ -231,5 +231,7 @@ func mapSessionConfig(cfg *config.Config) SessionConfig {
 		ASRPCMQueueCapacity:       cfg.Session.ASRPCMQueueCapacity,
 		DownlinkOpusQueueCapacity: cfg.Session.DownlinkOpusQueueCapacity,
 		MaxHistoryTurns:           cfg.Session.MaxHistoryTurns,
+		WebsocketWriteTimeout:     cfg.Session.WebsocketWriteTimeout,
+		TTSSentenceTimeout:        cfg.Session.TTSSentenceTimeout,
 	}
 }
