@@ -50,6 +50,7 @@ type GetWeatherForecastInput struct {
 // WeatherDailyInfo 描述单日的天气预报详细信息。
 type WeatherDailyInfo struct {
 	Date                string `json:"date"`
+	DayOfWeek           string `json:"day_of_week,omitempty"`
 	TextDay             string `json:"text_day"`
 	CodeDay             string `json:"code_day"`
 	TextNight           string `json:"text_night"`
@@ -260,6 +261,7 @@ func (c *WeatherForecastClient) FetchForecast(ctx context.Context, location stri
 	for _, d := range first.Daily {
 		dailyList = append(dailyList, WeatherDailyInfo{
 			Date:                d.Date,
+			DayOfWeek:           parseDayOfWeek(d.Date),
 			TextDay:             d.TextDay,
 			CodeDay:             d.CodeDay,
 			TextNight:           d.TextNight,
@@ -299,6 +301,30 @@ func (c *WeatherForecastClient) FetchForecast(ctx context.Context, location stri
 
 	outCopy := *out
 	return &outCopy, nil
+}
+
+// chineseWeekdays 星期枚举与中文对照数组。
+var chineseWeekdays = [...]string{
+	time.Sunday:    "星期日",
+	time.Monday:    "星期一",
+	time.Tuesday:   "星期二",
+	time.Wednesday: "星期三",
+	time.Thursday:  "星期四",
+	time.Friday:    "星期五",
+	time.Saturday:  "星期六",
+}
+
+// parseDayOfWeek 解析日期字符串（如 "2026-09-01"）并返回对应的中文星期（如 "星期二"）。
+func parseDayOfWeek(dateStr string) string {
+	t, err := time.Parse("2006-01-02", strings.TrimSpace(dateStr))
+	if err != nil {
+		return ""
+	}
+	weekday := t.Weekday()
+	if int(weekday) >= 0 && int(weekday) < len(chineseWeekdays) {
+		return chineseWeekdays[weekday]
+	}
+	return ""
 }
 
 // parseOptionalInt 解析任意类型的值为可选 *int。
@@ -364,7 +390,7 @@ func ParseWeatherForecastInput(input any) GetWeatherForecastInput {
 func GetWeatherForecastTool(client *WeatherForecastClient) ai.Tool {
 	return ai.Tool{
 		Name:        ToolGetWeatherForecast,
-		Description: "获取指定地点或预设地点最近15天的天气预报（包括每日白天与夜间天气现象、最高最低气温、风向风力、降水概率等）。用来获取最近15天的天气预报，包括今天的天气也用此工具查询。当用户询问今天天气如何、今天最高/最低气温、明天/后天天气、未来几天天气预报、近期15天天气趋势等问题时调用此工具",
+		Description: "获取指定地点或预设地点最近15天的天气预报（包括日期、星期/周几、每日白天与夜间天气现象、最高最低气温、风向风力、降水概率等）。用来获取最近15天的天气预报，包括今天的天气也用此工具查询。当用户询问今天天气如何、今天最高/最低气温、明天/后天天气、周几/未来几天天气预报、近期15天天气趋势等问题时调用此工具",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

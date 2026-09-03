@@ -226,10 +226,10 @@ func TestWeatherForecastClient_FetchForecast_SuccessAndCache(t *testing.T) {
 	if out1.Location.Name != "昌平" || len(out1.Daily) != 2 {
 		t.Fatalf("unexpected output: %+v", out1)
 	}
-	if out1.Daily[0].TextDay != "晴" || out1.Daily[0].High != "30" || out1.Daily[0].Low != "16" {
+	if out1.Daily[0].TextDay != "晴" || out1.Daily[0].High != "30" || out1.Daily[0].Low != "16" || out1.Daily[0].DayOfWeek != "星期二" {
 		t.Fatalf("unexpected daily[0] data: %+v", out1.Daily[0])
 	}
-	if out1.Daily[1].TextDay != "多云" || out1.Daily[1].Humidity != "80" {
+	if out1.Daily[1].TextDay != "多云" || out1.Daily[1].Humidity != "80" || out1.Daily[1].DayOfWeek != "星期三" {
 		t.Fatalf("unexpected daily[1] data: %+v", out1.Daily[1])
 	}
 	if reqCount.Load() != 1 {
@@ -314,7 +314,7 @@ func TestWeatherForecastClient_FetchForecast_CustomLocationAndParams(t *testing.
 	if err != nil {
 		t.Fatalf("FetchForecast failed: %v", err)
 	}
-	if out.Location.Name != "上海" || len(out.Daily) != 1 || out.Daily[0].TextDay != "小雨" {
+	if out.Location.Name != "上海" || len(out.Daily) != 1 || out.Daily[0].TextDay != "小雨" || out.Daily[0].DayOfWeek != "星期三" {
 		t.Fatalf("unexpected output: %+v", out)
 	}
 }
@@ -458,7 +458,7 @@ func TestGetWeatherForecastTool_DirectRun(t *testing.T) {
 		t.Fatalf("tool.Run failed: %v", err)
 	}
 	out, ok := res.(*GetWeatherForecastOutput)
-	if !ok || len(out.Daily) != 1 || out.Daily[0].TextDay != "晴" || out.Daily[0].High != "30" {
+	if !ok || len(out.Daily) != 1 || out.Daily[0].TextDay != "晴" || out.Daily[0].High != "30" || out.Daily[0].DayOfWeek != "星期二" {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 
@@ -468,5 +468,34 @@ func TestGetWeatherForecastTool_DirectRun(t *testing.T) {
 	_, err = tool.Run(canceledCtx, nil)
 	if err == nil {
 		t.Fatal("expected error on canceled context, got nil")
+	}
+}
+
+func TestParseDayOfWeek(t *testing.T) {
+	tests := []struct {
+		date     string
+		expected string
+	}{
+		{"2026-08-30", "星期日"},
+		{"2026-08-31", "星期一"},
+		{"2026-09-01", "星期二"},
+		{"2026-09-02", "星期三"},
+		{"2026-09-03", "星期四"},
+		{"2026-09-04", "星期五"},
+		{"2026-09-05", "星期六"},
+		{"2026-09-06", "星期日"},
+		{"", ""},
+		{"   ", ""},
+		{"invalid-date", ""},
+		{"2026/09/01", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.date, func(t *testing.T) {
+			got := parseDayOfWeek(tt.date)
+			if got != tt.expected {
+				t.Fatalf("parseDayOfWeek(%q) = %q, want %q", tt.date, got, tt.expected)
+			}
+		})
 	}
 }
