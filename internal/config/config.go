@@ -12,11 +12,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 敏感配置所需的环境变量名称。
-const (
-	EnvDatabaseDSN = "DATABASE_DSN"
-)
-
 // 合法取值区间边界常量定义。
 const (
 	minConcurrentSessions = 1
@@ -98,13 +93,12 @@ type SessionConfig struct {
 // DatabaseConfig 定义数据库连接与连接池配置。
 type DatabaseConfig struct {
 	Driver                string        `yaml:"driver"`
+	DSN                   string        `yaml:"dsn"`
 	MaxOpenConns          int           `yaml:"max_open_conns"`
 	MaxIdleConns          int           `yaml:"max_idle_conns"`
 	ConnectionMaxLifetime time.Duration `yaml:"connection_max_lifetime"`
 	ConnectionMaxIdleTime time.Duration `yaml:"connection_max_idle_time"`
 	PingTimeout           time.Duration `yaml:"ping_timeout"`
-
-	DSN string `yaml:"-"`
 }
 
 // Config 包含服务端运行所需的全部基础设施配置项。
@@ -114,7 +108,7 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"`
 }
 
-// Load 从指定路径的 YAML 文件加载非敏感配置，合并环境变量中的敏感凭据并完成校验。
+// Load 从指定路径的 YAML 文件加载配置并完成校验。
 func Load(path string) (*Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -125,7 +119,7 @@ func Load(path string) (*Config, error) {
 	return LoadFromReader(file)
 }
 
-// LoadFromReader 从 io.Reader 解析 YAML 配置，合并环境变量并完成全面校验。
+// LoadFromReader 从 io.Reader 解析 YAML 配置并完成全面校验。
 func LoadFromReader(r io.Reader) (*Config, error) {
 	var cfg Config
 	dec := yaml.NewDecoder(r)
@@ -133,8 +127,6 @@ func LoadFromReader(r io.Reader) (*Config, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("decode yaml config: %w", err)
 	}
-
-	cfg.Database.DSN = os.Getenv(EnvDatabaseDSN)
 
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
@@ -231,7 +223,7 @@ func (c *Config) validateDatabase() error {
 		return fmt.Errorf("unsupported database driver %q", c.Database.Driver)
 	}
 	if strings.TrimSpace(c.Database.DSN) == "" {
-		return fmt.Errorf("database dsn is required (environment variable %s)", EnvDatabaseDSN)
+		return errors.New("dsn is required")
 	}
 	if err := validateInt("max_open_conns", c.Database.MaxOpenConns, minDatabaseConns, maxDatabaseConns); err != nil {
 		return err

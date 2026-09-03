@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"strings"
 	"testing"
 )
@@ -32,15 +31,13 @@ session:
 
 database:
   driver: "sqlite"
+  dsn: "file::memory:?cache=shared"
   max_open_conns: 1
   max_idle_conns: 1
   connection_max_lifetime: 0s
   connection_max_idle_time: 0s
   ping_timeout: 3s
 `
-
-	os.Setenv(EnvDatabaseDSN, "file::memory:?cache=shared")
-	defer os.Unsetenv(EnvDatabaseDSN)
 
 	cfg, err := LoadFromReader(strings.NewReader(yamlContent))
 	if err != nil {
@@ -52,6 +49,9 @@ database:
 	}
 	if cfg.Database.Driver != "sqlite" {
 		t.Errorf("expected driver sqlite, got %s", cfg.Database.Driver)
+	}
+	if cfg.Database.DSN != "file::memory:?cache=shared" {
+		t.Errorf("expected dsn file::memory:?cache=shared, got %s", cfg.Database.DSN)
 	}
 }
 
@@ -87,10 +87,25 @@ database:
   connection_max_idle_time: 0s
   ping_timeout: 3s
 `
-	os.Unsetenv(EnvDatabaseDSN)
 
 	_, err := LoadFromReader(strings.NewReader(yamlContent))
 	if err == nil {
-		t.Error("expected error due to missing DATABASE_DSN, got nil")
+		t.Fatal("expected error due to missing dsn, got nil")
+	}
+	if !strings.Contains(err.Error(), "dsn is required") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestLoadExampleConfigFile(t *testing.T) {
+	cfg, err := Load("../../config.example.yaml")
+	if err != nil {
+		t.Fatalf("Load config.example.yaml failed: %v", err)
+	}
+	if cfg.Database.Driver != "sqlite" {
+		t.Errorf("expected driver sqlite, got %s", cfg.Database.Driver)
+	}
+	if cfg.Database.DSN != "file:xiaozhi-dev.db?_journal_mode=WAL&_busy_timeout=5000" {
+		t.Errorf("unexpected dsn: %s", cfg.Database.DSN)
 	}
 }

@@ -34,29 +34,28 @@ brew install opus pkg-config
 sudo apt-get install -y libopus-dev pkg-config
 ```
 
-### 2. 配置与环境变量
+### 2. 服务配置
 
 ```bash
 # 复制配置文件
 cp config.example.yaml config.yaml
 ```
 
-修改 `config.yaml` 中的 `websocket_url` 为本机**局域网 IP**：
+修改 `config.yaml` 中的 `websocket_url` 为本机**局域网 IP**，并按需调整数据库配置：
 ```yaml
 server:
   listen_addr: ":8080"
   websocket_url: "ws://192.168.1.100:8080/xiaozhi/v1/"
-```
 
-在终端设置环境变量（敏感凭据不写入配置文件）：
-```bash
-# 数据库连接串（支持 sqlite / mysql / postgres）：
-# SQLite:
-export DATABASE_DSN="file:xiaozhi-dev.db?_journal_mode=WAL&_busy_timeout=5000"
-# MySQL 8:
-# export DATABASE_DSN="user:password@tcp(127.0.0.1:3306)/xiaozhi?charset=utf8mb4&parseTime=True&loc=Local"
-# PostgreSQL:
-# export DATABASE_DSN="host=localhost user=postgres password=secret dbname=xiaozhi port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+database:
+  driver: "sqlite"
+  dsn: "file:xiaozhi-dev.db?_journal_mode=WAL&_busy_timeout=5000"
+  # MySQL 8 示例:
+  # driver: "mysql"
+  # dsn: "user:password@tcp(127.0.0.1:3306)/xiaozhi?charset=utf8mb4&parseTime=True&loc=Local"
+  # PostgreSQL 示例:
+  # driver: "postgres"
+  # dsn: "host=localhost user=postgres password=secret dbname=xiaozhi port=5432 sslmode=disable TimeZone=Asia/Shanghai"
 ```
 
 ### 3. 启动服务
@@ -101,6 +100,7 @@ curl http://127.0.0.1:8080/xiaozhi/ota/
 | `session.max_history_turns` | 上下文保留轮数 | `6`（FIFO 滚动淘汰） |
 | `session.listen_prompt_enabled` | 自动模式提示音开关 | `true` |
 | `database.driver` | 数据库驱动类型（`sqlite` / `mysql` / `postgres`） | `sqlite` |
+| `database.dsn` | 数据库连接字符串（DSN） | `file:xiaozhi-dev.db?_journal_mode=WAL&_busy_timeout=5000` |
 
 > **提示：** AI 模型（ASR/LLM/TTS）、音色、提示词及代理配置均已完全纯数据库化，由管理后台或数据表动态驱动，无需在配置文件中配置。
 
