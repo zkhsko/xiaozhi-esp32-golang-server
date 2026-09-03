@@ -16,46 +16,34 @@ import (
 	"xiaozhi-esp32-golang-server/internal/ai"
 )
 
-type mockTTSStream struct {
-	mu        sync.Mutex
-	pcmChunks [][]byte
-	idx       int
-	err       error
-	finished  bool
-	closed    bool
-	sentences []string
-	onClose   func()
+type mockTTSPacketStream struct {
+	mu      sync.Mutex
+	packets [][]byte
+	idx     int
+	err     error
+	closed  bool
+	onClose func()
 }
 
-func (m *mockTTSStream) SendSentence(ctx context.Context, text string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.sentences = append(m.sentences, text)
-	return nil
-}
-
-func (m *mockTTSStream) Finish(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.finished = true
-	return nil
-}
-
-func (m *mockTTSStream) NextPCM(ctx context.Context) ([]byte, error) {
+func (m *mockTTSPacketStream) NextPacket(ctx context.Context) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
 		return nil, m.err
 	}
-	if m.idx >= len(m.pcmChunks) {
+	if m.idx >= len(m.packets) {
 		return nil, io.EOF
 	}
-	chunk := m.pcmChunks[m.idx]
+	pkt := m.packets[m.idx]
 	m.idx++
-	return chunk, nil
+	return pkt, nil
 }
 
-func (m *mockTTSStream) Close() error {
+func (m *mockTTSPacketStream) Cancel(ctx context.Context) error {
+	return m.Close()
+}
+
+func (m *mockTTSPacketStream) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closed = true
@@ -68,22 +56,22 @@ func (m *mockTTSStream) Close() error {
 type mockTTSClient struct {
 	mu        sync.Mutex
 	err       error
-	streams   []*mockTTSStream
-	newStream func() *mockTTSStream
+	streams   []*mockTTSPacketStream
+	newStream func() *mockTTSPacketStream
 }
 
-func (m *mockTTSClient) CreateStream(ctx context.Context) (ai.TTSStream, error) {
+func (m *mockTTSClient) SynthesizeSentence(ctx context.Context, text string) (ai.TTSPacketStream, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
 		return nil, m.err
 	}
-	var stream *mockTTSStream
+	var stream *mockTTSPacketStream
 	if m.newStream != nil {
 		stream = m.newStream()
 	} else {
-		stream = &mockTTSStream{
-			pcmChunks: [][]byte{make([]byte, 2880)},
+		stream = &mockTTSPacketStream{
+			packets: [][]byte{[]byte{0x01, 0x02, 0x03}},
 		}
 	}
 	m.streams = append(m.streams, stream)
@@ -121,12 +109,12 @@ func TestConsumeSentencesTTS_ExplicitContract_Success(t *testing.T) {
 	writer := NewWriter(ctx, conn, 100, nil)
 	defer writer.Close()
 
-	pcmFrame := make([]byte, 2880)
-	stream := &mockTTSStream{
-		pcmChunks: [][]byte{pcmFrame, pcmFrame},
+	pkt := []byte{0x01, 0x02, 0x03}
+	stream := &mockTTSPacketStream{
+		packets: [][]byte{pkt, pkt},
 	}
 	mockTTS := &mockTTSClient{
-		newStream: func() *mockTTSStream {
+		newStream: func() *mockTTSPacketStream {
 			return stream
 		},
 	}
@@ -180,7 +168,7 @@ func TestConsumeSentencesTTS_SingleConcurrency(t *testing.T) {
 	var maxObservedConcurrency atomic.Int32
 
 	mockTTS := &mockTTSClient{
-		newStream: func() *mockTTSStream {
+		newStream: func() *mockTTSPacketStream {
 			curr := activeStreams.Add(1)
 			for {
 				max := maxObservedConcurrency.Load()
@@ -188,8 +176,8 @@ func TestConsumeSentencesTTS_SingleConcurrency(t *testing.T) {
 					break
 				}
 			}
-			return &mockTTSStream{
-				pcmChunks: [][]byte{make([]byte, 2880), make([]byte, 2880)},
+			return &mockTTSPacketStream{
+				packets: [][]byte{[]byte{0x01, 0x02}, []byte{0x03, 0x04}},
 				onClose: func() {
 					activeStreams.Add(-1)
 				},
@@ -323,9 +311,9 @@ func TestTurnPipeline_SentenceSubtitleSync(t *testing.T) {
 	ticker := newManualTicker()
 
 	mockTTS := &mockTTSClient{
-		newStream: func() *mockTTSStream {
-			return &mockTTSStream{
-				pcmChunks: [][]byte{make([]byte, 2880*3)},
+		newStream: func() *mockTTSPacketStream {
+			return &mockTTSPacketStream{
+				packets: [][]byte{[]byte{0x01, 0x02, 0x03}, []byte{0x04, 0x05, 0x06}},
 			}
 		},
 	}

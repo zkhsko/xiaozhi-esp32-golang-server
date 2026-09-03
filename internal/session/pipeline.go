@@ -652,7 +652,7 @@ func (p *TurnPipeline) orchestrateLLMAndTTS(turn *activeTurn, sessionId string, 
 	pacer.FinishInput()
 }
 
-// consumeSentencesTTS 严格保持单并发合成与流式分帧编码，将单句字幕与 Opus 包实时压入下行节奏器。
+// consumeSentencesTTS 严格保持单并发合成，将单句字幕与 Opus 音频包按时序压入下行节奏器。
 func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, sentenceCh <-chan string, pacer *DownlinkPacer, done chan<- error) {
 	ctx := turn.ctx
 	turnId := turn.turnId
@@ -672,26 +672,6 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 		return
 	}
 
-	enc, err := audio.NewEncoder(p.cfg.MaxOpusPacketBytes)
-	if err != nil {
-		consumeErr = err
-		p.logger.Error("failed to create per-turn opus encoder",
-			"error", err,
-			"session_id", sessionId,
-			"turn_id", turnId,
-		)
-		p.emit(turnEvent{
-			turnId: turnId,
-			typ:    turnEventTurnFailed,
-			err:    err,
-			fatal:  true,
-		})
-		return
-	}
-	defer enc.Close()
-
-	streamEncoder := audio.NewStreamEncoder(enc)
-
 	hasSentStart := false
 	for sentence := range sentenceCh {
 		if ctx.Err() != nil {
@@ -708,7 +688,7 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 			}
 		}
 
-		if err := p.synthesizeSentence(ctx, sessionId, sentence, streamEncoder, pacer); err != nil {
+		if err := p.synthesizeSentence(ctx, sessionId, sentence, pacer); err != nil {
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return
 			}
@@ -732,34 +712,6 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 		return
 	}
 
-	// 统一刷新最后一包 Opus 尾帧
-	flushPackets, flushErr := streamEncoder.Flush()
-	if flushErr != nil {
-		consumeErr = flushErr
-		p.logger.Warn("failed to flush tts opus encoder",
-			"error", flushErr,
-			"session_id", sessionId,
-			"turn_id", turnId,
-		)
-		p.emit(turnEvent{
-			turnId: turnId,
-			typ:    turnEventTurnFailed,
-			err:    flushErr,
-			fatal:  true,
-		})
-		return
-	}
-	for _, pkt := range flushPackets {
-		if ctx.Err() != nil {
-			return
-		}
-		if pacer != nil {
-			if err := pacer.Enqueue(pkt); err != nil {
-				return
-			}
-		}
-	}
-
 	if hasSentStart && pacer != nil {
 		if stopBytes, sErr := EncodeTTSStopMessage(sessionId); sErr == nil {
 			_ = pacer.EnqueueText(stopBytes)
@@ -767,8 +719,8 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 	}
 }
 
-// synthesizeSentence 为单个句子建立流式 TTS 会话，顺序流式拉取 PCM 数据、进行分帧 Opus 编码并写入下行节奏器。
-func (p *TurnPipeline) synthesizeSentence(ctx context.Context, sessionId string, sentence string, streamEncoder *audio.StreamEncoder, pacer *DownlinkPacer) error {
+// synthesizeSentence 发起单句语音合成，流式拉取已编码的 Opus 音频帧并按序写入下行节奏器。
+func (p *TurnPipeline) synthesizeSentence(ctx context.Context, sessionId string, sentence string, pacer *DownlinkPacer) error {
 	if p.ttsClient == nil {
 		return nil
 	}
@@ -781,26 +733,18 @@ func (p *TurnPipeline) synthesizeSentence(ctx context.Context, sessionId string,
 		}
 	}
 
-	stream, err := p.ttsClient.CreateStream(ctx)
+	stream, err := p.ttsClient.SynthesizeSentence(ctx, sentence)
 	if err != nil {
 		return err
 	}
 	defer stream.Close()
-
-	if err := stream.SendSentence(ctx, sentence); err != nil {
-		return err
-	}
-
-	if err := stream.Finish(ctx); err != nil {
-		return err
-	}
 
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 
-		pcmChunk, err := stream.NextPCM(ctx)
+		packet, err := stream.NextPacket(ctx)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -808,23 +752,13 @@ func (p *TurnPipeline) synthesizeSentence(ctx context.Context, sessionId string,
 			return err
 		}
 
-		if len(pcmChunk) == 0 {
+		if len(packet) == 0 {
 			continue
 		}
 
-		packets, err := streamEncoder.Feed(pcmChunk)
-		if err != nil {
-			return err
-		}
-
-		for _, pkt := range packets {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if pacer != nil {
-				if err := pacer.Enqueue(pkt); err != nil {
-					return err
-				}
+		if pacer != nil {
+			if err := pacer.EnqueueAudio(packet); err != nil {
+				return err
 			}
 		}
 	}
