@@ -217,8 +217,8 @@ func TestSession_Abort_ResetsToReady(t *testing.T) {
 	})
 	time.Sleep(50 * time.Millisecond)
 
-	// 发送 listen.start
-	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	// 发送 listen.start (manual 模式直接进入收音)
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"manual"}`)
 	sess.postEvent(sessionEvent{
 		kind:     eventKindClientFrame,
 		isBinary: false,
@@ -300,8 +300,8 @@ func TestSession_CloseTool_ClosesSessionAfterTurn(t *testing.T) {
 	})
 	time.Sleep(50 * time.Millisecond)
 
-	// 发送 listen.start
-	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	// 发送 listen.start (manual 模式直接进入收音)
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"manual"}`)
 	sess.postEvent(sessionEvent{
 		kind:     eventKindClientFrame,
 		isBinary: false,
@@ -368,4 +368,84 @@ func TestSession_History_MaintainedCorrectly(t *testing.T) {
 	if fullMsgs[5].Role != ai.RoleUser || fullMsgs[5].Content != "新问题" {
 		t.Fatalf("unexpected user message: %+v", fullMsgs[5])
 	}
+}
+
+func TestSession_AutoMode_PlaysPromptBeforeListening(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 100, nil)
+	defer writer.Close()
+
+	sess := NewSession(ctx, Options{
+		Writer:       writer,
+		SerialNumber: "SN-12345678",
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	// 握手
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+	time.Sleep(50 * time.Millisecond)
+	if sess.State() != StateReady {
+		t.Fatalf("expected StateReady after handshake, got %v", sess.State())
+	}
+
+	// 首次发送 listen.start (auto 模式)，固定播放提示音进入 Speaking
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"auto"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     listenRaw,
+	})
+	time.Sleep(50 * time.Millisecond)
+	if sess.State() != StateSpeaking {
+		t.Fatalf("expected StateSpeaking when playing prompt in auto mode, got %v", sess.State())
+	}
+
+	// 模拟提示音播放完成事件
+	sess.postEvent(sessionEvent{
+		kind: eventKindTurnEvent,
+		turnEv: turnEvent{
+			turnId: 1,
+			typ:    turnEventTurnCompleted,
+		},
+	})
+	time.Sleep(50 * time.Millisecond)
+	if sess.State() != StateReady {
+		t.Fatalf("expected StateReady after prompt completed, got %v", sess.State())
+	}
+
+	// 固件再次发送 listen.start (auto 模式)，此时应直接进入 Listening
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     listenRaw,
+	})
+	time.Sleep(50 * time.Millisecond)
+	if sess.State() != StateListening {
+		t.Fatalf("expected StateListening on second auto listen.start, got %v", sess.State())
+	}
+
+	sess.Close()
 }

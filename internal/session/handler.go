@@ -225,6 +225,5 @@ func mapSessionConfig(cfg *config.Config) SessionConfig {
 		TTSPCMQueueCapacity:       cfg.Session.TTSPCMQueueCapacity,
 		DownlinkOpusQueueCapacity: cfg.Session.DownlinkOpusQueueCapacity,
 		MaxHistoryTurns:           cfg.Session.MaxHistoryTurns,
-		ListenPromptEnabled:       cfg.Session.ListenPromptEnabled,
 	}
 }

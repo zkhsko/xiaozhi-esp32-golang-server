@@ -722,40 +722,6 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 		return
 	}
 
-	// 若为 auto 模式且启用了提示音且本轮非关闭连接操作，在末尾追加提示音 PCM
-	if turn.mode == ListenModeAuto && p.cfg.ListenPromptEnabled && !turn.effects.CloseSession {
-		promptPCM, pErr := audio.GetListenPromptPCM()
-		if pErr != nil {
-			consumeErr = pErr
-			p.logger.Warn("failed to get listen prompt pcm for turn tail",
-				"error", pErr,
-				"session_id", sessionId,
-				"turn_id", turnId,
-			)
-		} else if len(promptPCM) > 0 {
-			promptPackets, pEncodeErr := streamEncoder.Feed(promptPCM)
-			if pEncodeErr != nil {
-				consumeErr = pEncodeErr
-				p.logger.Warn("failed to encode prompt pcm to opus",
-					"error", pEncodeErr,
-					"session_id", sessionId,
-					"turn_id", turnId,
-				)
-			} else {
-				for _, pkt := range promptPackets {
-					if ctx.Err() != nil {
-						return
-					}
-					if pacer != nil {
-						if err := pacer.Enqueue(pkt); err != nil {
-							return
-						}
-					}
-				}
-			}
-		}
-	}
-
 	// 统一刷新最后一包 Opus 尾帧
 	flushPackets, flushErr := streamEncoder.Flush()
 	if flushErr != nil {

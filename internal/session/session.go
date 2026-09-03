@@ -425,7 +425,7 @@ func (s *Session) handleClientText(st *runtimeState, msg *ClientMessage) {
 			st.currentTurnId++
 			turnId := st.currentTurnId
 
-			if mode == ListenModeAuto && s.cfg.ListenPromptEnabled && !st.promptPlayed {
+			if mode == ListenModeAuto && !st.promptPlayed {
 				st.promptPlayed = true
 				s.setState(st, StateSpeaking)
 				st.mode = mode
@@ -573,7 +573,7 @@ func (s *Session) handleTurnEvent(st *runtimeState, ev turnEvent) {
 			return
 		}
 
-		if st.mode == ListenModeAuto && s.cfg.ListenPromptEnabled {
+		if st.mode == ListenModeAuto {
 			st.promptPlayed = true
 		}
 
