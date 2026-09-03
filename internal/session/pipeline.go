@@ -265,12 +265,14 @@ func (p *TurnPipeline) StartResponse(turnId uint64, sessionId string, userText s
 		return nil
 	}
 
+	stopBytes, _ := EncodeTTSStopMessage(sessionId)
 	pacer := NewDownlinkPacer(turnCtx, DownlinkPacerOptions{
 		SessionId:     sessionId,
 		Sender:        sender,
 		QueueCap:      p.cfg.DownlinkOpusQueueCapacity,
 		TickerFactory: p.tickerFactory,
 		Logger:        p.logger,
+		AbortPayload:  stopBytes,
 		Callbacks: PacerCallbacks{
 			OnStarted: func() {
 				p.emit(turnEvent{
@@ -690,6 +692,7 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 
 	streamEncoder := audio.NewStreamEncoder(enc)
 
+	hasSentStart := false
 	for sentence := range sentenceCh {
 		if ctx.Err() != nil {
 			return
@@ -698,7 +701,14 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 			continue
 		}
 
-		if err := p.synthesizeSentence(ctx, sentence, streamEncoder, pacer); err != nil {
+		if !hasSentStart && pacer != nil {
+			hasSentStart = true
+			if startBytes, sErr := EncodeTTSStartMessage(sessionId); sErr == nil {
+				_ = pacer.EnqueueText(startBytes)
+			}
+		}
+
+		if err := p.synthesizeSentence(ctx, sessionId, sentence, streamEncoder, pacer); err != nil {
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return
 			}
@@ -749,17 +759,25 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 			}
 		}
 	}
+
+	if hasSentStart && pacer != nil {
+		if stopBytes, sErr := EncodeTTSStopMessage(sessionId); sErr == nil {
+			_ = pacer.EnqueueText(stopBytes)
+		}
+	}
 }
 
 // synthesizeSentence 为单个句子建立流式 TTS 会话，顺序流式拉取 PCM 数据、进行分帧 Opus 编码并写入下行节奏器。
-func (p *TurnPipeline) synthesizeSentence(ctx context.Context, sentence string, streamEncoder *audio.StreamEncoder, pacer *DownlinkPacer) error {
+func (p *TurnPipeline) synthesizeSentence(ctx context.Context, sessionId string, sentence string, streamEncoder *audio.StreamEncoder, pacer *DownlinkPacer) error {
 	if p.ttsClient == nil {
 		return nil
 	}
 
 	if pacer != nil {
-		if err := pacer.EnqueueSentenceStart(sentence); err != nil {
-			return err
+		if sentBytes, sErr := EncodeTTSSentenceStartMessage(sessionId, sentence); sErr == nil {
+			if err := pacer.EnqueueText(sentBytes); err != nil {
+				return err
+			}
 		}
 	}
 

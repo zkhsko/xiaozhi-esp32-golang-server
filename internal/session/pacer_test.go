@@ -93,14 +93,22 @@ func TestDownlinkPacer_SendPacketAndFinishInput(t *testing.T) {
 
 	go pacer.Run()
 
+	startMsg, _ := EncodeTTSStartMessage("sess-pacer-test")
+	stopMsg, _ := EncodeTTSStopMessage("sess-pacer-test")
 	pkt1 := []byte{0x01, 0x02, 0x03}
 	pkt2 := []byte{0x04, 0x05, 0x06}
 
-	if err := pacer.Enqueue(pkt1); err != nil {
-		t.Fatalf("Enqueue pkt1 failed: %v", err)
+	if err := pacer.EnqueueText(startMsg); err != nil {
+		t.Fatalf("EnqueueText startMsg failed: %v", err)
 	}
-	if err := pacer.Enqueue(pkt2); err != nil {
-		t.Fatalf("Enqueue pkt2 failed: %v", err)
+	if err := pacer.EnqueueAudio(pkt1); err != nil {
+		t.Fatalf("EnqueueAudio pkt1 failed: %v", err)
+	}
+	if err := pacer.EnqueueAudio(pkt2); err != nil {
+		t.Fatalf("EnqueueAudio pkt2 failed: %v", err)
+	}
+	if err := pacer.EnqueueText(stopMsg); err != nil {
+		t.Fatalf("EnqueueText stopMsg failed: %v", err)
 	}
 
 	pacer.FinishInput()
@@ -129,11 +137,8 @@ func TestDownlinkPacer_SendPacketAndFinishInput(t *testing.T) {
 		t.Fatal("expected OnCompleted to be called")
 	}
 
-	if !pacer.HasSentStart() {
-		t.Fatal("expected tts.start to have been sent")
-	}
-	if !pacer.HasSentStop() {
-		t.Fatal("expected tts.stop to have been sent")
+	if !pacer.HasStarted() {
+		t.Fatal("expected HasStarted to return true")
 	}
 
 	time.Sleep(50 * time.Millisecond)
@@ -227,7 +232,7 @@ func TestDownlinkPacer_Stop(t *testing.T) {
 	})
 	go pacer.Run()
 
-	_ = pacer.Enqueue([]byte{0x01})
+	_ = pacer.EnqueueAudio([]byte{0x01})
 	pacer.Stop()
 
 	select {
@@ -236,7 +241,7 @@ func TestDownlinkPacer_Stop(t *testing.T) {
 		t.Fatal("pacer did not exit on stop")
 	}
 
-	if err := pacer.Enqueue([]byte{0x02}); err != ErrPacerStopped {
+	if err := pacer.EnqueueAudio([]byte{0x02}); err != ErrPacerStopped {
 		t.Fatalf("expected ErrPacerStopped after stop, got %v", err)
 	}
 }
@@ -249,23 +254,25 @@ func TestDownlinkPacer_Abort(t *testing.T) {
 	writer := NewWriter(ctx, conn, 10, nil)
 	defer writer.Close()
 
+	stopMsg, _ := EncodeTTSStopMessage("sess-abort-test")
 	ticker := newManualTicker()
 	pacer := NewDownlinkPacer(ctx, DownlinkPacerOptions{
-		SessionId: "sess-abort-test",
-		Sender:    writer,
-		QueueCap:  10,
+		SessionId:    "sess-abort-test",
+		Sender:       writer,
+		QueueCap:     10,
+		AbortPayload: stopMsg,
 		TickerFactory: func(d time.Duration) Ticker {
 			return ticker
 		},
 	})
 	go pacer.Run()
 
-	_ = pacer.Enqueue([]byte{0x01})
+	_ = pacer.EnqueueAudio([]byte{0x01})
 	ticker.Tick()
 	time.Sleep(10 * time.Millisecond)
 
-	if !pacer.HasSentStart() {
-		t.Fatal("expected tts.start to have been sent before abort")
+	if !pacer.HasStarted() {
+		t.Fatal("expected HasStarted to be true before abort")
 	}
 
 	pacer.Abort()
@@ -276,8 +283,20 @@ func TestDownlinkPacer_Abort(t *testing.T) {
 		t.Fatal("pacer did not exit on abort")
 	}
 
-	if !pacer.HasSentStop() {
-		t.Fatal("expected tts.stop to have been sent on abort")
+	time.Sleep(50 * time.Millisecond)
+	msgs := conn.getMessages()
+	// 期望收到 1 个音频包和 1 个 stop 文本消息
+	if len(msgs) < 2 {
+		t.Fatalf("expected at least 2 messages on abort, got %d", len(msgs))
+	}
+	lastMsg := msgs[len(msgs)-1]
+	if lastMsg.typ != websocket.MessageText {
+		t.Fatalf("expected last message on abort to be text, got %v", lastMsg.typ)
+	}
+	var m map[string]any
+	_ = json.Unmarshal(lastMsg.payload, &m)
+	if m["type"] != "tts" || m["state"] != "stop" {
+		t.Fatalf("expected last message to be tts.stop, got %+v", m)
 	}
 }
 
@@ -297,13 +316,24 @@ func TestDownlinkPacer_ConcurrencyRace(t *testing.T) {
 	go pacer.Run()
 
 	var wg sync.WaitGroup
-	// 并发 Enqueue
+	// 并发 EnqueueAudio
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 20; j++ {
-				_ = pacer.Enqueue([]byte{0x01, 0x02})
+				_ = pacer.EnqueueAudio([]byte{0x01, 0x02})
+			}
+		}()
+	}
+
+	// 并发 EnqueueText
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 10; j++ {
+				_ = pacer.EnqueueText([]byte(`{"type":"test"}`))
 			}
 		}()
 	}
@@ -320,8 +350,7 @@ func TestDownlinkPacer_ConcurrencyRace(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = pacer.HasSentStart()
-		_ = pacer.HasSentStop()
+		_ = pacer.HasStarted()
 	}()
 
 	wg.Wait()
@@ -359,24 +388,35 @@ func TestDownlinkPacer_SentenceStartSyncOrder(t *testing.T) {
 
 	go pacer.Run()
 
+	startMsg, _ := EncodeTTSStartMessage("sess-pacer-order-test")
+	sent1Msg, _ := EncodeTTSSentenceStartMessage("sess-pacer-order-test", "第一句")
+	sent2Msg, _ := EncodeTTSSentenceStartMessage("sess-pacer-order-test", "第二句")
+	stopMsg, _ := EncodeTTSStopMessage("sess-pacer-order-test")
+
 	pkt1 := []byte{0x10, 0x11}
 	pkt2 := []byte{0x20, 0x21}
 	pkt3 := []byte{0x30, 0x31}
 
-	if err := pacer.EnqueueSentenceStart("第一句"); err != nil {
-		t.Fatalf("EnqueueSentenceStart 1 failed: %v", err)
+	if err := pacer.EnqueueText(startMsg); err != nil {
+		t.Fatalf("EnqueueText startMsg failed: %v", err)
 	}
-	if err := pacer.Enqueue(pkt1); err != nil {
-		t.Fatalf("Enqueue pkt1 failed: %v", err)
+	if err := pacer.EnqueueText(sent1Msg); err != nil {
+		t.Fatalf("EnqueueText sent1Msg failed: %v", err)
 	}
-	if err := pacer.Enqueue(pkt2); err != nil {
-		t.Fatalf("Enqueue pkt2 failed: %v", err)
+	if err := pacer.EnqueueAudio(pkt1); err != nil {
+		t.Fatalf("EnqueueAudio pkt1 failed: %v", err)
 	}
-	if err := pacer.EnqueueSentenceStart("第二句"); err != nil {
-		t.Fatalf("EnqueueSentenceStart 2 failed: %v", err)
+	if err := pacer.EnqueueAudio(pkt2); err != nil {
+		t.Fatalf("EnqueueAudio pkt2 failed: %v", err)
 	}
-	if err := pacer.Enqueue(pkt3); err != nil {
-		t.Fatalf("Enqueue pkt3 failed: %v", err)
+	if err := pacer.EnqueueText(sent2Msg); err != nil {
+		t.Fatalf("EnqueueText sent2Msg failed: %v", err)
+	}
+	if err := pacer.EnqueueAudio(pkt3); err != nil {
+		t.Fatalf("EnqueueAudio pkt3 failed: %v", err)
+	}
+	if err := pacer.EnqueueText(stopMsg); err != nil {
+		t.Fatalf("EnqueueText stopMsg failed: %v", err)
 	}
 
 	pacer.FinishInput()
@@ -403,7 +443,7 @@ func TestDownlinkPacer_SentenceStartSyncOrder(t *testing.T) {
 	var msgs []mockWSMessage
 	for i := 0; i < 50; i++ {
 		msgs = conn.getMessages()
-		if len(msgs) == 6 { // start, sent1, pkt1, pkt2, sent2, pkt3, stop (actually 7 items: start, sent1, pkt1, pkt2, sent2, pkt3, stop)
+		if len(msgs) == 7 { // start, sent1, pkt1, pkt2, sent2, pkt3, stop
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -502,7 +542,7 @@ func TestDownlinkPacer_ErrorCallback(t *testing.T) {
 	})
 	go pacer.Run()
 
-	_ = pacer.Enqueue([]byte{0x01, 0x02})
+	_ = pacer.EnqueueAudio([]byte{0x01, 0x02})
 
 	select {
 	case <-pacer.Done():

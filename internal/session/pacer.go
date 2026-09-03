@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -62,15 +61,14 @@ const (
 	// pacerItemAudio 表示 Opus 编码音频二进制包。
 	pacerItemAudio pacerItemKind = iota
 
-	// pacerItemSentenceStart 表示分句字幕开始播报文本通知。
-	pacerItemSentenceStart
+	// pacerItemText 表示文本协议控制消息（如字幕、状态切换通知）。
+	pacerItemText
 )
 
 // pacerItem 定义下行调度器队列中的单个调度单元。
 type pacerItem struct {
-	kind     pacerItemKind
-	data     []byte
-	sentence string
+	kind pacerItemKind
+	data []byte
 }
 
 // PacerCallbacks 封装 DownlinkPacer 在关键播放节点触发的类型化回调。
@@ -87,15 +85,17 @@ type DownlinkPacerOptions struct {
 	QueueCap      int
 	TickerFactory func(time.Duration) Ticker
 	Logger        *slog.Logger
+	AbortPayload  []byte
 	Callbacks     PacerCallbacks
 }
 
-// DownlinkPacer 负责按 60 ms 实时节奏将编码后的 Opus 音频包逐包下发至 DownlinkSender，
-// 并保证 tts.start、tts.sentence_start 与 tts.stop 消息的严格顺序。
+// DownlinkPacer 负责按 60 ms 实时节奏将音频包平滑下发至 DownlinkSender，
+// 并保证文本消息（如字幕、状态切换）与音频二进制帧的严格 FIFO 顺序。
 type DownlinkPacer struct {
 	sessionId     string
 	sender        DownlinkSender
 	logger        *slog.Logger
+	abortPayload  []byte
 	callbacks     PacerCallbacks
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -108,10 +108,9 @@ type DownlinkPacer struct {
 	tickerFactory func(time.Duration) Ticker
 	frameDuration time.Duration
 
-	mu           sync.Mutex
-	hasSentStart bool
-	hasSentStop  bool
-	stopped      bool
+	mu         sync.Mutex
+	hasStarted bool
+	stopped    bool
 }
 
 // NewDownlinkPacer 创建配置就绪的下行 60 ms 节奏调度器。
@@ -145,6 +144,7 @@ func NewDownlinkPacer(ctx context.Context, opts DownlinkPacerOptions) *DownlinkP
 		sessionId:     sId,
 		sender:        opts.Sender,
 		logger:        l,
+		abortPayload:  opts.AbortPayload,
 		callbacks:     opts.Callbacks,
 		ctx:           pacerCtx,
 		cancel:        cancel,
@@ -156,8 +156,8 @@ func NewDownlinkPacer(ctx context.Context, opts DownlinkPacerOptions) *DownlinkP
 	}
 }
 
-// Enqueue 将单个编码完成的 Opus 音频包存入下行发送队列，队列满时阻塞等待（背压机制）。
-func (p *DownlinkPacer) Enqueue(packet []byte) error {
+// EnqueueAudio 将单个编码完成的 Opus 音频包存入下行发送队列，队列满时阻塞等待（背压机制）。
+func (p *DownlinkPacer) EnqueueAudio(packet []byte) error {
 	if len(packet) == 0 {
 		return nil
 	}
@@ -169,7 +169,6 @@ func (p *DownlinkPacer) Enqueue(packet []byte) error {
 	}
 	p.mu.Unlock()
 
-	// 跨异步边界独立深拷贝数据
 	copied := make([]byte, len(packet))
 	copy(copied, packet)
 
@@ -181,9 +180,14 @@ func (p *DownlinkPacer) Enqueue(packet []byte) error {
 	}
 }
 
-// EnqueueSentenceStart 将单句字幕通知存入下行发送队列，确保与对应音频帧保持严格顺序。
-func (p *DownlinkPacer) EnqueueSentenceStart(sentence string) error {
-	if sentence == "" {
+// Enqueue 兼容方法，等价于 EnqueueAudio。
+func (p *DownlinkPacer) Enqueue(packet []byte) error {
+	return p.EnqueueAudio(packet)
+}
+
+// EnqueueText 将单条文本消息（如字幕、控制消息）存入下行发送队列，调度时立即下发以确保时序。
+func (p *DownlinkPacer) EnqueueText(payload []byte) error {
+	if len(payload) == 0 {
 		return nil
 	}
 
@@ -194,22 +198,25 @@ func (p *DownlinkPacer) EnqueueSentenceStart(sentence string) error {
 	}
 	p.mu.Unlock()
 
+	copied := make([]byte, len(payload))
+	copy(copied, payload)
+
 	select {
 	case <-p.ctx.Done():
 		return p.ctx.Err()
-	case p.itemQueue <- pacerItem{kind: pacerItemSentenceStart, sentence: sentence}:
+	case p.itemQueue <- pacerItem{kind: pacerItemText, data: copied}:
 		return nil
 	}
 }
 
-// FinishInput 标记上游 TTS PCM 输入与分帧编码已全部完成。
+// FinishInput 标记上游音频与控制消息输入已全部完成。
 func (p *DownlinkPacer) FinishInput() {
 	p.finishOnce.Do(func() {
 		close(p.finishChan)
 	})
 }
 
-// Stop 立即停止节奏调度器并清空未发送的数据包。
+// Stop 立即停止节奏调度器并清空未发送的数据项。
 func (p *DownlinkPacer) Stop() {
 	p.mu.Lock()
 	p.stopped = true
@@ -219,12 +226,11 @@ func (p *DownlinkPacer) Stop() {
 	p.drainQueue()
 }
 
-// Abort 中止当前播放，清空积压并在已发送 start 且未发送 stop 时下发 tts.stop。
+// Abort 中止当前播放，清空积压并在已启动播放时下发中止控制载荷。
 func (p *DownlinkPacer) Abort() {
 	p.mu.Lock()
 	p.stopped = true
-	needStop := p.hasSentStart && !p.hasSentStop
-	p.hasSentStop = true
+	needAbortPayload := p.hasStarted && len(p.abortPayload) > 0
 	p.mu.Unlock()
 
 	p.cancel()
@@ -234,11 +240,8 @@ func (p *DownlinkPacer) Abort() {
 		drainer.DrainPending()
 	}
 
-	if needStop && p.sender != nil {
-		stopBytes, err := EncodeTTSStopMessage(p.sessionId)
-		if err == nil {
-			_ = p.sender.SendText(context.Background(), stopBytes)
-		}
+	if needAbortPayload && p.sender != nil {
+		_ = p.sender.SendText(context.Background(), p.abortPayload)
 	}
 }
 
@@ -247,18 +250,11 @@ func (p *DownlinkPacer) Done() <-chan struct{} {
 	return p.doneChan
 }
 
-// HasSentStart 返回是否已发送过 tts.start 消息。
-func (p *DownlinkPacer) HasSentStart() bool {
+// HasStarted 返回是否已开始向网络发送数据项。
+func (p *DownlinkPacer) HasStarted() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.hasSentStart
-}
-
-// HasSentStop 返回是否已发送过 tts.stop 消息。
-func (p *DownlinkPacer) HasSentStop() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.hasSentStop
+	return p.hasStarted
 }
 
 // drainQueue 清空队列中残留的数据项。
@@ -272,7 +268,7 @@ func (p *DownlinkPacer) drainQueue() {
 	}
 }
 
-// Run 启动下行节奏调度循环，阻塞直至当前轮次音频全部播放完毕、发生中断或上下文取消。
+// Run 启动下行节奏调度循环，阻塞直至当前轮次数据全部播放完毕、发生中断或上下文取消。
 func (p *DownlinkPacer) Run() {
 	defer func() {
 		p.drainQueue()
@@ -292,61 +288,80 @@ func (p *DownlinkPacer) Run() {
 			return
 
 		case item := <-p.itemQueue:
-			if item.kind == pacerItemSentenceStart {
-				if err := p.sendTTSSentenceStart(item.sentence); err != nil {
-					p.handleError(err)
-					return
-				}
-				continue
-			}
-
-			if err := p.sendPacket(item.data); err != nil {
-				p.handleError(err)
-				return
-			}
-			if ticker == nil {
-				ticker = p.tickerFactory(p.frameDuration)
-			}
-			if !p.waitTick(ticker) {
+			if !p.processItem(item, &ticker) {
 				return
 			}
 
 		case <-p.finishChan:
-			p.drainRemaining(ticker)
+			p.drainRemaining(&ticker)
 			return
 		}
 	}
 }
 
-// drainRemaining 在输入已结束的情况下，按 60 ms 节奏发送队列中剩余的全部数据包并下发 stop。
-func (p *DownlinkPacer) drainRemaining(ticker Ticker) {
+// drainRemaining 在输入已结束的情况下，按 60 ms 节奏发送队列中剩余的全部数据包并触发完成回调。
+func (p *DownlinkPacer) drainRemaining(tickerPtr *Ticker) {
 	for {
 		select {
 		case <-p.ctx.Done():
 			return
 		case item := <-p.itemQueue:
-			if item.kind == pacerItemSentenceStart {
-				if err := p.sendTTSSentenceStart(item.sentence); err != nil {
-					p.handleError(err)
-					return
-				}
-				continue
-			}
-
-			if err := p.sendPacket(item.data); err != nil {
-				p.handleError(err)
-				return
-			}
-			if ticker == nil {
-				ticker = p.tickerFactory(p.frameDuration)
-			}
-			if !p.waitTick(ticker) {
+			if !p.processItem(item, tickerPtr) {
 				return
 			}
 		default:
 			p.finishTurn()
 			return
 		}
+	}
+}
+
+// processItem 处理单个调度项的发送。文本立即发送，音频发送后等待 60ms 节拍。
+func (p *DownlinkPacer) processItem(item pacerItem, tickerPtr *Ticker) bool {
+	p.triggerStartOnce()
+
+	switch item.kind {
+	case pacerItemText:
+		if p.sender != nil {
+			if err := p.sender.SendText(p.ctx, item.data); err != nil {
+				p.handleError(err)
+				return false
+			}
+		}
+		return true
+
+	case pacerItemAudio:
+		if p.sender != nil {
+			if err := p.sender.SendBinary(p.ctx, item.data); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					p.logger.Warn("failed to send downlink audio binary", "error", err)
+				}
+				p.handleError(err)
+				return false
+			}
+		}
+
+		if *tickerPtr == nil {
+			*tickerPtr = p.tickerFactory(p.frameDuration)
+		}
+		return p.waitTick(*tickerPtr)
+	}
+
+	return true
+}
+
+// triggerStartOnce 在首包（无论文本或音频）开始发送时触发 OnStarted 回调。
+func (p *DownlinkPacer) triggerStartOnce() {
+	p.mu.Lock()
+	if p.hasStarted || p.stopped {
+		p.mu.Unlock()
+		return
+	}
+	p.hasStarted = true
+	p.mu.Unlock()
+
+	if p.callbacks.OnStarted != nil {
+		p.callbacks.OnStarted()
 	}
 }
 
@@ -363,109 +378,8 @@ func (p *DownlinkPacer) waitTick(ticker Ticker) bool {
 	}
 }
 
-// sendTTSSentenceStart 在当前句子音频即将播放时下发 tts.sentence_start 文本消息。
-func (p *DownlinkPacer) sendTTSSentenceStart(sentence string) error {
-	if sentence == "" {
-		return nil
-	}
-
-	// 确保在下发第一句字幕前，先触发 tts.start 状态切换
-	if err := p.sendTTSStart(); err != nil {
-		return err
-	}
-
-	startBytes, err := EncodeTTSSentenceStartMessage(p.sessionId, sentence)
-	if err != nil {
-		return fmt.Errorf("encode sentence start message: %w", err)
-	}
-
-	if p.sender != nil {
-		if err := p.sender.SendText(p.ctx, startBytes); err != nil {
-			return fmt.Errorf("send sentence start text message: %w", err)
-		}
-	}
-	return nil
-}
-
-// sendTTSStart 发送 tts.start 文本消息并触发 OnStarted 回调。
-func (p *DownlinkPacer) sendTTSStart() error {
-	p.mu.Lock()
-	if p.hasSentStart || p.stopped {
-		p.mu.Unlock()
-		return nil
-	}
-	p.hasSentStart = true
-	p.mu.Unlock()
-
-	startBytes, err := EncodeTTSStartMessage(p.sessionId)
-	if err != nil {
-		return fmt.Errorf("encode tts start message: %w", err)
-	}
-
-	if p.sender != nil {
-		if err := p.sender.SendText(p.ctx, startBytes); err != nil {
-			return fmt.Errorf("send tts start message: %w", err)
-		}
-	}
-
-	if p.callbacks.OnStarted != nil {
-		p.callbacks.OnStarted()
-	}
-	return nil
-}
-
-// sendPacket 发送单个 Opus 音频包，并在首包就绪时确保先发送 tts.start 文本消息。
-func (p *DownlinkPacer) sendPacket(pkt []byte) error {
-	p.mu.Lock()
-	needStart := !p.hasSentStart
-	p.mu.Unlock()
-
-	if needStart {
-		if err := p.sendTTSStart(); err != nil {
-			p.logger.Warn("failed to send tts start", "error", err)
-			return err
-		}
-	}
-
-	if p.sender != nil {
-		if err := p.sender.SendBinary(p.ctx, pkt); err != nil {
-			if !errors.Is(err, context.Canceled) {
-				p.logger.Warn("failed to send downlink opus binary", "error", err)
-			}
-			return err
-		}
-	}
-	return nil
-}
-
-// finishTurn 正常发送 tts.stop 并触发 OnCompleted 回调。
+// finishTurn 触发 OnCompleted 回调。
 func (p *DownlinkPacer) finishTurn() {
-	p.mu.Lock()
-	if p.stopped {
-		p.mu.Unlock()
-		return
-	}
-	wasStarted := p.hasSentStart
-	needStop := wasStarted && !p.hasSentStop
-	if needStop {
-		p.hasSentStop = true
-	}
-	p.mu.Unlock()
-
-	if needStop && p.sender != nil {
-		stopBytes, err := EncodeTTSStopMessage(p.sessionId)
-		if err != nil {
-			p.logger.Error("failed to encode tts stop message", "error", err)
-			p.handleError(err)
-			return
-		}
-		if sendErr := p.sender.SendText(p.ctx, stopBytes); sendErr != nil {
-			p.logger.Warn("failed to send tts stop message", "error", sendErr)
-			p.handleError(sendErr)
-			return
-		}
-	}
-
 	if p.callbacks.OnCompleted != nil {
 		p.callbacks.OnCompleted()
 	}
