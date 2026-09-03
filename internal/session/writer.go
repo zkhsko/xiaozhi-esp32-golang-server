@@ -17,9 +17,6 @@ const (
 
 // 串行写流程相关的哨兵错误定义。
 var (
-	// ErrWriteQueueFull 串行写队列满载背压拒绝错误。
-	ErrWriteQueueFull = errors.New("write queue is full")
-
 	// ErrWriterClosed 串行写流程已关闭错误。
 	ErrWriterClosed = errors.New("writer is closed")
 )
@@ -39,16 +36,17 @@ type writeMessage struct {
 // Writer 负责单个 WebSocket 连接的串行消息下发与背压保护。
 // 单个专属写循环 goroutine 独占调用底层 conn.Write，保证所有文本和 Opus 二进制消息严格串行下发。
 type Writer struct {
-	conn      WSConn
-	queue     chan writeMessage
-	ctx       context.Context
-	cancel    context.CancelFunc
-	done      chan struct{}
-	closeOnce sync.Once
-	logger    *slog.Logger
+	conn       WSConn
+	queue      chan writeMessage
+	writeCtx   context.Context
+	stopCancel context.CancelFunc
+	queueCtx   context.Context
+	cancel     context.CancelFunc
+	done       chan struct{}
+	closeOnce  sync.Once
+	logger     *slog.Logger
 
 	mu      sync.RWMutex
-	closed  bool
 	lastErr error
 }
 
@@ -68,14 +66,17 @@ func NewWriter(ctx context.Context, conn WSConn, queueCapacity int, l *slog.Logg
 		ctx = context.Background()
 	}
 
-	writeCtx, cancel := context.WithCancel(ctx)
+	writeCtx, stopCancel := context.WithCancel(ctx)
+	queueCtx, cancelQueue := context.WithCancel(ctx)
 	w := &Writer{
-		conn:   conn,
-		queue:  make(chan writeMessage, queueCapacity),
-		ctx:    writeCtx,
-		cancel: cancel,
-		done:   make(chan struct{}),
-		logger: l,
+		conn:       conn,
+		queue:      make(chan writeMessage, queueCapacity),
+		writeCtx:   writeCtx,
+		stopCancel: stopCancel,
+		queueCtx:   queueCtx,
+		cancel:     cancelQueue,
+		done:       make(chan struct{}),
+		logger:     l,
 	}
 
 	go w.writeLoop()
@@ -112,7 +113,7 @@ func (w *Writer) sendSync(ctx context.Context, msgType websocket.MessageType, pa
 		return err
 	}
 	select {
-	case <-w.ctx.Done():
+	case <-w.queueCtx.Done():
 		return ErrWriterClosed
 	case <-ctx.Done():
 		return ctx.Err()
@@ -121,14 +122,15 @@ func (w *Writer) sendSync(ctx context.Context, msgType websocket.MessageType, pa
 	}
 }
 
-// enqueue 执行跨异步边界的数据独立深拷贝，并尝试将消息放入有界队列；队列满时返回 ErrWriteQueueFull。
+// enqueue 执行跨异步边界的数据独立深拷贝，并将消息放入有界队列。
+// 队列满时阻塞等待空闲空间，直至入队成功、调用方 ctx 取消或写流程关闭。
 func (w *Writer) enqueue(ctx context.Context, msgType websocket.MessageType, payload []byte, done chan error) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	select {
-	case <-w.ctx.Done():
+	case <-w.queueCtx.Done():
 		return ErrWriterClosed
 	case <-ctx.Done():
 		return ctx.Err()
@@ -150,22 +152,13 @@ func (w *Writer) enqueue(ctx context.Context, msgType websocket.MessageType, pay
 		done:    done,
 	}
 
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
-	if w.closed {
-		return ErrWriterClosed
-	}
-
 	select {
-	case <-w.ctx.Done():
+	case <-w.queueCtx.Done():
 		return ErrWriterClosed
 	case <-ctx.Done():
 		return ctx.Err()
 	case w.queue <- item:
 		return nil
-	default:
-		return ErrWriteQueueFull
 	}
 }
 
@@ -173,47 +166,62 @@ func (w *Writer) enqueue(ctx context.Context, msgType websocket.MessageType, pay
 func (w *Writer) writeLoop() {
 	defer func() {
 		w.cancel()
-		w.closeOnce.Do(func() {
-			w.mu.Lock()
-			w.closed = true
-			close(w.queue)
-			w.mu.Unlock()
-		})
+		w.stopCancel()
 		w.drainQueue()
 		close(w.done)
 	}()
 
 	for {
 		select {
-		case <-w.ctx.Done():
+		case <-w.queueCtx.Done():
+			w.flushRemaining()
 			return
-		case msg, ok := <-w.queue:
-			if !ok {
-				return
-			}
-			err := w.conn.Write(w.ctx, msg.msgType, msg.payload)
-			if msg.done != nil {
-				msg.done <- err
-			}
-			if err != nil {
-				w.setErr(err)
-				if !errors.Is(err, context.Canceled) {
-					w.logger.Warn("websocket writer write failed", "error", err)
-				}
+
+		case msg := <-w.queue:
+			if err := w.writeMessage(msg); err != nil {
 				return
 			}
 		}
 	}
 }
 
-// drainQueue 清空写队列中残留的未发送消息。
+// writeMessage 向底层连接真实写入单条消息并通知同步调用方。
+func (w *Writer) writeMessage(msg writeMessage) error {
+	err := w.conn.Write(w.writeCtx, msg.msgType, msg.payload)
+	if msg.done != nil {
+		msg.done <- err
+	}
+	if err != nil {
+		w.setErr(err)
+		w.cancel()
+		w.stopCancel()
+		if !errors.Is(err, context.Canceled) {
+			w.logger.Warn("websocket writer write failed", "error", err)
+		}
+		return err
+	}
+	return nil
+}
+
+// flushRemaining 优雅排空写队列中残留的存量消息并写出到底层连接。
+func (w *Writer) flushRemaining() {
+	for {
+		select {
+		case msg := <-w.queue:
+			if err := w.writeMessage(msg); err != nil {
+				return
+			}
+		default:
+			return
+		}
+	}
+}
+
+// drainQueue 清空写队列中残留的未发送消息并通知同步调用方。
 func (w *Writer) drainQueue() {
 	for {
 		select {
-		case msg, ok := <-w.queue:
-			if !ok {
-				return
-			}
+		case msg := <-w.queue:
 			if msg.done != nil {
 				msg.done <- ErrWriterClosed
 			}
@@ -247,26 +255,20 @@ func (w *Writer) Done() <-chan struct{} {
 // Close 触发写流程优雅关闭并等待队列中已有消息排空后写循环安全退出。
 func (w *Writer) Close() error {
 	w.closeOnce.Do(func() {
-		w.mu.Lock()
-		w.closed = true
-		close(w.queue)
-		w.mu.Unlock()
+		w.cancel()
 	})
 	<-w.done
 	return w.Err()
 }
 
-// Stop 立即取消串行写流程、关闭队列并排空未发送消息。
+// Stop 立即取消串行写流程并排空未发送消息。
 func (w *Writer) Stop() {
 	if w == nil {
 		return
 	}
-	w.cancel()
 	w.closeOnce.Do(func() {
-		w.mu.Lock()
-		w.closed = true
-		close(w.queue)
-		w.mu.Unlock()
+		w.cancel()
+		w.stopCancel()
 	})
 	w.drainQueue()
 }
@@ -278,10 +280,7 @@ func (w *Writer) DrainPending() {
 	}
 	for {
 		select {
-		case msg, ok := <-w.queue:
-			if !ok {
-				return
-			}
+		case msg := <-w.queue:
 			if msg.done != nil {
 				msg.done <- ErrWriterClosed
 			}
