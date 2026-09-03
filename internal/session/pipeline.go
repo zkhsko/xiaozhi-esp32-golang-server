@@ -395,7 +395,7 @@ func (p *TurnPipeline) PlayListenPrompt(ctx context.Context, turnId uint64, sess
 			if turnCtx.Err() != nil {
 				return
 			}
-			if err := pacer.Enqueue(pkt); err != nil {
+			if err := pacer.EnqueueAudio(pkt); err != nil {
 				return
 			}
 		}

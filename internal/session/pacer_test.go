@@ -137,10 +137,6 @@ func TestDownlinkPacer_SendPacketAndFinishInput(t *testing.T) {
 		t.Fatal("expected OnCompleted to be called")
 	}
 
-	if !pacer.HasStarted() {
-		t.Fatal("expected HasStarted to return true")
-	}
-
 	time.Sleep(50 * time.Millisecond)
 	msgs := conn.getMessages()
 	if len(msgs) != 4 { // start, pkt1, pkt2, stop
@@ -271,10 +267,6 @@ func TestDownlinkPacer_Abort(t *testing.T) {
 	ticker.Tick()
 	time.Sleep(10 * time.Millisecond)
 
-	if !pacer.HasStarted() {
-		t.Fatal("expected HasStarted to be true before abort")
-	}
-
 	pacer.Abort()
 
 	select {
@@ -344,13 +336,6 @@ func TestDownlinkPacer_ConcurrencyRace(t *testing.T) {
 		defer wg.Done()
 		time.Sleep(5 * time.Millisecond)
 		pacer.FinishInput()
-	}()
-
-	// 并发查询
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		_ = pacer.HasStarted()
 	}()
 
 	wg.Wait()

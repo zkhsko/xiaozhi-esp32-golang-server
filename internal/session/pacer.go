@@ -169,20 +169,12 @@ func (p *DownlinkPacer) EnqueueAudio(packet []byte) error {
 	}
 	p.mu.Unlock()
 
-	copied := make([]byte, len(packet))
-	copy(copied, packet)
-
 	select {
 	case <-p.ctx.Done():
 		return p.ctx.Err()
-	case p.itemQueue <- pacerItem{kind: pacerItemAudio, data: copied}:
+	case p.itemQueue <- pacerItem{kind: pacerItemAudio, data: packet}:
 		return nil
 	}
-}
-
-// Enqueue 兼容方法，等价于 EnqueueAudio。
-func (p *DownlinkPacer) Enqueue(packet []byte) error {
-	return p.EnqueueAudio(packet)
 }
 
 // EnqueueText 将单条文本消息（如字幕、控制消息）存入下行发送队列，调度时立即下发以确保时序。
@@ -198,13 +190,10 @@ func (p *DownlinkPacer) EnqueueText(payload []byte) error {
 	}
 	p.mu.Unlock()
 
-	copied := make([]byte, len(payload))
-	copy(copied, payload)
-
 	select {
 	case <-p.ctx.Done():
 		return p.ctx.Err()
-	case p.itemQueue <- pacerItem{kind: pacerItemText, data: copied}:
+	case p.itemQueue <- pacerItem{kind: pacerItemText, data: payload}:
 		return nil
 	}
 }
@@ -248,13 +237,6 @@ func (p *DownlinkPacer) Abort() {
 // Done 返回节奏调度器完全退出后的信号通道。
 func (p *DownlinkPacer) Done() <-chan struct{} {
 	return p.doneChan
-}
-
-// HasStarted 返回是否已开始向网络发送数据项。
-func (p *DownlinkPacer) HasStarted() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.hasStarted
 }
 
 // drainQueue 清空队列中残留的数据项。
