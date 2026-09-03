@@ -81,52 +81,12 @@ func NewTTSClient(opts ai.TTSOptions) (*TTSClient, error) {
 type ttsRequestHeader struct {
 	Action    string `json:"action"`
 	TaskId    string `json:"task_id"`
-	Streaming string `json:"streaming"`
+	Streaming string `json:"streaming,omitempty"`
 }
 
-type ttsParameters struct {
-	TextType   string `json:"text_type"`
-	Voice      string `json:"voice"`
-	Format     string `json:"format"`
-	SampleRate int    `json:"sample_rate"`
-}
-
-type ttsRunPayload struct {
-	TaskGroup  string        `json:"task_group"`
-	Task       string        `json:"task"`
-	Function   string        `json:"function"`
-	Model      string        `json:"model"`
-	Parameters ttsParameters `json:"parameters"`
-	Input      struct{}      `json:"input"`
-}
-
-type ttsRunTaskMessage struct {
+type ttsClientMessage struct {
 	Header  ttsRequestHeader `json:"header"`
-	Payload ttsRunPayload    `json:"payload"`
-}
-
-type ttsContinuePayload struct {
-	Input struct {
-		Text string `json:"text"`
-	} `json:"input"`
-}
-
-type ttsContinueTaskMessage struct {
-	Header  ttsRequestHeader   `json:"header"`
-	Payload ttsContinuePayload `json:"payload"`
-}
-
-type ttsFinishPayload struct {
-	Input struct{} `json:"input"`
-}
-
-type ttsFinishTaskMessage struct {
-	Header  ttsRequestHeader `json:"header"`
-	Payload ttsFinishPayload `json:"payload"`
-}
-
-type ttsCancelTaskMessage struct {
-	Header ttsRequestHeader `json:"header"`
+	Payload any              `json:"payload,omitempty"`
 }
 
 type ttsResponseMessage struct {
@@ -276,23 +236,24 @@ func (s *TTSSession) Synthesize(ctx context.Context, text string) (ai.TTSPacketS
 	streamEncoder := audio.NewStreamEncoder(encoder)
 
 	taskId := newUUID()
-	runMsg := ttsRunTaskMessage{
+	runMsg := ttsClientMessage{
 		Header: ttsRequestHeader{
 			Action:    "run-task",
 			TaskId:    taskId,
 			Streaming: "duplex",
 		},
-		Payload: ttsRunPayload{
-			TaskGroup: "audio",
-			Task:      "tts",
-			Function:  "SpeechSynthesizer",
-			Model:     s.model,
-			Parameters: ttsParameters{
-				TextType:   "PlainText",
-				Voice:      s.voice,
-				Format:     "pcm",
-				SampleRate: 24000,
+		Payload: map[string]any{
+			"task_group": "audio",
+			"task":       "tts",
+			"function":   "SpeechSynthesizer",
+			"model":      s.model,
+			"parameters": map[string]any{
+				"text_type":   "PlainText",
+				"voice":       s.voice,
+				"format":      "pcm",
+				"sample_rate": 24000,
 			},
+			"input": map[string]any{},
 		},
 	}
 
@@ -306,17 +267,15 @@ func (s *TTSSession) Synthesize(ctx context.Context, text string) (ai.TTSPacketS
 		return nil, err
 	}
 
-	continueMsg := ttsContinueTaskMessage{
+	continueMsg := ttsClientMessage{
 		Header: ttsRequestHeader{
 			Action:    "continue-task",
 			TaskId:    taskId,
 			Streaming: "duplex",
 		},
-		Payload: ttsContinuePayload{
-			Input: struct {
-				Text string `json:"text"`
-			}{
-				Text: text,
+		Payload: map[string]any{
+			"input": map[string]string{
+				"text": text,
 			},
 		},
 	}
@@ -325,11 +284,14 @@ func (s *TTSSession) Synthesize(ctx context.Context, text string) (ai.TTSPacketS
 		return nil, fmt.Errorf("write continue-task: %w", err)
 	}
 
-	finishMsg := ttsFinishTaskMessage{
+	finishMsg := ttsClientMessage{
 		Header: ttsRequestHeader{
 			Action:    "finish-task",
 			TaskId:    taskId,
 			Streaming: "duplex",
+		},
+		Payload: map[string]any{
+			"input": map[string]any{},
 		},
 	}
 	if err := s.writeJSON(ctx, finishMsg); err != nil {
@@ -503,14 +465,12 @@ func (s *dashscopePacketStream) NextPacket(ctx context.Context) ([]byte, error) 
 	case pkt, ok := <-s.packetCh:
 		if !ok {
 			s.mu.RLock()
-			err := s.err
-			closed := s.closed
-			s.mu.RUnlock()
-			if closed {
+			defer s.mu.RUnlock()
+			if s.closed {
 				return nil, errors.New("tts stream is closed")
 			}
-			if err != nil {
-				return nil, err
+			if s.err != nil {
+				return nil, s.err
 			}
 			if s.ctx.Err() != nil {
 				return nil, s.ctx.Err()
@@ -523,48 +483,16 @@ func (s *dashscopePacketStream) NextPacket(ctx context.Context) ([]byte, error) 
 		return nil, ctx.Err()
 
 	case <-s.ctx.Done():
-		select {
-		case pkt, ok := <-s.packetCh:
-			if ok {
-				return pkt, nil
-			}
-		default:
-		}
-
 		s.mu.RLock()
-		err := s.err
-		closed := s.closed
-		s.mu.RUnlock()
-		if closed {
+		defer s.mu.RUnlock()
+		if s.closed {
 			return nil, errors.New("tts stream is closed")
 		}
-		if err != nil {
-			return nil, err
+		if s.err != nil {
+			return nil, s.err
 		}
 		return nil, s.ctx.Err()
 	}
-}
-
-// Cancel 显式向远端服务端发送 cancel-task 中止当前单句合成。
-func (s *dashscopePacketStream) Cancel(ctx context.Context) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return s.Close()
-	}
-	taskId := s.taskId
-	s.mu.Unlock()
-
-	cancelMsg := ttsCancelTaskMessage{
-		Header: ttsRequestHeader{
-			Action:    "cancel-task",
-			TaskId:    taskId,
-			Streaming: "duplex",
-		},
-	}
-	_ = s.session.writeJSON(ctx, cancelMsg)
-
-	return s.Close()
 }
 
 // Close 释放当前句的流资源。注意：不关闭底层 session 的 WebSocket 连接。
@@ -594,10 +522,6 @@ func newEmptyPacketStream() *emptyPacketStream {
 
 func (e *emptyPacketStream) NextPacket(ctx context.Context) ([]byte, error) {
 	return nil, io.EOF
-}
-
-func (e *emptyPacketStream) Cancel(ctx context.Context) error {
-	return nil
 }
 
 func (e *emptyPacketStream) Close() error {

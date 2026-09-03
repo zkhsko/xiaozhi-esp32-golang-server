@@ -118,7 +118,7 @@ func TestTTSSession_MockWSServer_MultiSentenceReuse(t *testing.T) {
 			if err != nil {
 				return
 			}
-			var runMsg ttsRunTaskMessage
+			var runMsg ttsClientMessage
 			if err := json.Unmarshal(msgData, &runMsg); err != nil {
 				return
 			}
@@ -238,7 +238,7 @@ func TestTTSSession_TaskFailed(t *testing.T) {
 		defer conn.Close(websocket.StatusNormalClosure, "done")
 
 		_, msgData, _ := conn.Read(r.Context())
-		var runMsg ttsRunTaskMessage
+		var runMsg ttsClientMessage
 		_ = json.Unmarshal(msgData, &runMsg)
 
 		failedResp := map[string]any{
@@ -279,74 +279,5 @@ func TestTTSSession_TaskFailed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "InvalidApiKey") {
 		t.Fatalf("expected error message to contain InvalidApiKey, got %v", err)
-	}
-}
-
-func TestTTSSession_Cancel(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer conn.Close(websocket.StatusNormalClosure, "done")
-
-		_, msgData, _ := conn.Read(r.Context())
-		var runMsg ttsRunTaskMessage
-		_ = json.Unmarshal(msgData, &runMsg)
-
-		startedResp := map[string]any{
-			"header": map[string]any{
-				"action":  "task-started",
-				"task_id": runMsg.Header.TaskId,
-				"event":   "task-started",
-			},
-		}
-		startedBytes, _ := json.Marshal(startedResp)
-		_ = conn.Write(r.Context(), websocket.MessageText, startedBytes)
-
-		// 持续读消息，直到读取到 cancel-task
-		for {
-			_, data, err := conn.Read(r.Context())
-			if err != nil {
-				return
-			}
-			var header struct {
-				Header struct {
-					Action string `json:"action"`
-				} `json:"header"`
-			}
-			_ = json.Unmarshal(data, &header)
-			if header.Header.Action == "cancel-task" {
-				return
-			}
-		}
-	}))
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
-
-	cli, err := NewTTSClient(ai.TTSOptions{
-		APIKey:   "test-key",
-		Endpoint: wsURL,
-		Model:    "cosyvoice-v1",
-		Voice:    "longxiaochun",
-	})
-	if err != nil {
-		t.Fatalf("NewTTSClient failed: %v", err)
-	}
-
-	sess, err := cli.CreateSession(context.Background())
-	if err != nil {
-		t.Fatalf("CreateSession failed: %v", err)
-	}
-	defer sess.Close()
-
-	stream, err := sess.Synthesize(context.Background(), "测试取消")
-	if err != nil {
-		t.Fatalf("Synthesize failed: %v", err)
-	}
-
-	if err := stream.Cancel(context.Background()); err != nil {
-		t.Fatalf("Cancel failed: %v", err)
 	}
 }

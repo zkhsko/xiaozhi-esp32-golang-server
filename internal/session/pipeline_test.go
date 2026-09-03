@@ -39,10 +39,6 @@ func (m *mockTTSPacketStream) NextPacket(ctx context.Context) ([]byte, error) {
 	return pkt, nil
 }
 
-func (m *mockTTSPacketStream) Cancel(ctx context.Context) error {
-	return m.Close()
-}
-
 func (m *mockTTSPacketStream) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -23,9 +23,6 @@ type TTSPacketStream interface {
 	// 当流发生错误、超时或被取消时返回 nil, err。
 	NextPacket(ctx context.Context) ([]byte, error)
 
-	// Cancel 显式向远端服务端发送取消指令中止当前合成并释放资源。
-	Cancel(ctx context.Context) error
-
 	// Close 释放流占用的网络与编解码资源。
 	Close() error
 }
