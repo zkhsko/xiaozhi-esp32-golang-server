@@ -14,7 +14,6 @@ type TTSOptions struct {
 	Voice          string
 	ProxyURL       string
 	ConnectTimeout time.Duration
-	QueueCapacity  int
 }
 
 // TTSPacketStream 表示单句语音合成生成的下行音频包流。

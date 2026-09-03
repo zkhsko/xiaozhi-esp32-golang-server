@@ -139,10 +139,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RejectUpgrade(w, r, h.logger, err)
 		return
 	}
-	ttsQueueCap := DefaultWriteQueueCapacity
-	if h.cfg != nil && h.cfg.Session.TTSPCMQueueCapacity > 0 {
-		ttsQueueCap = h.cfg.Session.TTSPCMQueueCapacity
-	}
 	ttsOpts := ai.TTSOptions{
 		Provider:       snapshot.TTSConfig.Provider,
 		Endpoint:       snapshot.TTSConfig.Endpoint,
@@ -151,7 +147,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Voice:          snapshot.Agent.Voice,
 		ProxyURL:       snapshot.TTSConfig.ProxyURL,
 		ConnectTimeout: time.Duration(snapshot.TTSConfig.ConnectTimeoutMS) * time.Millisecond,
-		QueueCapacity:  ttsQueueCap,
 	}
 	ttsClient, err := factory.CreateTTSClient(ttsOpts)
 	if err != nil {
@@ -234,7 +229,6 @@ func mapSessionConfig(cfg *config.Config) SessionConfig {
 		MaxListeningDuration:      cfg.Session.MaxListeningDuration,
 		ASRResultTimeout:          cfg.Session.ASRResultTimeout,
 		ASRPCMQueueCapacity:       cfg.Session.ASRPCMQueueCapacity,
-		TTSPCMQueueCapacity:       cfg.Session.TTSPCMQueueCapacity,
 		DownlinkOpusQueueCapacity: cfg.Session.DownlinkOpusQueueCapacity,
 		MaxHistoryTurns:           cfg.Session.MaxHistoryTurns,
 	}

@@ -84,7 +84,6 @@ type SessionConfig struct {
 	MaxListeningDuration      time.Duration `yaml:"max_listening_duration"`
 	ASRResultTimeout          time.Duration `yaml:"asr_result_timeout,omitempty"`
 	ASRPCMQueueCapacity       int           `yaml:"asr_pcm_queue_capacity"`
-	TTSPCMQueueCapacity       int           `yaml:"tts_pcm_queue_capacity"`
 	DownlinkOpusQueueCapacity int           `yaml:"downlink_opus_queue_capacity"`
 	MaxHistoryTurns           int           `yaml:"max_history_turns"`
 }
@@ -198,9 +197,6 @@ func (c *Config) validateSession() error {
 		}
 	}
 	if err := validateInt("asr_pcm_queue_capacity", c.Session.ASRPCMQueueCapacity, minPCMQueueCapacity, maxPCMQueueCapacity); err != nil {
-		return err
-	}
-	if err := validateInt("tts_pcm_queue_capacity", c.Session.TTSPCMQueueCapacity, minPCMQueueCapacity, maxPCMQueueCapacity); err != nil {
 		return err
 	}
 	if err := validateInt("downlink_opus_queue_capacity", c.Session.DownlinkOpusQueueCapacity, minPCMQueueCapacity, maxPCMQueueCapacity); err != nil {

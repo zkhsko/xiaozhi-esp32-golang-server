@@ -45,7 +45,6 @@ func TestNewTTSClient_Validation(t *testing.T) {
 		Model:          "cosyvoice-v1",
 		Voice:          "longxiaochun",
 		ConnectTimeout: 5 * time.Second,
-		QueueCapacity:  50,
 	})
 	if err != nil {
 		t.Fatalf("expected nil error for valid config, got %v", err)

@@ -23,7 +23,6 @@ type SessionConfig struct {
 	MaxListeningDuration      time.Duration
 	ASRResultTimeout          time.Duration
 	ASRPCMQueueCapacity       int
-	TTSPCMQueueCapacity       int
 	DownlinkOpusQueueCapacity int
 	MaxHistoryTurns           int
 }
@@ -47,9 +46,6 @@ func NormalizeConfig(cfg SessionConfig) SessionConfig {
 	}
 	if cfg.ASRPCMQueueCapacity <= 0 {
 		cfg.ASRPCMQueueCapacity = audio.DefaultASRPCMQueueCapacity
-	}
-	if cfg.TTSPCMQueueCapacity <= 0 {
-		cfg.TTSPCMQueueCapacity = DefaultWriteQueueCapacity
 	}
 	if cfg.DownlinkOpusQueueCapacity <= 0 {
 		cfg.DownlinkOpusQueueCapacity = DefaultWriteQueueCapacity

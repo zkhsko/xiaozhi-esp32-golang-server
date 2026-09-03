@@ -24,7 +24,6 @@ session:
   max_opus_packet_bytes: 1024
   max_listening_duration: 30s
   asr_pcm_queue_capacity: 100
-  tts_pcm_queue_capacity: 100
   downlink_opus_queue_capacity: 100
   max_history_turns: 6
 
@@ -73,7 +72,6 @@ session:
   max_opus_packet_bytes: 1024
   max_listening_duration: 30s
   asr_pcm_queue_capacity: 100
-  tts_pcm_queue_capacity: 100
   downlink_opus_queue_capacity: 100
   max_history_turns: 6
 

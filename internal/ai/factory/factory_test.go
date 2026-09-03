@@ -85,7 +85,6 @@ func TestFactory_CreateClients(t *testing.T) {
 			Voice:          "voice1",
 			ConnectTimeout: 5000,
 			ProxyURL:       "http://127.0.0.1:8080",
-			QueueCapacity:  100,
 		}
 		ttsClient, err := CreateTTSClient(ttsOpts)
 		if err != nil {

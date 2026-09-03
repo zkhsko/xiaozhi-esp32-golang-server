@@ -21,6 +21,9 @@ import (
 // maxTTSReadMessageBytes 定义 DashScope TTS WebSocket 单帧最大读取字节数（4 MiB），满足 24 kHz PCM 块下发需求。
 const maxTTSReadMessageBytes = 4 * 1024 * 1024
 
+// defaultPacketQueueCapacity 定义单句 Opus 音频包缓冲通道容量。
+const defaultPacketQueueCapacity = 100
+
 // TTSClient 实现基于 DashScope WebSocket 流式协议的语音合成客户端。
 type TTSClient struct {
 	endpoint       string
@@ -28,7 +31,6 @@ type TTSClient struct {
 	model          string
 	voice          string
 	connectTimeout time.Duration
-	queueCapacity  int
 	httpClient     *http.Client
 }
 
@@ -53,11 +55,6 @@ func NewTTSClient(opts ai.TTSOptions) (*TTSClient, error) {
 		timeout = 10 * time.Second
 	}
 
-	queueCap := opts.QueueCapacity
-	if queueCap <= 0 {
-		queueCap = 100
-	}
-
 	var httpClient *http.Client
 	if strings.TrimSpace(opts.ProxyURL) != "" {
 		proxyURL, err := url.Parse(strings.TrimSpace(opts.ProxyURL))
@@ -77,7 +74,6 @@ func NewTTSClient(opts ai.TTSOptions) (*TTSClient, error) {
 		model:          strings.TrimSpace(opts.Model),
 		voice:          trimmedVoice,
 		connectTimeout: timeout,
-		queueCapacity:  queueCap,
 		httpClient:     httpClient,
 	}, nil
 }
@@ -173,21 +169,19 @@ func (c *TTSClient) CreateSession(ctx context.Context) (ai.TTSSession, error) {
 	sessCtx, sessCancel := context.WithCancel(ctx)
 
 	return &TTSSession{
-		conn:          conn,
-		model:         c.model,
-		voice:         c.voice,
-		queueCapacity: c.queueCapacity,
-		ctx:           sessCtx,
-		cancel:        sessCancel,
+		conn:   conn,
+		model:  c.model,
+		voice:  c.voice,
+		ctx:    sessCtx,
+		cancel: sessCancel,
 	}, nil
 }
 
 // TTSSession 实现基于 DashScope WebSocket 单长连接的多句复用语音合成会话。
 type TTSSession struct {
-	conn          *websocket.Conn
-	model         string
-	voice         string
-	queueCapacity int
+	conn   *websocket.Conn
+	model  string
+	voice  string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -351,7 +345,7 @@ func (s *TTSSession) Synthesize(ctx context.Context, text string) (ai.TTSPacketS
 		streamEncoder: streamEncoder,
 		ctx:           streamCtx,
 		cancel:        streamCancel,
-		packetCh:      make(chan []byte, s.queueCapacity),
+		packetCh:      make(chan []byte, defaultPacketQueueCapacity),
 	}
 	s.stream = stream
 
