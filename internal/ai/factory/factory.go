@@ -57,16 +57,12 @@ func CreateLLMClient(cfg *database.LLMConfig) (ai.LLMClient, error) {
 	}
 }
 
-// CreateTTSClient 根据数据库 TTS 配置和指定音色创建对应的流式语音合成客户端。
-func CreateTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (ai.TTSClient, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("tts config is nil")
-	}
-
-	provider := strings.TrimSpace(cfg.Provider)
+// CreateTTSClient 根据 TTS 领域配置创建对应的流式语音合成客户端。
+func CreateTTSClient(opts ai.TTSOptions) (ai.TTSClient, error) {
+	provider := strings.TrimSpace(opts.Provider)
 	switch strings.ToLower(provider) {
 	case "dashscope", "":
-		return dashscope.NewTTSClient(cfg, voice, queueCap)
+		return dashscope.NewTTSClient(opts)
 	default:
 		return nil, fmt.Errorf("unsupported tts provider: %s", provider)
 	}

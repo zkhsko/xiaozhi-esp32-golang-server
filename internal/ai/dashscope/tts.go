@@ -15,7 +15,6 @@ import (
 	"github.com/coder/websocket"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
-	"xiaozhi-esp32-golang-server/internal/database"
 )
 
 // maxTTSReadMessageBytes 定义 DashScope TTS WebSocket 单帧最大读取字节数（4 MiB），满足 24 kHz PCM 块下发需求。
@@ -32,37 +31,35 @@ type TTSClient struct {
 	httpClient     *http.Client
 }
 
-// NewTTSClient 基于数据库 TTS 配置实体与 Agent 指定音色构造 DashScope TTS 客户端实例。
-func NewTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (*TTSClient, error) {
-	if cfg == nil {
-		return nil, errors.New("tts config cannot be nil")
-	}
-	if strings.TrimSpace(cfg.APIKey) == "" {
+// NewTTSClient 基于领域配置构造 DashScope TTS 客户端实例。
+func NewTTSClient(opts ai.TTSOptions) (*TTSClient, error) {
+	if strings.TrimSpace(opts.APIKey) == "" {
 		return nil, errors.New("dashscope api key is required")
 	}
-	if strings.TrimSpace(cfg.Endpoint) == "" {
+	if strings.TrimSpace(opts.Endpoint) == "" {
 		return nil, errors.New("dashscope ws endpoint is required")
 	}
-	if strings.TrimSpace(cfg.Model) == "" {
+	if strings.TrimSpace(opts.Model) == "" {
 		return nil, errors.New("dashscope tts model is required")
 	}
-	trimmedVoice := strings.TrimSpace(voice)
+	trimmedVoice := strings.TrimSpace(opts.Voice)
 	if trimmedVoice == "" {
 		return nil, errors.New("voice cannot be empty")
 	}
 
-	timeout := time.Duration(cfg.ConnectTimeoutMS) * time.Millisecond
+	timeout := opts.ConnectTimeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
 
+	queueCap := opts.QueueCapacity
 	if queueCap <= 0 {
 		queueCap = 100
 	}
 
 	var httpClient *http.Client
-	if strings.TrimSpace(cfg.ProxyURL) != "" {
-		proxyURL, err := url.Parse(strings.TrimSpace(cfg.ProxyURL))
+	if strings.TrimSpace(opts.ProxyURL) != "" {
+		proxyURL, err := url.Parse(strings.TrimSpace(opts.ProxyURL))
 		if err != nil {
 			return nil, fmt.Errorf("parse proxy url: %w", err)
 		}
@@ -74,9 +71,9 @@ func NewTTSClient(cfg *database.TTSConfig, voice string, queueCap int) (*TTSClie
 	}
 
 	return &TTSClient{
-		endpoint:       strings.TrimSpace(cfg.Endpoint),
-		apiKey:         strings.TrimSpace(cfg.APIKey),
-		model:          strings.TrimSpace(cfg.Model),
+		endpoint:       strings.TrimSpace(opts.Endpoint),
+		apiKey:         strings.TrimSpace(opts.APIKey),
+		model:          strings.TrimSpace(opts.Model),
 		voice:          trimmedVoice,
 		connectTimeout: timeout,
 		queueCapacity:  queueCap,

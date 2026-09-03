@@ -4,9 +4,11 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/coder/websocket"
 
+	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/ai/factory"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/database"
@@ -141,7 +143,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.cfg != nil && h.cfg.Session.TTSPCMQueueCapacity > 0 {
 		ttsQueueCap = h.cfg.Session.TTSPCMQueueCapacity
 	}
-	ttsClient, err := factory.CreateTTSClient(&snapshot.TTSConfig, snapshot.Agent.Voice, ttsQueueCap)
+	ttsOpts := ai.TTSOptions{
+		Provider:       snapshot.TTSConfig.Provider,
+		Endpoint:       snapshot.TTSConfig.Endpoint,
+		APIKey:         snapshot.TTSConfig.APIKey,
+		Model:          snapshot.TTSConfig.Model,
+		Voice:          snapshot.Agent.Voice,
+		ProxyURL:       snapshot.TTSConfig.ProxyURL,
+		ConnectTimeout: time.Duration(snapshot.TTSConfig.ConnectTimeoutMS) * time.Millisecond,
+		QueueCapacity:  ttsQueueCap,
+	}
+	ttsClient, err := factory.CreateTTSClient(ttsOpts)
 	if err != nil {
 		RejectUpgrade(w, r, h.logger, err)
 		return

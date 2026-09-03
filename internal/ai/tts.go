@@ -1,6 +1,21 @@
 package ai
 
-import "context"
+import (
+	"context"
+	"time"
+)
+
+// TTSOptions 封装创建流式语音合成客户端所需的配置参数。
+type TTSOptions struct {
+	Provider       string
+	Endpoint       string
+	APIKey         string
+	Model          string
+	Voice          string
+	ProxyURL       string
+	ConnectTimeout time.Duration
+	QueueCapacity  int
+}
 
 // TTSStream 表示单个回答级的语音合成流式会话。
 // 客户端通过该接口按顺序流式写入完整句子，并流式接收合成的 PCM 音频块。

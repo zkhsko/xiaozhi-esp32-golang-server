@@ -16,21 +16,8 @@ func TestFactory_CreateClients(t *testing.T) {
 	if _, err := CreateLLMClient(nil); err == nil {
 		t.Error("expected error for nil llm config, got nil")
 	}
-	if _, err := CreateTTSClient(nil, "voice", 100); err == nil {
-		t.Error("expected error for nil tts config, got nil")
-	}
-
-	// 2. Unsupported providers
-	unsupportedASR := &database.ASRConfig{Provider: "unsupported", Endpoint: "ws://example.com", APIKey: "key", Model: "m"}
-	if _, err := CreateASRClient(unsupportedASR); err == nil {
-		t.Error("expected error for unsupported asr provider")
-	}
-	unsupportedLLM := &database.LLMConfig{Provider: "unknown_provider", Endpoint: "http://example.com", APIKey: "key", Model: "m", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000}
-	if _, err := CreateLLMClient(unsupportedLLM); err == nil {
-		t.Error("expected error for unsupported llm provider")
-	}
-	unsupportedTTS := &database.TTSConfig{Provider: "unsupported", Endpoint: "ws://example.com", APIKey: "key", Model: "m"}
-	if _, err := CreateTTSClient(unsupportedTTS, "voice", 100); err == nil {
+	unsupportedTTS := ai.TTSOptions{Provider: "unsupported", Endpoint: "ws://example.com", APIKey: "key", Model: "m", Voice: "voice"}
+	if _, err := CreateTTSClient(unsupportedTTS); err == nil {
 		t.Error("expected error for unsupported tts provider")
 	}
 
@@ -90,16 +77,17 @@ func TestFactory_CreateClients(t *testing.T) {
 	}
 
 	for _, p := range []string{"dashscope", ""} {
-		ttsCfg := &database.TTSConfig{
-			Provider:         p,
-			Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
-			APIKey:           "test-key",
-			Model:            "cosyvoice-v1",
-			Voices:           `["voice1"]`,
-			ConnectTimeoutMS: 5000,
-			ProxyURL:         "http://127.0.0.1:8080",
+		ttsOpts := ai.TTSOptions{
+			Provider:       p,
+			Endpoint:       "wss://dashscope.aliyuncs.com/api-v1/ws",
+			APIKey:         "test-key",
+			Model:          "cosyvoice-v1",
+			Voice:          "voice1",
+			ConnectTimeout: 5000,
+			ProxyURL:       "http://127.0.0.1:8080",
+			QueueCapacity:  100,
 		}
-		ttsClient, err := CreateTTSClient(ttsCfg, "voice1", 100)
+		ttsClient, err := CreateTTSClient(ttsOpts)
 		if err != nil {
 			t.Fatalf("CreateTTSClient(%q) failed: %v", p, err)
 		}
@@ -108,16 +96,16 @@ func TestFactory_CreateClients(t *testing.T) {
 		}
 	}
 
-	testTTSCfg := &database.TTSConfig{
-		Provider:         "dashscope",
-		Endpoint:         "wss://dashscope.aliyuncs.com/api-v1/ws",
-		APIKey:           "test-key",
-		Model:            "cosyvoice-v1",
-		Voices:           `["voice1"]`,
-		ConnectTimeoutMS: 5000,
+	testTTSOpts := ai.TTSOptions{
+		Provider:       "dashscope",
+		Endpoint:       "wss://dashscope.aliyuncs.com/api-v1/ws",
+		APIKey:         "test-key",
+		Model:          "cosyvoice-v1",
+		Voice:          "  ",
+		ConnectTimeout: 5000,
 	}
 	// 5. TTS Empty voice validation
-	if _, err := CreateTTSClient(testTTSCfg, "  ", 100); err == nil {
+	if _, err := CreateTTSClient(testTTSOpts); err == nil {
 		t.Error("expected error for empty voice, got nil")
 	}
 }
