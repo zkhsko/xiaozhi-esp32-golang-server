@@ -31,8 +31,17 @@ type TTSPacketStream interface {
 	Close() error
 }
 
+// TTSSession 表示单轮问答中独占的流式语音合成会话，在单轮生命周期内复用底层长连接。
+type TTSSession interface {
+	// Synthesize 发起单句语音合成，复用当前会话连接，返回该句的 Opus 数据包流。
+	Synthesize(ctx context.Context, text string) (TTSPacketStream, error)
+
+	// Close 关闭底层连接并释放该轮所占用的网络与会话资源。
+	Close() error
+}
+
 // TTSClient 定义流式语音合成客户端接口。
 type TTSClient interface {
-	// SynthesizeSentence 发起单句流式语音合成，直接产出 Opus 音频数据包流。
-	SynthesizeSentence(ctx context.Context, text string) (TTSPacketStream, error)
+	// CreateSession 为单轮问答创建并建立一条 TTS 长连接会话。
+	CreateSession(ctx context.Context) (TTSSession, error)
 }

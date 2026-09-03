@@ -54,28 +54,51 @@ func (m *mockTTSPacketStream) Close() error {
 }
 
 type mockTTSClient struct {
-	mu        sync.Mutex
-	err       error
-	streams   []*mockTTSPacketStream
-	newStream func() *mockTTSPacketStream
+	mu         sync.Mutex
+	err        error
+	sessionErr error
+	sessions   []*mockTTSSession
+	streams    []*mockTTSPacketStream
+	newStream  func() *mockTTSPacketStream
 }
 
-func (m *mockTTSClient) SynthesizeSentence(ctx context.Context, text string) (ai.TTSPacketStream, error) {
+type mockTTSSession struct {
+	client *mockTTSClient
+	closed bool
+}
+
+func (m *mockTTSClient) CreateSession(ctx context.Context) (ai.TTSSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.err != nil {
-		return nil, m.err
+	if m.sessionErr != nil {
+		return nil, m.sessionErr
+	}
+	sess := &mockTTSSession{client: m}
+	m.sessions = append(m.sessions, sess)
+	return sess, nil
+}
+
+func (s *mockTTSSession) Synthesize(ctx context.Context, text string) (ai.TTSPacketStream, error) {
+	s.client.mu.Lock()
+	defer s.client.mu.Unlock()
+	if s.client.err != nil {
+		return nil, s.client.err
 	}
 	var stream *mockTTSPacketStream
-	if m.newStream != nil {
-		stream = m.newStream()
+	if s.client.newStream != nil {
+		stream = s.client.newStream()
 	} else {
 		stream = &mockTTSPacketStream{
 			packets: [][]byte{[]byte{0x01, 0x02, 0x03}},
 		}
 	}
-	m.streams = append(m.streams, stream)
+	s.client.streams = append(s.client.streams, stream)
 	return stream, nil
+}
+
+func (s *mockTTSSession) Close() error {
+	s.closed = true
+	return nil
 }
 
 type mockLLMClient struct {
@@ -138,11 +161,13 @@ func TestConsumeSentencesTTS_ExplicitContract_Success(t *testing.T) {
 	close(sentenceCh)
 
 	pcmDone := make(chan error, 1)
+	ttsSess1, _ := mockTTS.CreateSession(ctx)
 	turn := &activeTurn{
-		turnId:  1,
-		ctx:     ctx,
-		cancel:  cancel,
-		effects: &TurnEffects{},
+		turnId:     1,
+		ctx:        ctx,
+		cancel:     cancel,
+		effects:    &TurnEffects{},
+		ttsSession: ttsSess1,
 	}
 
 	go pipeline.consumeSentencesTTS(turn, "sess-consume-test", sentenceCh, pacer, pcmDone)
@@ -205,11 +230,13 @@ func TestConsumeSentencesTTS_SingleConcurrency(t *testing.T) {
 	close(sentenceCh)
 
 	pcmDone := make(chan error, 1)
+	ttsSess2, _ := mockTTS.CreateSession(ctx)
 	turn := &activeTurn{
-		turnId:  1,
-		ctx:     ctx,
-		cancel:  cancel,
-		effects: &TurnEffects{},
+		turnId:     1,
+		ctx:        ctx,
+		cancel:     cancel,
+		effects:    &TurnEffects{},
+		ttsSession: ttsSess2,
 	}
 
 	go pipeline.consumeSentencesTTS(turn, "sess-single-concurrency-test", sentenceCh, pacer, pcmDone)
@@ -424,5 +451,16 @@ func TestTurnPipeline_SentenceSubtitleSync(t *testing.T) {
 	}
 	if order[1] != "sentence:"+s1 {
 		t.Fatalf("expected second item %q, got %s", "sentence:"+s1, order[1])
+	}
+
+	// 验证单轮独占 1 个 TTSSession，单句复用且轮次结束自动释放
+	if len(mockTTS.sessions) != 1 {
+		t.Fatalf("expected exactly 1 TTSSession created per turn, got %d", len(mockTTS.sessions))
+	}
+	if len(mockTTS.streams) != 2 {
+		t.Fatalf("expected 2 TTSPacketStreams synthesized on the single session, got %d", len(mockTTS.streams))
+	}
+	if !mockTTS.sessions[0].closed {
+		t.Fatal("expected TTSSession to be closed on turn completion")
 	}
 }

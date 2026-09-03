@@ -54,6 +54,9 @@ type activeTurn struct {
 	asrStream ai.ASRStream
 	asrQueue  *audio.ASRAudioQueue
 
+	// TTS 阶段资源（单轮独占长连接会话）
+	ttsSession ai.TTSSession
+
 	// 下行播放阶段
 	pacer *DownlinkPacer
 }
@@ -265,6 +268,24 @@ func (p *TurnPipeline) StartResponse(turnId uint64, sessionId string, userText s
 		return nil
 	}
 
+	ttsSession, err := p.ttsClient.CreateSession(turnCtx)
+	if err != nil {
+		p.mu.Unlock()
+		p.logger.Warn("failed to create tts session",
+			"error", err,
+			"session_id", sessionId,
+			"turn_id", turnId,
+		)
+		p.emit(turnEvent{
+			turnId: turnId,
+			typ:    turnEventTurnFailed,
+			err:    err,
+			fatal:  true,
+		})
+		return nil
+	}
+	turn.ttsSession = ttsSession
+
 	stopBytes, _ := EncodeTTSStopMessage(sessionId)
 	pacer := NewDownlinkPacer(turnCtx, DownlinkPacerOptions{
 		SessionId:     sessionId,
@@ -421,6 +442,10 @@ func (p *TurnPipeline) cleanupTurnResources(turn *activeTurn) {
 	if turn.pacer != nil {
 		turn.pacer.Abort()
 		turn.pacer = nil
+	}
+	if turn.ttsSession != nil {
+		_ = turn.ttsSession.Close()
+		turn.ttsSession = nil
 	}
 	if turn.asrQueue != nil {
 		turn.asrQueue.Close()
@@ -656,9 +681,13 @@ func (p *TurnPipeline) orchestrateLLMAndTTS(turn *activeTurn, sessionId string, 
 func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, sentenceCh <-chan string, pacer *DownlinkPacer, done chan<- error) {
 	ctx := turn.ctx
 	turnId := turn.turnId
+	ttsSession := turn.ttsSession
 
 	var consumeErr error
 	defer func() {
+		if ttsSession != nil {
+			_ = ttsSession.Close()
+		}
 		if done != nil {
 			select {
 			case done <- consumeErr:
@@ -668,7 +697,7 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 		}
 	}()
 
-	if p.ttsClient == nil {
+	if ttsSession == nil {
 		return
 	}
 
@@ -688,7 +717,7 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 			}
 		}
 
-		if err := p.synthesizeSentence(ctx, sessionId, sentence, pacer); err != nil {
+		if err := p.synthesizeSentence(ctx, ttsSession, sessionId, sentence, pacer); err != nil {
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return
 			}
@@ -720,8 +749,8 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 }
 
 // synthesizeSentence 发起单句语音合成，流式拉取已编码的 Opus 音频帧并按序写入下行节奏器。
-func (p *TurnPipeline) synthesizeSentence(ctx context.Context, sessionId string, sentence string, pacer *DownlinkPacer) error {
-	if p.ttsClient == nil {
+func (p *TurnPipeline) synthesizeSentence(ctx context.Context, ttsSession ai.TTSSession, sessionId string, sentence string, pacer *DownlinkPacer) error {
+	if ttsSession == nil {
 		return nil
 	}
 
@@ -733,7 +762,7 @@ func (p *TurnPipeline) synthesizeSentence(ctx context.Context, sessionId string,
 		}
 	}
 
-	stream, err := p.ttsClient.SynthesizeSentence(ctx, sentence)
+	stream, err := ttsSession.Synthesize(ctx, sentence)
 	if err != nil {
 		return err
 	}
