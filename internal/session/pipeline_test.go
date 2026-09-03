@@ -460,3 +460,129 @@ func TestTurnPipeline_SentenceSubtitleSync(t *testing.T) {
 		t.Fatal("expected TTSSession to be closed on turn completion")
 	}
 }
+
+func TestTurnPipeline_TTSLazyConnection_OnlyWhenSentenceGenerated(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 100, nil)
+	defer writer.Close()
+
+	mockTTS := &mockTTSClient{
+		newStream: func() *mockTTSPacketStream {
+			return &mockTTSPacketStream{
+				packets: [][]byte{[]byte{0x01, 0x02, 0x03}},
+			}
+		},
+	}
+
+	llmStarted := make(chan struct{})
+	allowLLMToProceed := make(chan struct{})
+
+	mockLLM := &mockLLMClient{
+		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+			close(llmStarted)
+			<-allowLLMToProceed
+
+			if callback != nil {
+				_ = callback(ctx, ai.LLMChunk{Text: "这是第一句完整的话用于触发语音合成。", Iteration: 0})
+			}
+			return "这是第一句完整的话用于触发语音合成。", nil
+		},
+	}
+
+	events := make(chan turnEvent, 10)
+	pipeline := NewTurnPipeline(PipelineOptions{
+		LLMClient: mockLLM,
+		TTSClient: mockTTS,
+		Config:    NormalizeConfig(SessionConfig{}),
+		Logger:    slog.Default(),
+		PostEvent: func(ev turnEvent) {
+			events <- ev
+		},
+	})
+
+	_ = pipeline.StartListening(ctx, 1, "sess-lazy-test", ListenModeAuto)
+	_ = pipeline.StartResponse(1, "sess-lazy-test", "测试懒加载", writer)
+
+	select {
+	case <-llmStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for LLM to start")
+	}
+
+	mockTTS.mu.Lock()
+	sessCount := len(mockTTS.sessions)
+	mockTTS.mu.Unlock()
+	if sessCount != 0 {
+		t.Fatalf("expected 0 TTS sessions before first sentence is produced, got %d", sessCount)
+	}
+
+	close(allowLLMToProceed)
+
+	var completed bool
+	for !completed {
+		select {
+		case ev := <-events:
+			if ev.typ == turnEventTurnCompleted {
+				completed = true
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("pipeline response timed out")
+		}
+	}
+
+	mockTTS.mu.Lock()
+	finalSessCount := len(mockTTS.sessions)
+	mockTTS.mu.Unlock()
+	if finalSessCount != 1 {
+		t.Fatalf("expected exactly 1 TTS session after sentence generated, got %d", finalSessCount)
+	}
+}
+
+func TestTurnPipeline_TTSLazyConnection_NoConnectionOnEmptyResponse(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	writer := NewWriter(ctx, conn, 100, nil)
+	defer writer.Close()
+
+	mockTTS := &mockTTSClient{}
+	mockLLM := &mockLLMClient{
+		generate: func(ctx context.Context, req ai.LLMRequest, callback ai.LLMStreamCallback) (string, error) {
+			return "", nil
+		},
+	}
+
+	events := make(chan turnEvent, 10)
+	pipeline := NewTurnPipeline(PipelineOptions{
+		LLMClient: mockLLM,
+		TTSClient: mockTTS,
+		Config:    NormalizeConfig(SessionConfig{}),
+		Logger:    slog.Default(),
+		PostEvent: func(ev turnEvent) {
+			events <- ev
+		},
+	})
+
+	_ = pipeline.StartListening(ctx, 1, "sess-lazy-empty-test", ListenModeAuto)
+	_ = pipeline.StartResponse(1, "sess-lazy-empty-test", "测试空回复", writer)
+
+	select {
+	case ev := <-events:
+		if ev.typ != turnEventTurnCompleted {
+			t.Fatalf("expected turnEventTurnCompleted, got %v", ev.typ)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pipeline response timed out")
+	}
+
+	mockTTS.mu.Lock()
+	sessCount := len(mockTTS.sessions)
+	mockTTS.mu.Unlock()
+	if sessCount != 0 {
+		t.Fatalf("expected 0 TTS sessions for empty LLM response, got %d", sessCount)
+	}
+}

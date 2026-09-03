@@ -268,24 +268,6 @@ func (p *TurnPipeline) StartResponse(turnId uint64, sessionId string, userText s
 		return nil
 	}
 
-	ttsSession, err := p.ttsClient.CreateSession(turnCtx)
-	if err != nil {
-		p.mu.Unlock()
-		p.logger.Warn("failed to create tts session",
-			"error", err,
-			"session_id", sessionId,
-			"turn_id", turnId,
-		)
-		p.emit(turnEvent{
-			turnId: turnId,
-			typ:    turnEventTurnFailed,
-			err:    err,
-			fatal:  true,
-		})
-		return nil
-	}
-	turn.ttsSession = ttsSession
-
 	stopBytes, _ := EncodeTTSStopMessage(sessionId)
 	pacer := NewDownlinkPacer(turnCtx, DownlinkPacerOptions{
 		SessionId:     sessionId,
@@ -651,13 +633,18 @@ func (p *TurnPipeline) orchestrateLLMAndTTS(turn *activeTurn, sessionId string, 
 func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, sentenceCh <-chan string, pacer *DownlinkPacer, done chan<- error) {
 	ctx := turn.ctx
 	turnId := turn.turnId
-	ttsSession := turn.ttsSession
 
 	var consumeErr error
 	defer func() {
-		if ttsSession != nil {
-			_ = ttsSession.Close()
+		p.mu.Lock()
+		sessToClose := turn.ttsSession
+		turn.ttsSession = nil
+		p.mu.Unlock()
+
+		if sessToClose != nil {
+			_ = sessToClose.Close()
 		}
+
 		if done != nil {
 			select {
 			case done <- consumeErr:
@@ -667,9 +654,9 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 		}
 	}()
 
-	if ttsSession == nil {
-		return
-	}
+	p.mu.Lock()
+	ttsSession := turn.ttsSession
+	p.mu.Unlock()
 
 	hasSentStart := false
 	for sentence := range sentenceCh {
@@ -678,6 +665,49 @@ func (p *TurnPipeline) consumeSentencesTTS(turn *activeTurn, sessionId string, s
 		}
 		if sentence == "" {
 			continue
+		}
+
+		if ttsSession == nil {
+			if p.ttsClient == nil {
+				consumeErr = errors.New("tts client not configured")
+				p.emit(turnEvent{
+					turnId: turnId,
+					typ:    turnEventTurnFailed,
+					err:    consumeErr,
+					fatal:  true,
+				})
+				return
+			}
+
+			sess, err := p.ttsClient.CreateSession(ctx)
+			if err != nil {
+				if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+					return
+				}
+				consumeErr = err
+				p.logger.Warn("failed to create tts session",
+					"error", err,
+					"session_id", sessionId,
+					"turn_id", turnId,
+				)
+				p.emit(turnEvent{
+					turnId: turnId,
+					typ:    turnEventTurnFailed,
+					err:    err,
+					fatal:  true,
+				})
+				return
+			}
+
+			p.mu.Lock()
+			if ctx.Err() != nil || p.activeTurn != turn {
+				p.mu.Unlock()
+				_ = sess.Close()
+				return
+			}
+			turn.ttsSession = sess
+			ttsSession = sess
+			p.mu.Unlock()
 		}
 
 		if !hasSentStart && pacer != nil {
