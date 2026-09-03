@@ -880,17 +880,7 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 		t.Errorf("unexpected updated fields in DB: %+v", found)
 	}
 
-	// 4. Activate Agent Config
-	actBody := []byte(fmt.Sprintf(`{"id": %d}`, agentId))
-	reqAct := httptest.NewRequest(http.MethodPost, "/agent-config/activate", bytes.NewReader(actBody))
-	reqAct.Header.Set("Content-Type", "application/json")
-	wAct := httptest.NewRecorder()
-	routes.ServeHTTP(wAct, reqAct)
-	if wAct.Code != http.StatusOK {
-		t.Fatalf("activate agent config failed, code=%d, body=%s", wAct.Code, wAct.Body.String())
-	}
-
-	// 5. Delete Agent Config
+	// 4. Delete Agent Config
 	delBody := []byte(fmt.Sprintf(`{"id": %d}`, agentId))
 	reqDel := httptest.NewRequest(http.MethodPost, "/agent-config/delete", bytes.NewReader(delBody))
 	reqDel.Header.Set("Content-Type", "application/json")
@@ -906,7 +896,7 @@ func TestAdminAgentConfigEndpoints(t *testing.T) {
 		t.Fatalf("expected ErrAgentConfigNotFound after delete, got %v", err)
 	}
 
-	// 6. Batch Delete
+	// 5. Batch Delete
 	cfgA := &database.AgentConfig{Name: "A", ASRConfigId: asr.Id, LLMConfigId: llm.Id, TTSConfigId: tts.Id, SystemPrompt: "p1", Voice: "v1"}
 	cfgB := &database.AgentConfig{Name: "B", ASRConfigId: asr.Id, LLMConfigId: llm.Id, TTSConfigId: tts.Id, SystemPrompt: "p2", Voice: "v2"}
 	_ = db.CreateAgentConfig(ctx, cfgA)

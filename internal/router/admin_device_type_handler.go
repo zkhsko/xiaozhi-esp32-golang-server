@@ -175,6 +175,7 @@ func (h *AdminDeviceTypeHandler) handleSaveDeviceType(w http.ResponseWriter, r *
 		if err := h.store.CreateDeviceType(r.Context(), dt); err != nil {
 			if errors.Is(err, database.ErrDeviceTypeAlreadyExists) ||
 				errors.Is(err, database.ErrReferencedAgentNotFound) ||
+				errors.Is(err, database.ErrReferencedAgentDisabled) ||
 				errors.Is(err, database.ErrEmptyDeviceType) ||
 				errors.Is(err, database.ErrInvalidDeviceTypeLength) ||
 				errors.Is(err, database.ErrInvalidAgentConfigId) {
@@ -226,6 +227,7 @@ func (h *AdminDeviceTypeHandler) handleSaveDeviceType(w http.ResponseWriter, r *
 	if err := h.store.UpdateDeviceTypeById(r.Context(), updatedDt); err != nil {
 		if errors.Is(err, database.ErrDeviceTypeAlreadyExists) ||
 			errors.Is(err, database.ErrReferencedAgentNotFound) ||
+			errors.Is(err, database.ErrReferencedAgentDisabled) ||
 			errors.Is(err, database.ErrEmptyDeviceType) ||
 			errors.Is(err, database.ErrInvalidDeviceTypeLength) ||
 			errors.Is(err, database.ErrInvalidAgentConfigId) {

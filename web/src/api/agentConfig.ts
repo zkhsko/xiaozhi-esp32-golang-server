@@ -105,17 +105,3 @@ export async function batchDeleteAgentConfigs(ids: number[]): Promise<ApiRespons
   }
   return res.json()
 }
-
-export async function activateAgentConfig(id: number): Promise<ApiResponse> {
-  const res = await fetch(`${BASE_URL}/agent-config/activate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id }),
-    credentials: 'same-origin',
-  })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
-  }
-  return res.json()
-}

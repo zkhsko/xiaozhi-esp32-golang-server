@@ -21,7 +21,6 @@ type AgentConfigStore interface {
 	UpdateAgentConfigById(ctx context.Context, cfg *database.AgentConfig) error
 	DeleteAgentConfig(ctx context.Context, id uint64) error
 	BatchDeleteAgentConfigs(ctx context.Context, ids []uint64) error
-	ActivateAgent(ctx context.Context, id uint64) error
 	FindASRConfigById(ctx context.Context, id uint64) (*database.ASRConfig, error)
 	FindLLMConfigById(ctx context.Context, id uint64) (*database.LLMConfig, error)
 	FindTTSConfigById(ctx context.Context, id uint64) (*database.TTSConfig, error)
@@ -72,11 +71,6 @@ type DeleteAgentConfigRequest struct {
 // BatchDeleteAgentConfigRequest 批量删除 Agent 配置请求体。
 type BatchDeleteAgentConfigRequest struct {
 	Ids []uint64 `json:"ids"`
-}
-
-// ActivateAgentConfigRequest 激活单条 Agent 配置请求体。
-type ActivateAgentConfigRequest struct {
-	Id uint64 `json:"id"`
 }
 
 // AdminAgentHandler 处理 Agent 智能体配置相关的管理端接口。
@@ -211,20 +205,12 @@ func (h *AdminAgentHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http
 			TTSConfigId:  req.TTSConfigId,
 			SystemPrompt: strings.TrimSpace(req.SystemPrompt),
 			Voice:        strings.TrimSpace(req.Voice),
-			Enabled:      false,
+			Enabled:      enabled,
 		}
 
 		if err := h.store.CreateAgentConfig(r.Context(), cfg); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
-		}
-
-		if enabled {
-			if err := h.store.ActivateAgent(r.Context(), cfg.Id); err != nil {
-				h.logger.Warn("failed to activate newly created agent", "id", cfg.Id, "error", err)
-			} else {
-				cfg.Enabled = true
-			}
 		}
 
 		writeJSON(w, http.StatusOK, AdminResponse{
@@ -285,6 +271,11 @@ func (h *AdminAgentHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http
 		voice = strings.TrimSpace(req.Voice)
 	}
 
+	enabled = existing.Enabled
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+
 	updatedCfg := &database.AgentConfig{
 		Id:           req.Id,
 		Name:         name,
@@ -293,20 +284,12 @@ func (h *AdminAgentHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http
 		TTSConfigId:  ttsId,
 		SystemPrompt: systemPrompt,
 		Voice:        voice,
-		Enabled:      existing.Enabled,
+		Enabled:      enabled,
 	}
 
 	if err := h.store.UpdateAgentConfigById(r.Context(), updatedCfg); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
-	}
-
-	if req.Enabled != nil && *req.Enabled && !existing.Enabled {
-		if err := h.store.ActivateAgent(r.Context(), req.Id); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		updatedCfg.Enabled = true
 	}
 
 	writeJSON(w, http.StatusOK, AdminResponse{
@@ -387,48 +370,5 @@ func (h *AdminAgentHandler) handleBatchDeleteAgentConfigs(w http.ResponseWriter,
 	writeJSON(w, http.StatusOK, AdminResponse{
 		Success: true,
 		Message: fmt.Sprintf("成功批量删除 %d 条 Agent 配置", len(req.Ids)),
-	})
-}
-
-// handleActivateAgentConfig 激活指定 Id 的 Agent 配置。
-func (h *AdminAgentHandler) handleActivateAgentConfig(w http.ResponseWriter, r *http.Request) {
-	if h.store == nil {
-		h.logger.Error("database dependency not properly initialized")
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	var req ActivateAgentConfigRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-
-	if req.Id == 0 {
-		http.Error(w, "id is required and must be positive", http.StatusBadRequest)
-		return
-	}
-
-	if err := h.store.ActivateAgent(r.Context(), req.Id); err != nil {
-		if errors.Is(err, database.ErrAgentConfigNotFound) {
-			http.Error(w, "agent config not found", http.StatusNotFound)
-			return
-		}
-		if errors.Is(err, database.ErrReferencedASRNotFound) ||
-			errors.Is(err, database.ErrReferencedASRDisabled) ||
-			errors.Is(err, database.ErrReferencedLLMNotFound) ||
-			errors.Is(err, database.ErrReferencedLLMDisabled) ||
-			errors.Is(err, database.ErrReferencedTTSNotFound) ||
-			errors.Is(err, database.ErrReferencedTTSDisabled) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		h.logger.Error("failed to activate agent config", "id", req.Id, "error", err)
-		http.Error(w, "failed to activate agent config", http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, AdminResponse{
-		Success: true,
-		Message: "Agent 配置激活成功",
 	})
 }

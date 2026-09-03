@@ -379,7 +379,6 @@ import {
   saveAgentConfig,
   deleteAgentConfig,
   batchDeleteAgentConfigs,
-  activateAgentConfig,
   type AgentConfigItem,
 } from '../api/agentConfig'
 import { fetchASRConfigs, type ASRConfigItem } from '../api/asrConfig'
@@ -652,35 +651,25 @@ async function submitConfig() {
   })
 }
 
-// 快速切换启用状态 / 激活
+// 快速切换启用状态
 async function handleToggleEnabled(row: AgentConfigItem & { _switchLoading?: boolean }, targetVal: boolean) {
   row._switchLoading = true
   try {
-    if (targetVal) {
-      const res = await activateAgentConfig(row.id)
-      if (res.success) {
-        ElMessage.success(`已激活 Agent 配置：${row.name}`)
-        loadData()
-      } else {
-        ElMessage.error(res.message || '激活失败')
-      }
+    const res = await saveAgentConfig({
+      id: row.id,
+      name: row.name,
+      asr_config_id: row.asr_config_id,
+      llm_config_id: row.llm_config_id,
+      tts_config_id: row.tts_config_id,
+      system_prompt: row.system_prompt,
+      voice: row.voice,
+      enabled: targetVal,
+    })
+    if (res.success) {
+      row.enabled = targetVal
+      ElMessage.success(`已${targetVal ? '启用' : '禁用'}配置：${row.name}`)
     } else {
-      const res = await saveAgentConfig({
-        id: row.id,
-        name: row.name,
-        asr_config_id: row.asr_config_id,
-        llm_config_id: row.llm_config_id,
-        tts_config_id: row.tts_config_id,
-        system_prompt: row.system_prompt,
-        voice: row.voice,
-        enabled: false,
-      })
-      if (res.success) {
-        row.enabled = false
-        ElMessage.success(`已禁用 Agent 配置：${row.name}`)
-      } else {
-        ElMessage.error(res.message || '更新状态失败')
-      }
+      ElMessage.error(res.message || '更新状态失败')
     }
   } catch (err: any) {
     ElMessage.error(`操作失败: ${err.message || err}`)

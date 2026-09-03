@@ -121,7 +121,7 @@ func TestWebSocketDynamicLoading_EndToEnd(t *testing.T) {
 		TTSConfigId:  ttsB.Id,
 		SystemPrompt: "你是故事机B",
 		Voice:        "voice-b",
-		Enabled:      false,
+		Enabled:      true,
 	}
 	if err := db.CreateAgentConfig(ctx, agentB); err != nil {
 		t.Fatalf("create agentB: %v", err)
@@ -135,6 +135,12 @@ func TestWebSocketDynamicLoading_EndToEnd(t *testing.T) {
 	_, err = db.UpsertDeviceType(ctx, "story-toy", agentB.Id)
 	if err != nil {
 		t.Fatalf("upsert device type story-toy: %v", err)
+	}
+
+	// 验证：即使绑定后 AgentB 后来被禁用，已绑定的设备建连与运行依然完全不受影响
+	agentB.Enabled = false
+	if err := db.UpdateAgentConfigById(ctx, agentB); err != nil {
+		t.Fatalf("disable agentB: %v", err)
 	}
 
 	// 3. 注册两台设备的 Access Token

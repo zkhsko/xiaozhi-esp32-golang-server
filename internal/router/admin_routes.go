@@ -67,7 +67,6 @@ func AdminRoutes(h *AdminHandler) http.Handler {
 		r.Post("/agent-config/update", h.agentHandler.handleSaveAgentConfig)
 		r.Post("/agent-config/delete", h.agentHandler.handleDeleteAgentConfig)
 		r.Post("/agent-config/batch-delete", h.agentHandler.handleBatchDeleteAgentConfigs)
-		r.Post("/agent-config/activate", h.agentHandler.handleActivateAgentConfig)
 	}
 
 	// AgentKit Config 接口

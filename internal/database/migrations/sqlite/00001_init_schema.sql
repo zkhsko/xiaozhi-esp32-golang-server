@@ -191,7 +191,7 @@ CREATE TABLE IF NOT EXISTS agent_config (
     tts_config_id INTEGER NOT NULL,                                -- 引用 tts_config.id
     system_prompt TEXT NOT NULL,                                   -- Agent 系统提示词
     voice VARCHAR(128) NOT NULL,                                   -- Agent 使用的 TTS 音色
-    enabled INTEGER NOT NULL DEFAULT 0,                            -- 是否为当前 Agent（0: 否, 1: 是）
+    enabled INTEGER NOT NULL DEFAULT 0,                            -- 是否启用（0: 否, 1: 是）
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,        -- 创建时间
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP         -- 更新时间
 );
@@ -213,7 +213,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_config_tts_config_id ON agent_config(tts_co
 -- +goose StatementEnd
 
 -- +goose StatementBegin
--- idx_agent_config_enabled: 是否为当前 Agent 普通索引
+-- idx_agent_config_enabled: 是否启用普通索引
 CREATE INDEX IF NOT EXISTS idx_agent_config_enabled ON agent_config(enabled);
 -- +goose StatementEnd
 

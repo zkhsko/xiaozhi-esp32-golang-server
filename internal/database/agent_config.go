@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 // 哨兵错误定义。
@@ -47,15 +46,12 @@ var (
 	ErrReferencedTTSNotFound = errors.New("referenced tts config not found")
 	// ErrReferencedTTSDisabled 表示引用的 TTS 配置已禁用。
 	ErrReferencedTTSDisabled = errors.New("referenced tts config is disabled")
-	// ErrActiveAgentStateInvalid 表示当前启用的 Agent 状态非法（必须恰好存在一条 enabled=true 的 Agent）。
-	ErrActiveAgentStateInvalid = errors.New("invalid active agent state: exactly one enabled agent required")
 )
 
 // AgentConfig 映射 agent_config AI Agent 配置表。
 //
 // 业务用途：
 // 自由组合一条 ASR、一条 LLM 和一条 TTS 配置，独立保存系统提示词和音色。
-// 全局通过 enabled = true 标记当前生效的 Agent。
 //
 // 字段约束与索引规范：
 // - id: 主键自增。
@@ -65,7 +61,7 @@ var (
 // - tts_config_id: 引用 tts_config.id，非空，普通索引 idx_agent_config_tts_config_id。
 // - system_prompt: Agent 系统提示词，最大 16384 字节。
 // - voice: Agent 使用的 TTS 音色，最大 128 字节。
-// - enabled: 是否为当前 Agent（true 表示当前 Agent），普通索引 idx_agent_config_enabled。
+// - enabled: 是否启用（true 表示可供设备选择绑定），普通索引 idx_agent_config_enabled。
 // - created_at: 创建时间。
 // - updated_at: 更新时间。
 type AgentConfig struct {
@@ -95,7 +91,7 @@ type AgentSnapshot struct {
 	Enabled      bool   `json:"enabled"`
 }
 
-// AgentRuntimeSnapshot 包含生效 Agent 及其关联 ASR、LLM、TTS 组件的完整配置快照。
+// AgentRuntimeSnapshot 包含运行时 Agent 及其关联 ASR、LLM、TTS 组件的完整配置快照。
 type AgentRuntimeSnapshot struct {
 	Agent     AgentSnapshot `json:"agent"`
 	ASRConfig ASRConfig     `json:"asr_config"`
@@ -279,6 +275,7 @@ func (d *Database) UpdateAgentConfigById(ctx context.Context, cfg *AgentConfig) 
 			"tts_config_id": cfg.TTSConfigId,
 			"system_prompt": strings.TrimSpace(cfg.SystemPrompt),
 			"voice":         strings.TrimSpace(cfg.Voice),
+			"enabled":       cfg.Enabled,
 			"updated_at":    time.Now(),
 		}
 
@@ -293,64 +290,6 @@ func (d *Database) UpdateAgentConfigById(ctx context.Context, cfg *AgentConfig) 
 		return nil
 	})
 }
-
-// ActivateAgent 事务切换当前生效的 Agent。
-//
-// 执行流程：
-// 1. 开启写事务并排他锁定目标 Agent；
-// 2. 校验目标 Agent 引用的 ASR、LLM、TTS 组件存在且处于 enabled 状态；
-// 3. 将全部 Agent 的 enabled 更新为 false；
-// 4. 将目标 Agent 的 enabled 更新为 true；
-// 5. 校验事务内 enabled=true 的 Agent 数量恰好为 1 条；
-// 6. 提交事务。
-func (d *Database) ActivateAgent(ctx context.Context, agentId uint64) error {
-	if d == nil || d.gormDB == nil {
-		return ErrDatabaseInstanceRequired
-	}
-	if agentId == 0 {
-		return ErrInvalidAgentConfigId
-	}
-
-	return d.gormDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var target AgentConfig
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ?", agentId).
-			Take(&target).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("activate agent by id %d: %w", agentId, ErrAgentConfigNotFound)
-			}
-			return fmt.Errorf("lock target agent config: %w", err)
-		}
-
-		if err := validateComponentReferences(ctx, tx, target.ASRConfigId, target.LLMConfigId, target.TTSConfigId); err != nil {
-			return err
-		}
-
-		if err := tx.Model(&AgentConfig{}).Where("1 = 1").Update("enabled", false).Error; err != nil {
-			return fmt.Errorf("reset all agent configs enabled: %w", err)
-		}
-
-		res := tx.Model(&AgentConfig{}).Where("id = ?", agentId).Update("enabled", true)
-		if res.Error != nil {
-			return fmt.Errorf("activate target agent: %w", res.Error)
-		}
-		if res.RowsAffected == 0 {
-			return fmt.Errorf("activate agent by id %d: %w", agentId, ErrAgentConfigNotFound)
-		}
-
-		var count int64
-		if err := tx.Model(&AgentConfig{}).Where("enabled = ?", true).Count(&count).Error; err != nil {
-			return fmt.Errorf("count enabled agents: %w", err)
-		}
-		if count != 1 {
-			return ErrActiveAgentStateInvalid
-		}
-
-		return nil
-	})
-}
-
-
 
 // ListAgentConfigs 分页查询 Agent 配置列表。
 func (d *Database) ListAgentConfigs(ctx context.Context, filter AgentConfigFilter) ([]*AgentConfig, int64, error) {

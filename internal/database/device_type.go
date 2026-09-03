@@ -28,6 +28,8 @@ var (
 	ErrDeviceTypeAlreadyExists = errors.New("device type already exists")
 	// ErrReferencedAgentNotFound 表示引用的 Agent 配置不存在。
 	ErrReferencedAgentNotFound = errors.New("referenced agent config not found")
+	// ErrReferencedAgentDisabled 表示引用的 Agent 配置已禁用。
+	ErrReferencedAgentDisabled = errors.New("referenced agent config is disabled")
 )
 
 // DeviceType 映射 device_type 设备类型与 Agent 配置关联关系表。
@@ -100,13 +102,16 @@ func (d *Database) CreateDeviceType(ctx context.Context, dt *DeviceType) error {
 
 	dt.DeviceType = strings.TrimSpace(dt.DeviceType)
 
-	// 校验关联的 Agent 是否存在
+	// 校验关联的 Agent 是否存在且处于启用状态
 	var agent AgentConfig
 	if err := d.gormDB.WithContext(ctx).Where("id = ?", dt.AgentConfigId).Take(&agent).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrReferencedAgentNotFound
 		}
 		return fmt.Errorf("query referenced agent config: %w", err)
+	}
+	if !agent.Enabled {
+		return ErrReferencedAgentDisabled
 	}
 
 	// 检查设备类型是否已存在
@@ -161,6 +166,15 @@ func (d *Database) UpdateDeviceTypeById(ctx context.Context, dt *DeviceType) err
 
 	dt.DeviceType = strings.TrimSpace(dt.DeviceType)
 
+	// 校验当前记录是否存在
+	var existing DeviceType
+	if err := d.gormDB.WithContext(ctx).Where("id = ?", dt.Id).Take(&existing).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("update device type by id %d: %w", dt.Id, ErrDeviceTypeNotFound)
+		}
+		return fmt.Errorf("query existing device type: %w", err)
+	}
+
 	// 校验关联的 Agent 是否存在
 	var agent AgentConfig
 	if err := d.gormDB.WithContext(ctx).Where("id = ?", dt.AgentConfigId).Take(&agent).Error; err != nil {
@@ -169,10 +183,14 @@ func (d *Database) UpdateDeviceTypeById(ctx context.Context, dt *DeviceType) err
 		}
 		return fmt.Errorf("query referenced agent config: %w", err)
 	}
+	// 若切换为新的 Agent，目标 Agent 必须处于启用状态；未切换 Agent 则允许保持已有配置
+	if existing.AgentConfigId != dt.AgentConfigId && !agent.Enabled {
+		return ErrReferencedAgentDisabled
+	}
 
 	// 检查 device_type 是否与其他记录冲突
-	var existing DeviceType
-	if err := d.gormDB.WithContext(ctx).Where("device_type = ? AND id != ?", dt.DeviceType, dt.Id).Take(&existing).Error; err == nil {
+	var dup DeviceType
+	if err := d.gormDB.WithContext(ctx).Where("device_type = ? AND id != ?", dt.DeviceType, dt.Id).Take(&dup).Error; err == nil {
 		return ErrDeviceTypeAlreadyExists
 	}
 
@@ -238,6 +256,16 @@ func (d *Database) UpsertDeviceType(ctx context.Context, deviceType string, agen
 	}
 
 	var dt DeviceType
+
+	// 校验关联的 Agent 是否存在
+	var agent AgentConfig
+	if err := d.gormDB.WithContext(ctx).Where("id = ?", agentConfigId).Take(&agent).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrReferencedAgentNotFound
+		}
+		return nil, fmt.Errorf("query referenced agent config: %w", err)
+	}
+
 	err := d.gormDB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing DeviceType
 		findErr := tx.Where("device_type = ?", trimmedType).Take(&existing).Error
@@ -246,6 +274,9 @@ func (d *Database) UpsertDeviceType(ctx context.Context, deviceType string, agen
 		}
 
 		if errors.Is(findErr, gorm.ErrRecordNotFound) {
+			if !agent.Enabled {
+				return ErrReferencedAgentDisabled
+			}
 			dt = DeviceType{
 				DeviceType:    trimmedType,
 				AgentConfigId: agentConfigId,
@@ -257,6 +288,9 @@ func (d *Database) UpsertDeviceType(ctx context.Context, deviceType string, agen
 		}
 
 		if existing.AgentConfigId != agentConfigId {
+			if !agent.Enabled {
+				return ErrReferencedAgentDisabled
+			}
 			if err := tx.Model(&existing).Update("agent_config_id", agentConfigId).Error; err != nil {
 				return fmt.Errorf("update device type: %w", err)
 			}
@@ -404,6 +438,7 @@ func (d *Database) DeleteDeviceTypeByDeviceType(ctx context.Context, deviceType 
 
 // ResolveAgentRuntimeSnapshotByDeviceType 按 device_type 执行单表分步点查并组装快照。
 // 严格无 JOIN、严格无 Fallback、任何步骤缺失立即 Fail Fast。
+// 注意：点查 agent_config 时不检查 agent.Enabled，已设置的设备不受 Agent 启用状态变更的影响。
 func (d *Database) ResolveAgentRuntimeSnapshotByDeviceType(ctx context.Context, deviceType string) (*AgentRuntimeSnapshot, error) {
 	if d == nil || d.gormDB == nil {
 		return nil, ErrDatabaseInstanceRequired

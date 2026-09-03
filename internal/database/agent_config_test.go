@@ -460,56 +460,49 @@ func TestAgentConfig_ComponentReferencesValidation(t *testing.T) {
 	}
 }
 
-func TestAgentConfig_ActivateAgent(t *testing.T) {
+func TestAgentConfig_UpdateEnabled(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
 	asrId, llmId, ttsId := createTestComponents(t, db, ctx)
 
-	agent1 := &AgentConfig{Name: "Agent-1", ASRConfigId: asrId, LLMConfigId: llmId, TTSConfigId: ttsId, SystemPrompt: "p1", Voice: "v1", Enabled: false}
+	agent1 := &AgentConfig{Name: "Agent-1", ASRConfigId: asrId, LLMConfigId: llmId, TTSConfigId: ttsId, SystemPrompt: "p1", Voice: "v1", Enabled: true}
 	agent2 := &AgentConfig{Name: "Agent-2", ASRConfigId: asrId, LLMConfigId: llmId, TTSConfigId: ttsId, SystemPrompt: "p2", Voice: "v2", Enabled: false}
 
-	_ = db.CreateAgentConfig(ctx, agent1)
-	_ = db.CreateAgentConfig(ctx, agent2)
+	if err := db.CreateAgentConfig(ctx, agent1); err != nil {
+		t.Fatalf("CreateAgentConfig 1 failed: %v", err)
+	}
+	if err := db.CreateAgentConfig(ctx, agent2); err != nil {
+		t.Fatalf("CreateAgentConfig 2 failed: %v", err)
+	}
 
-	// 1. 激活 Agent 1
-	if err := db.ActivateAgent(ctx, agent1.Id); err != nil {
-		t.Fatalf("ActivateAgent 1 failed: %v", err)
+	// 验证 agent2 启用不会影响 agent1（允许多个 Agent 同时启用）
+	agent2.Enabled = true
+	if err := db.UpdateAgentConfigById(ctx, agent2); err != nil {
+		t.Fatalf("UpdateAgentConfigById failed: %v", err)
 	}
 
 	a1, _ := db.FindAgentConfigById(ctx, agent1.Id)
 	a2, _ := db.FindAgentConfigById(ctx, agent2.Id)
 	if !a1.Enabled {
-		t.Errorf("expected agent 1 enabled=true")
+		t.Errorf("expected agent 1 enabled=true to remain unchanged")
 	}
-	if a2.Enabled {
-		t.Errorf("expected agent 2 enabled=false")
-	}
-
-	// 2. 激活 Agent 2
-	if err := db.ActivateAgent(ctx, agent2.Id); err != nil {
-		t.Fatalf("ActivateAgent 2 failed: %v", err)
+	if !a2.Enabled {
+		t.Errorf("expected agent 2 enabled=true")
 	}
 
+	// 验证 agent1 禁用也不会影响 agent2
+	agent1.Enabled = false
+	if err := db.UpdateAgentConfigById(ctx, agent1); err != nil {
+		t.Fatalf("UpdateAgentConfigById failed: %v", err)
+	}
 	a1, _ = db.FindAgentConfigById(ctx, agent1.Id)
 	a2, _ = db.FindAgentConfigById(ctx, agent2.Id)
 	if a1.Enabled {
-		t.Errorf("expected agent 1 enabled=false after switching")
+		t.Errorf("expected agent 1 enabled=false")
 	}
 	if !a2.Enabled {
-		t.Errorf("expected agent 2 enabled=true after switching")
-	}
-
-	// 3. 激活不存在的 Agent
-	err := db.ActivateAgent(ctx, 99999)
-	if !errors.Is(err, ErrAgentConfigNotFound) {
-		t.Errorf("expected ErrAgentConfigNotFound, got %v", err)
-	}
-
-	// 4. 激活参数为 0
-	err = db.ActivateAgent(ctx, 0)
-	if !errors.Is(err, ErrInvalidAgentConfigId) {
-		t.Errorf("expected ErrInvalidAgentConfigId, got %v", err)
+		t.Errorf("expected agent 2 enabled=true to remain unchanged")
 	}
 }
 
@@ -575,9 +568,6 @@ func TestAgentConfig_NilDB(t *testing.T) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
 	if err := nilDB.BatchDeleteAgentConfigs(ctx, []uint64{1}); !errors.Is(err, ErrDatabaseInstanceRequired) {
-		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
-	}
-	if err := nilDB.ActivateAgent(ctx, 1); !errors.Is(err, ErrDatabaseInstanceRequired) {
 		t.Fatalf("expected ErrDatabaseInstanceRequired, got %v", err)
 	}
 }

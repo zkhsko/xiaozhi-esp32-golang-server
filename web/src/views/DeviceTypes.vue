@@ -189,8 +189,9 @@
             <el-option
               v-for="item in agentOptions"
               :key="item.id"
-              :label="`${item.name} (Id: ${item.id})`"
+              :label="`${item.name} (Id: ${item.id})${!item.enabled ? ' [已禁用]' : ''}`"
               :value="item.id"
+              :disabled="!item.enabled && item.id !== configDialog.form.agent_config_id"
             />
           </el-select>
         </el-form-item>
@@ -339,20 +340,21 @@ function handleSelectionChange(rows: DeviceTypeItem[]) {
 }
 
 // 打开新建弹窗
-function openCreateDialog() {
-  loadAgentOptions()
+async function openCreateDialog() {
+  await loadAgentOptions()
   configDialog.isEdit = false
+  const defaultAgent = agentOptions.value.find((item) => item.enabled) || agentOptions.value[0]
   configDialog.form = {
     id: 0,
     device_type: '',
-    agent_config_id: agentOptions.value[0]?.id,
+    agent_config_id: defaultAgent?.id,
   }
   configDialog.visible = true
 }
 
 // 打开编辑弹窗
-function openEditDialog(row: DeviceTypeItem) {
-  loadAgentOptions()
+async function openEditDialog(row: DeviceTypeItem) {
+  await loadAgentOptions()
   configDialog.isEdit = true
   configDialog.form = {
     id: row.id,

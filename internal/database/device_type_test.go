@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func createTestAgent(t *testing.T, db *Database, ctx context.Context, name string) uint64 {
+func createTestAgentWithEnabled(t *testing.T, db *Database, ctx context.Context, name string, enabled bool) uint64 {
 	t.Helper()
 	asr := &ASRConfig{
 		Name:             "测试ASR-" + name,
@@ -54,12 +54,16 @@ func createTestAgent(t *testing.T, db *Database, ctx context.Context, name strin
 		TTSConfigId:  tts.Id,
 		SystemPrompt: "你是一个助手",
 		Voice:        "voice1",
-		Enabled:      true,
+		Enabled:      enabled,
 	}
 	if err := db.CreateAgentConfig(ctx, agent); err != nil {
 		t.Fatalf("create test agent failed: %v", err)
 	}
 	return agent.Id
+}
+
+func createTestAgent(t *testing.T, db *Database, ctx context.Context, name string) uint64 {
+	return createTestAgentWithEnabled(t, db, ctx, name, true)
 }
 
 func TestDeviceTypeCRUD(t *testing.T) {
@@ -197,21 +201,24 @@ func TestDeviceTypeUpsertCompatibility(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
+	agent1Id := createTestAgent(t, db, ctx, "upsert1")
+	agent2Id := createTestAgent(t, db, ctx, "upsert2")
+
 	// 1. Initial Upsert
-	dt1, err := db.UpsertDeviceType(ctx, "robot-dog", 101)
+	dt1, err := db.UpsertDeviceType(ctx, "robot-dog", agent1Id)
 	if err != nil {
 		t.Fatalf("UpsertDeviceType failed: %v", err)
 	}
-	if dt1.Id == 0 || dt1.DeviceType != "robot-dog" || dt1.AgentConfigId != 101 {
+	if dt1.Id == 0 || dt1.DeviceType != "robot-dog" || dt1.AgentConfigId != agent1Id {
 		t.Errorf("UpsertDeviceType mismatch: %+v", dt1)
 	}
 
 	// 2. Upsert update
-	updated, err := db.UpsertDeviceType(ctx, "robot-dog", 202)
+	updated, err := db.UpsertDeviceType(ctx, "robot-dog", agent2Id)
 	if err != nil {
 		t.Fatalf("UpsertDeviceType update failed: %v", err)
 	}
-	if updated.Id != dt1.Id || updated.AgentConfigId != 202 {
+	if updated.Id != dt1.Id || updated.AgentConfigId != agent2Id {
 		t.Errorf("UpsertDeviceType update mismatch: %+v", updated)
 	}
 
@@ -261,6 +268,13 @@ func TestDeviceTypeValidation(t *testing.T) {
 	err = db.CreateDeviceType(ctx, &DeviceType{DeviceType: "box", AgentConfigId: 99999})
 	if !errors.Is(err, ErrReferencedAgentNotFound) {
 		t.Errorf("expected ErrReferencedAgentNotFound, got %v", err)
+	}
+
+	// Disabled agent config id
+	disabledAgentId := createTestAgentWithEnabled(t, db, ctx, "disabled", false)
+	err = db.CreateDeviceType(ctx, &DeviceType{DeviceType: "disabled-box", AgentConfigId: disabledAgentId})
+	if !errors.Is(err, ErrReferencedAgentDisabled) {
+		t.Errorf("expected ErrReferencedAgentDisabled, got %v", err)
 	}
 
 	// Duplicate device type create
@@ -396,7 +410,7 @@ func TestResolveAgentRuntimeSnapshotByDeviceType(t *testing.T) {
 		TTSConfigId:  tts.Id,
 		SystemPrompt: "你是专用管家",
 		Voice:        "voice1",
-		Enabled:      false, // 验证即使 enabled=false 只要关联正确也能根据 device_type 加载
+		Enabled:      true,
 	}
 	if err := db.CreateAgentConfig(ctx, agent); err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -408,6 +422,12 @@ func TestResolveAgentRuntimeSnapshotByDeviceType(t *testing.T) {
 	}
 	if err := db.CreateDeviceType(ctx, dt); err != nil {
 		t.Fatalf("create device type: %v", err)
+	}
+
+	// 验证：即使后续 Agent 被禁用（enabled=false），已经设置好的设备依然可以正常根据 device_type 加载快照（不影响已经设置的设备）
+	agent.Enabled = false
+	if err := db.UpdateAgentConfigById(ctx, agent); err != nil {
+		t.Fatalf("disable agent: %v", err)
 	}
 
 	snapshot, err := db.ResolveAgentRuntimeSnapshotByDeviceType(ctx, "my-robot")
