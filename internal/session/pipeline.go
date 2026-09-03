@@ -268,14 +268,12 @@ func (p *TurnPipeline) StartResponse(turnId uint64, sessionId string, userText s
 		return nil
 	}
 
-	stopBytes, _ := EncodeTTSStopMessage(sessionId)
 	pacer := NewDownlinkPacer(turnCtx, DownlinkPacerOptions{
 		SessionId:     sessionId,
 		Sender:        sender,
 		QueueCap:      p.cfg.DownlinkOpusQueueCapacity,
 		TickerFactory: p.tickerFactory,
 		Logger:        p.logger,
-		AbortPayload:  stopBytes,
 		Callbacks: PacerCallbacks{
 			OnStarted: func() {
 				p.emit(turnEvent{
@@ -411,6 +409,17 @@ func (p *TurnPipeline) Close() {
 
 	if p.activeTurn != nil {
 		p.activeTurn.cancel()
+		p.cleanupTurnResources(p.activeTurn)
+		p.activeTurn = nil
+	}
+}
+
+// ClearActiveTurn 释放并清空已正常完成的活跃轮次。
+func (p *TurnPipeline) ClearActiveTurn() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.activeTurn != nil {
 		p.cleanupTurnResources(p.activeTurn)
 		p.activeTurn = nil
 	}

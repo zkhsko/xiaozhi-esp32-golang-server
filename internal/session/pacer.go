@@ -23,6 +23,8 @@ var (
 type DownlinkSender interface {
 	SendText(ctx context.Context, payload []byte) error
 	SendBinary(ctx context.Context, payload []byte) error
+	SendTextSync(ctx context.Context, payload []byte) error
+	SendBinarySync(ctx context.Context, payload []byte) error
 }
 
 // PendingDrainer 定义排空待发送缓冲区的接口。
@@ -85,7 +87,6 @@ type DownlinkPacerOptions struct {
 	QueueCap      int
 	TickerFactory func(time.Duration) Ticker
 	Logger        *slog.Logger
-	AbortPayload  []byte
 	Callbacks     PacerCallbacks
 }
 
@@ -95,7 +96,6 @@ type DownlinkPacer struct {
 	sessionId     string
 	sender        DownlinkSender
 	logger        *slog.Logger
-	abortPayload  []byte
 	callbacks     PacerCallbacks
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -144,7 +144,6 @@ func NewDownlinkPacer(ctx context.Context, opts DownlinkPacerOptions) *DownlinkP
 		sessionId:     sId,
 		sender:        opts.Sender,
 		logger:        l,
-		abortPayload:  opts.AbortPayload,
 		callbacks:     opts.Callbacks,
 		ctx:           pacerCtx,
 		cancel:        cancel,
@@ -215,11 +214,10 @@ func (p *DownlinkPacer) Stop() {
 	p.drainQueue()
 }
 
-// Abort 中止当前播放，清空积压并在已启动播放时下发中止控制载荷。
+// Abort 中止当前播放，清空积压并退出。
 func (p *DownlinkPacer) Abort() {
 	p.mu.Lock()
 	p.stopped = true
-	needAbortPayload := p.hasStarted && len(p.abortPayload) > 0
 	p.mu.Unlock()
 
 	p.cancel()
@@ -227,10 +225,6 @@ func (p *DownlinkPacer) Abort() {
 
 	if drainer, ok := p.sender.(PendingDrainer); ok && drainer != nil {
 		drainer.DrainPending()
-	}
-
-	if needAbortPayload && p.sender != nil {
-		_ = p.sender.SendText(context.Background(), p.abortPayload)
 	}
 }
 
@@ -305,7 +299,7 @@ func (p *DownlinkPacer) processItem(item pacerItem, tickerPtr *Ticker) bool {
 	switch item.kind {
 	case pacerItemText:
 		if p.sender != nil {
-			if err := p.sender.SendText(p.ctx, item.data); err != nil {
+			if err := p.sender.SendTextSync(p.ctx, item.data); err != nil {
 				p.handleError(err)
 				return false
 			}
@@ -314,7 +308,7 @@ func (p *DownlinkPacer) processItem(item pacerItem, tickerPtr *Ticker) bool {
 
 	case pacerItemAudio:
 		if p.sender != nil {
-			if err := p.sender.SendBinary(p.ctx, item.data); err != nil {
+			if err := p.sender.SendBinarySync(p.ctx, item.data); err != nil {
 				if !errors.Is(err, context.Canceled) {
 					p.logger.Warn("failed to send downlink audio binary", "error", err)
 				}

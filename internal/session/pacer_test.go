@@ -250,13 +250,11 @@ func TestDownlinkPacer_Abort(t *testing.T) {
 	writer := NewWriter(ctx, conn, 10, nil)
 	defer writer.Close()
 
-	stopMsg, _ := EncodeTTSStopMessage("sess-abort-test")
 	ticker := newManualTicker()
 	pacer := NewDownlinkPacer(ctx, DownlinkPacerOptions{
-		SessionId:    "sess-abort-test",
-		Sender:       writer,
-		QueueCap:     10,
-		AbortPayload: stopMsg,
+		SessionId: "sess-abort-test",
+		Sender:    writer,
+		QueueCap:  10,
 		TickerFactory: func(d time.Duration) Ticker {
 			return ticker
 		},
@@ -275,20 +273,8 @@ func TestDownlinkPacer_Abort(t *testing.T) {
 		t.Fatal("pacer did not exit on abort")
 	}
 
-	time.Sleep(50 * time.Millisecond)
-	msgs := conn.getMessages()
-	// 期望收到 1 个音频包和 1 个 stop 文本消息
-	if len(msgs) < 2 {
-		t.Fatalf("expected at least 2 messages on abort, got %d", len(msgs))
-	}
-	lastMsg := msgs[len(msgs)-1]
-	if lastMsg.typ != websocket.MessageText {
-		t.Fatalf("expected last message on abort to be text, got %v", lastMsg.typ)
-	}
-	var m map[string]any
-	_ = json.Unmarshal(lastMsg.payload, &m)
-	if m["type"] != "tts" || m["state"] != "stop" {
-		t.Fatalf("expected last message to be tts.stop, got %+v", m)
+	if err := pacer.EnqueueAudio([]byte{0x02}); err != ErrPacerStopped {
+		t.Fatalf("expected ErrPacerStopped after abort, got %v", err)
 	}
 }
 
@@ -505,6 +491,14 @@ func (e *errSender) SendBinary(ctx context.Context, payload []byte) error {
 	return e.err
 }
 
+func (e *errSender) SendTextSync(ctx context.Context, payload []byte) error {
+	return e.err
+}
+
+func (e *errSender) SendBinarySync(ctx context.Context, payload []byte) error {
+	return e.err
+}
+
 func TestDownlinkPacer_ErrorCallback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -541,5 +535,89 @@ func TestDownlinkPacer_ErrorCallback(t *testing.T) {
 
 	if !errors.Is(gotErr, expectedErr) {
 		t.Fatalf("expected error %v, got %v", expectedErr, gotErr)
+	}
+}
+
+type slowWSConn struct {
+	delay time.Duration
+	mu    sync.Mutex
+	count int
+}
+
+func (s *slowWSConn) Write(ctx context.Context, typ websocket.MessageType, p []byte) error {
+	time.Sleep(s.delay)
+	s.mu.Lock()
+	s.count++
+	s.mu.Unlock()
+	return nil
+}
+
+func TestDownlinkPacer_SyncWriteBackpressure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &slowWSConn{delay: 20 * time.Millisecond}
+	writer := NewWriter(ctx, conn, 5, nil)
+	defer writer.Close()
+
+	ticker := newManualTicker()
+	pacer := NewDownlinkPacer(ctx, DownlinkPacerOptions{
+		SessionId: "sess-backpressure-test",
+		Sender:    writer,
+		QueueCap:  5,
+		TickerFactory: func(d time.Duration) Ticker {
+			return ticker
+		},
+	})
+	go pacer.Run()
+
+	_ = pacer.EnqueueAudio([]byte{0x01})
+	_ = pacer.EnqueueAudio([]byte{0x02})
+	_ = pacer.EnqueueAudio([]byte{0x03})
+	pacer.FinishInput()
+
+	for i := 0; i < 5; i++ {
+		ticker.Tick()
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	select {
+	case <-pacer.Done():
+	case <-time.After(1 * time.Second):
+		t.Fatal("pacer should finish")
+	}
+
+	conn.mu.Lock()
+	c := conn.count
+	conn.mu.Unlock()
+
+	if c != 3 {
+		t.Fatalf("expected 3 packets written, got %d", c)
+	}
+	if qlen := writer.QueueLen(); qlen != 0 {
+		t.Fatalf("expected writer queue to be 0 after sync pacing, got %d", qlen)
+	}
+}
+
+type failWSConn struct {
+	err error
+}
+
+func (f *failWSConn) Write(ctx context.Context, typ websocket.MessageType, p []byte) error {
+	return f.err
+}
+
+func TestWriter_SyncConfirmationAndError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	expectedErr := errors.New("write socket closed")
+	failConn := &failWSConn{err: expectedErr}
+	writer := NewWriter(ctx, failConn, 10, nil)
+	defer writer.Close()
+
+	err := writer.SendBinarySync(ctx, []byte{0x01})
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected %v, got %v", expectedErr, err)
 	}
 }

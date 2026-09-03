@@ -577,6 +577,11 @@ func (s *Session) handleTurnEvent(st *runtimeState, ev turnEvent) {
 			st.promptPlayed = true
 		}
 
+		// 正常完成后立即释放 activeTurn 资源，避免下一轮误将其当做未完成而再次 Abort
+		if s.pipeline != nil {
+			s.pipeline.ClearActiveTurn()
+		}
+
 		s.setState(st, StateReady)
 
 		if ev.closeSession {

@@ -37,6 +37,14 @@ func (d *dummySender) SendBinary(ctx context.Context, payload []byte) error {
 	return nil
 }
 
+func (d *dummySender) SendTextSync(ctx context.Context, payload []byte) error {
+	return d.SendText(ctx, payload)
+}
+
+func (d *dummySender) SendBinarySync(ctx context.Context, payload []byte) error {
+	return d.SendBinary(ctx, payload)
+}
+
 type customCloserResult struct {
 	closed bool
 }

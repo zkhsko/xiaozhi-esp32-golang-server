@@ -33,6 +33,7 @@ type WSConn interface {
 type writeMessage struct {
 	msgType websocket.MessageType
 	payload []byte
+	done    chan error
 }
 
 // Writer 负责单个 WebSocket 连接的串行消息下发与背压保护。
@@ -83,16 +84,45 @@ func NewWriter(ctx context.Context, conn WSConn, queueCapacity int, l *slog.Logg
 
 // SendText 复制文本负载并排入串行写队列。
 func (w *Writer) SendText(ctx context.Context, payload []byte) error {
-	return w.enqueue(ctx, websocket.MessageText, payload)
+	return w.enqueue(ctx, websocket.MessageText, payload, nil)
+}
+
+// SendTextSync 复制文本负载并排入串行写队列，阻塞等待消息真实写入底层连接。
+func (w *Writer) SendTextSync(ctx context.Context, payload []byte) error {
+	return w.sendSync(ctx, websocket.MessageText, payload)
 }
 
 // SendBinary 复制二进制负载并排入串行写队列。
 func (w *Writer) SendBinary(ctx context.Context, payload []byte) error {
-	return w.enqueue(ctx, websocket.MessageBinary, payload)
+	return w.enqueue(ctx, websocket.MessageBinary, payload, nil)
+}
+
+// SendBinarySync 复制二进制负载并排入串行写队列，阻塞等待消息真实写入底层连接。
+func (w *Writer) SendBinarySync(ctx context.Context, payload []byte) error {
+	return w.sendSync(ctx, websocket.MessageBinary, payload)
+}
+
+// sendSync 封装带写入结果通道的同步写调用。
+func (w *Writer) sendSync(ctx context.Context, msgType websocket.MessageType, payload []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := make(chan error, 1)
+	if err := w.enqueue(ctx, msgType, payload, done); err != nil {
+		return err
+	}
+	select {
+	case <-w.ctx.Done():
+		return ErrWriterClosed
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
 }
 
 // enqueue 执行跨异步边界的数据独立深拷贝，并尝试将消息放入有界队列；队列满时返回 ErrWriteQueueFull。
-func (w *Writer) enqueue(ctx context.Context, msgType websocket.MessageType, payload []byte) error {
+func (w *Writer) enqueue(ctx context.Context, msgType websocket.MessageType, payload []byte, done chan error) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -117,6 +147,7 @@ func (w *Writer) enqueue(ctx context.Context, msgType websocket.MessageType, pay
 	item := writeMessage{
 		msgType: msgType,
 		payload: copied,
+		done:    done,
 	}
 
 	w.mu.RLock()
@@ -160,7 +191,11 @@ func (w *Writer) writeLoop() {
 			if !ok {
 				return
 			}
-			if err := w.conn.Write(w.ctx, msg.msgType, msg.payload); err != nil {
+			err := w.conn.Write(w.ctx, msg.msgType, msg.payload)
+			if msg.done != nil {
+				msg.done <- err
+			}
+			if err != nil {
 				w.setErr(err)
 				if !errors.Is(err, context.Canceled) {
 					w.logger.Warn("websocket writer write failed", "error", err)
@@ -175,9 +210,12 @@ func (w *Writer) writeLoop() {
 func (w *Writer) drainQueue() {
 	for {
 		select {
-		case _, ok := <-w.queue:
+		case msg, ok := <-w.queue:
 			if !ok {
 				return
+			}
+			if msg.done != nil {
+				msg.done <- ErrWriterClosed
 			}
 		default:
 			return
@@ -240,9 +278,12 @@ func (w *Writer) DrainPending() {
 	}
 	for {
 		select {
-		case _, ok := <-w.queue:
+		case msg, ok := <-w.queue:
 			if !ok {
 				return
+			}
+			if msg.done != nil {
+				msg.done <- ErrWriterClosed
 			}
 		default:
 			return
