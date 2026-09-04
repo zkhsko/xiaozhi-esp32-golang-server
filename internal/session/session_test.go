@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -287,22 +288,29 @@ func TestSession_AutoTurn_FullCycle(t *testing.T) {
 	// 等待完整流程跑完（STT, TTS start, sentence_start, audio, tts.stop）
 	ok := waitForCondition(3*time.Second, func() bool {
 		msgs := conn.getMessages()
-		// hello (1) + STT (1) + tts.start (1) + sentence_start (1) + opus (1) + tts.stop (1) = 6
-		return len(msgs) >= 6
+		for _, m := range msgs {
+			if bytes.Contains(m.payload, []byte(`"state":"stop"`)) {
+				return true
+			}
+		}
+		return false
 	})
 
 	if !ok {
 		msgs := conn.getMessages()
-		t.Fatalf("expected at least 6 messages, got %d", len(msgs))
+		t.Fatalf("expected tts.stop received, message count: %d", len(msgs))
+	}
+
+	// 等待会话完成 TurnCompleted 并提交历史
+	ok = waitForCondition(2*time.Second, func() bool {
+		return sess.runtime.history.Len() == 2
+	})
+	if !ok {
+		t.Fatalf("expected 2 history messages (user + assistant), got %d", sess.runtime.history.Len())
 	}
 
 	sess.Close()
 	<-sess.Done()
-
-	// 验证历史记录已提交
-	if sess.runtime.history.Len() != 2 {
-		t.Fatalf("expected 2 history messages (user + assistant), got %d", sess.runtime.history.Len())
-	}
 }
 
 func TestSession_CloseSession_Tool_ClosesSession(t *testing.T) {

@@ -352,3 +352,66 @@ func TestEncoderStage_ContinuousPcm(t *testing.T) {
 		t.Fatalf("expected SentenceStarts ['首句'], got %v", frames[0].SentenceStarts)
 	}
 }
+
+func TestTurnEngine_PromptAppendedAtTail(t *testing.T) {
+	promptPCM, err := audio.GetPromptPCM()
+	if err != nil {
+		t.Fatalf("failed to get prompt pcm: %v", err)
+	}
+
+	// 1 帧 TTS (2880 bytes) + promptPCM 经 PCMFramer 分帧并 Flush 的总预期帧数
+	framer := audio.NewPCMFramer()
+	ttsChunk := make([]byte, audio.DownlinkBytesPerFrame)
+	f1 := framer.Feed(ttsChunk)
+	f2 := framer.Feed(promptPCM)
+	f3 := framer.Flush()
+	expectedTotalFrames := len(f1) + len(f2) + len(f3)
+
+	engine := NewEngine()
+	asr := &mockASRClient{text: "测试提示音追加"}
+	llm := &mockLLMClient{
+		chunks: []ai.LLMChunk{
+			{Text: "测试回复。"},
+		},
+	}
+	tts := &mockTTSClient{}
+	output := &mockTurnOutput{}
+
+	inCh := make(chan []byte)
+	close(inCh)
+
+	req := TurnRequest{
+		TurnId:    10,
+		Mode:      "auto",
+		ASRClient: asr,
+		LLMClient: llm,
+		TTSClient: tts,
+	}
+
+	res := engine.HandleTurn(context.Background(), req, inCh, output)
+
+	if res.Status != TurnCompleted {
+		t.Fatalf("expected TurnCompleted, got %v, err: %v", res.Status, res.Err)
+	}
+
+	if len(output.audioFrames) != expectedTotalFrames {
+		t.Fatalf("expected %d total audio frames (tts + prompt), got %d", expectedTotalFrames, len(output.audioFrames))
+	}
+
+	// 首帧应带有首句字幕标记
+	if len(output.audioFrames[0].SentenceStarts) == 0 || output.audioFrames[0].SentenceStarts[0] != "测试回复。" {
+		t.Fatalf("expected first frame to have sentence start, got %v", output.audioFrames[0].SentenceStarts)
+	}
+
+	// 提示音帧不应带字幕标记
+	lastFrame := output.audioFrames[len(output.audioFrames)-1]
+	if len(lastFrame.SentenceStarts) != 0 {
+		t.Fatalf("expected last frame (prompt) to have no sentence start, got %v", lastFrame.SentenceStarts)
+	}
+
+	// 验证最终收口正常交付
+	if !output.ended || output.endReason != TurnEndCompleted {
+		t.Fatalf("expected output ended with TurnEndCompleted, ended=%v, reason=%v", output.ended, output.endReason)
+	}
+}
+

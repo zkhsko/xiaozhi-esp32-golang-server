@@ -10,6 +10,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/audio"
 )
 
 // responseStageResult 包含 response 阶段汇总的助手回复文本。
@@ -175,6 +176,21 @@ func runResponseStage(
 			sentCancel()
 			if err != nil {
 				return fmt.Errorf("synthesize sentence: %w", err)
+			}
+		}
+
+		// 若合成了有效回复文本，在语音输出流末尾追加提示音
+		if assistantTextBuilder.Len() > 0 {
+			promptPCM, err := audio.GetPromptPCM()
+			if err != nil {
+				return fmt.Errorf("get prompt pcm: %w", err)
+			}
+			if len(promptPCM) > 0 {
+				select {
+				case pcmTTSCh <- ai.PCMChunk{Data: promptPCM}:
+				case <-gCtx.Done():
+					return gCtx.Err()
+				}
 			}
 		}
 
