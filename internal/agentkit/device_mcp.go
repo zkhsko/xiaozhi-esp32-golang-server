@@ -294,21 +294,9 @@ func (c *DeviceMCPClient) validateAndConvertTool(item mcpToolDefinition) (ai.Too
 		}
 	}
 
-	// 校验 inputSchema 必须为合法 JSON 对象且 type == "object"
-	if len(item.InputSchema) == 0 {
-		return ai.Tool{}, false
-	}
-
-	var schemaMap map[string]any
-	if err := json.Unmarshal(item.InputSchema, &schemaMap); err != nil {
-		return ai.Tool{}, false
-	}
-	if schemaMap == nil {
-		return ai.Tool{}, false
-	}
-
-	schemaType, ok := schemaMap["type"].(string)
-	if !ok || schemaType != "object" {
+	// 规范化与校验 inputSchema，自适应固件扁平属性与标准 JSON Schema
+	parameters, ok := normalizeInputSchema(item.InputSchema)
+	if !ok {
 		return ai.Tool{}, false
 	}
 
@@ -316,13 +304,51 @@ func (c *DeviceMCPClient) validateAndConvertTool(item mcpToolDefinition) (ai.Too
 	tool := ai.Tool{
 		Name:        toolName,
 		Description: item.Description,
-		Parameters:  schemaMap,
+		Parameters:  parameters,
 		Run: func(runCtx context.Context, input any) (any, error) {
 			return c.CallTool(runCtx, toolName, input)
 		},
 	}
 
 	return tool, true
+}
+
+// normalizeInputSchema 将固件或客户端上报的 inputSchema 规范化为标准 JSON Schema 对象。
+func normalizeInputSchema(raw json.RawMessage) (map[string]any, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}, true
+	}
+
+	var schemaMap map[string]any
+	if err := json.Unmarshal(raw, &schemaMap); err != nil {
+		return nil, false
+	}
+	if schemaMap == nil || len(schemaMap) == 0 {
+		return map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		}, true
+	}
+
+	// 标准 JSON Schema 对象（顶层声明 type）
+	if t, ok := schemaMap["type"].(string); ok {
+		if t != "object" {
+			return nil, false
+		}
+		if _, hasProps := schemaMap["properties"]; !hasProps {
+			schemaMap["properties"] = map[string]any{}
+		}
+		return schemaMap, true
+	}
+
+	// 固件扁平属性字典，包裹为标准 JSON Schema 对象
+	return map[string]any{
+		"type":       "object",
+		"properties": schemaMap,
+	}, true
 }
 
 // Tools 返回当前已发现设备工具的不可变快照副本。

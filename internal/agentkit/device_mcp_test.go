@@ -716,3 +716,197 @@ func TestDeviceMCPClient_CloseAndCleanup(t *testing.T) {
 		t.Fatalf("expected ErrMCPClientClosed on Close(), got %v", callErr)
 	}
 }
+
+// 9. 测试 normalizeInputSchema 的各场景覆盖。
+func TestDeviceMCPClient_NormalizeInputSchema(t *testing.T) {
+	cases := []struct {
+		name       string
+		raw        string
+		expectOk   bool
+		expectType string
+		hasProp    string
+	}{
+		{
+			name:       "empty json raw",
+			raw:        "",
+			expectOk:   true,
+			expectType: "object",
+		},
+		{
+			name:       "null literal",
+			raw:        "null",
+			expectOk:   true,
+			expectType: "object",
+		},
+		{
+			name:       "empty object",
+			raw:        "{}",
+			expectOk:   true,
+			expectType: "object",
+		},
+		{
+			name:       "esp32 flat properties",
+			raw:        `{"volume":{"type":"integer","minimum":0,"maximum":100}}`,
+			expectOk:   true,
+			expectType: "object",
+			hasProp:    "volume",
+		},
+		{
+			name:       "esp32 flat property named type",
+			raw:        `{"type":{"type":"string"}}`,
+			expectOk:   true,
+			expectType: "object",
+			hasProp:    "type",
+		},
+		{
+			name:       "standard schema with properties",
+			raw:        `{"type":"object","properties":{"p1":{"type":"string"}}}`,
+			expectOk:   true,
+			expectType: "object",
+			hasProp:    "p1",
+		},
+		{
+			name:       "standard schema without properties",
+			raw:        `{"type":"object"}`,
+			expectOk:   true,
+			expectType: "object",
+		},
+		{
+			name:     "invalid schema with string type",
+			raw:      `{"type":"string"}`,
+			expectOk: false,
+		},
+		{
+			name:     "invalid json",
+			raw:      `{invalid}`,
+			expectOk: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := normalizeInputSchema(json.RawMessage(tc.raw))
+			if ok != tc.expectOk {
+				t.Fatalf("expected ok=%v, got %v", tc.expectOk, ok)
+			}
+			if tc.expectOk {
+				if got["type"] != tc.expectType {
+					t.Fatalf("expected type %q, got %v", tc.expectType, got["type"])
+				}
+				props, ok := got["properties"].(map[string]any)
+				if !ok {
+					t.Fatalf("expected properties to be map, got %T", got["properties"])
+				}
+				if tc.hasProp != "" {
+					if _, exists := props[tc.hasProp]; !exists {
+						t.Fatalf("expected property %q to exist in properties", tc.hasProp)
+					}
+				}
+			}
+		})
+	}
+}
+
+// 10. 模拟真实 ESP32 固件端上报的工具列表（包含无参工具、属性字典工具）。
+func TestDeviceMCPClient_ESP32FirmwareToolDiscovery(t *testing.T) {
+	sender := &mockSender{}
+	client := NewDeviceMCPClient(sender)
+	sender.client = client
+
+	sender.senderFn = func(c *DeviceMCPClient, req jsonRPCRequest) {
+		switch req.Method {
+		case "initialize":
+			resp := jsonRPCResponse{
+				JSONRPC: "2.0",
+				Id:      &req.Id,
+				Result:  json.RawMessage(`{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"esp32-s3-box","version":"1.2.0"}}`),
+			}
+			data, _ := json.Marshal(resp)
+			c.HandlePayload(data)
+		case "tools/list":
+			resp := jsonRPCResponse{
+				JSONRPC: "2.0",
+				Id:      &req.Id,
+				Result: json.RawMessage(`{
+					"tools": [
+						{
+							"name": "self.get_device_status",
+							"description": "Provides real-time device status",
+							"inputSchema": {}
+						},
+						{
+							"name": "self.audio_speaker.set_volume",
+							"description": "Set speaker volume",
+							"inputSchema": {
+								"volume": {
+									"type": "integer",
+									"minimum": 0,
+									"maximum": 100
+								}
+							}
+						},
+						{
+							"name": "self.screen.set_theme",
+							"description": "Set screen theme",
+							"inputSchema": {
+								"theme": {
+									"type": "string"
+								}
+							}
+						}
+					]
+				}`),
+			}
+			data, _ := json.Marshal(resp)
+			c.HandlePayload(data)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := client.Discover(ctx); err != nil {
+		t.Fatalf("expected Discover to succeed on ESP32 firmware tools, got %v", err)
+	}
+
+	tools := client.Tools()
+	if len(tools) != 3 {
+		t.Fatalf("expected 3 tools discovered, got %d", len(tools))
+	}
+
+	toolMap := make(map[string]ai.Tool)
+	for _, tool := range tools {
+		toolMap[tool.Name] = tool
+	}
+
+	// 验证无参工具
+	statusTool, ok := toolMap["self.get_device_status"]
+	if !ok {
+		t.Fatal("expected self.get_device_status to be discovered")
+	}
+	if statusTool.Parameters["type"] != "object" {
+		t.Fatalf("expected statusTool type=object, got %v", statusTool.Parameters["type"])
+	}
+
+	// 验证带范围的整数参数工具
+	volTool, ok := toolMap["self.audio_speaker.set_volume"]
+	if !ok {
+		t.Fatal("expected self.audio_speaker.set_volume to be discovered")
+	}
+	volProps := volTool.Parameters["properties"].(map[string]any)
+	volDef := volProps["volume"].(map[string]any)
+	if volDef["type"] != "integer" || volDef["minimum"].(float64) != 0 || volDef["maximum"].(float64) != 100 {
+		t.Fatalf("unexpected volume parameter definition: %+v", volDef)
+	}
+
+	// 验证带字符串参数工具
+	themeTool, ok := toolMap["self.screen.set_theme"]
+	if !ok {
+		t.Fatal("expected self.screen.set_theme to be discovered")
+	}
+	themeProps := themeTool.Parameters["properties"].(map[string]any)
+	themeDef := themeProps["theme"].(map[string]any)
+	if themeDef["type"] != "string" {
+		t.Fatalf("unexpected theme parameter definition: %+v", themeDef)
+	}
+}
