@@ -1,12 +1,14 @@
 package session
 
 import (
+	"sync"
+
 	"xiaozhi-esp32-golang-server/internal/ai"
 )
 
-// ConversationHistory 负责在 Session Actor 内维护单会话上下文历史消息。
-// 该结构体由 Session Actor 单协程独占读写，无需内部并发互斥锁。
+// ConversationHistory 负责维护单会话上下文历史消息。
 type ConversationHistory struct {
+	mu       sync.RWMutex
 	maxTurns int
 	messages []ai.Message
 }
@@ -28,6 +30,9 @@ func (h *ConversationHistory) AppendTurn(userText, assistantText string) {
 		return
 	}
 
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	h.messages = append(h.messages,
 		ai.Message{Role: ai.RoleUser, Content: userText},
 		ai.Message{Role: ai.RoleAssistant, Content: assistantText},
@@ -43,6 +48,9 @@ func (h *ConversationHistory) AppendTurn(userText, assistantText string) {
 
 // MessagesSnapshot 返回当前历史消息切片的不可变独立副本。
 func (h *ConversationHistory) MessagesSnapshot() []ai.Message {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
 	if len(h.messages) == 0 {
 		return nil
 	}
@@ -53,10 +61,17 @@ func (h *ConversationHistory) MessagesSnapshot() []ai.Message {
 
 // Clear 清空会话历史。
 func (h *ConversationHistory) Clear() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	h.messages = h.messages[:0]
 }
 
 // Len 返回当前历史消息总条数。
 func (h *ConversationHistory) Len() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
 	return len(h.messages)
 }
+

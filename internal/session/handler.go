@@ -12,7 +12,6 @@ import (
 	"xiaozhi-esp32-golang-server/internal/ai/factory"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/database"
-	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 // Handler 处理 WebSocket 协议升级、设备智能体动态加载、会话准入控制与连接生命周期。
@@ -158,7 +157,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	release, ok := h.registry.Acquire()
 	if !ok {
 		h.logger.Warn("websocket upgrade rejected: max concurrent sessions reached or shutting down",
-			"serial_number", logger.TruncateString(tok.SerialNumber),
+			"serial_number", tok.SerialNumber,
 			"active_sessions", h.registry.Limiter().ActiveCount(),
 			"max_sessions", h.registry.Limiter().MaxSessions(),
 		)
@@ -176,14 +175,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		release()
 		h.logger.Error("websocket upgrade failed",
 			"error", err,
-			"serial_number", logger.TruncateString(tok.SerialNumber),
+			"serial_number", tok.SerialNumber,
 		)
 		return
 	}
 	defer conn.Close(websocket.StatusInternalError, "session closed")
 
 	h.logger.Info("websocket session connected",
-		"serial_number", logger.TruncateString(tok.SerialNumber),
+		"serial_number", tok.SerialNumber,
 		"device_type", tok.DeviceType,
 		"agent_id", snapshot.Agent.Id,
 		"active_sessions", h.registry.Limiter().ActiveCount(),
@@ -213,7 +212,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = sess.Run()
 
 	h.logger.Info("websocket session closed",
-		"serial_number", logger.TruncateString(tok.SerialNumber),
+		"serial_number", tok.SerialNumber,
 	)
 }
 

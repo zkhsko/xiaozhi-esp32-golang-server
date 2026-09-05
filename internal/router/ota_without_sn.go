@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"xiaozhi-esp32-golang-server/internal/database"
-	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 // handleOTALegacy 处理不含 SerialNumber 的设备（Legacy 设备）OTA 检查/配置发现请求。
@@ -25,22 +24,22 @@ func (h *OTAHandler) handleOTALegacy(w http.ResponseWriter, r *http.Request, hea
 		if err != nil {
 			if !errors.Is(err, database.ErrActivationNotFound) {
 				h.logger.Error("failed to query device activation by device_id and client_id",
-					"device_id", logger.TruncateString(headers.DeviceId),
-					"client_id", logger.TruncateString(headers.ClientId),
+					"device_id", headers.DeviceId,
+					"client_id", headers.ClientId,
 					"error", err,
 				)
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
 			}
 			h.logger.Info("legacy device activation not found, issuing activation code",
-				"device_id", logger.TruncateString(headers.DeviceId),
-				"client_id", logger.TruncateString(headers.ClientId),
+				"device_id", headers.DeviceId,
+				"client_id", headers.ClientId,
 			)
 		} else {
 			if !act.IsActive() {
 				h.logger.Warn("legacy device activation blocked",
-					"device_id", logger.TruncateString(headers.DeviceId),
-					"client_id", logger.TruncateString(headers.ClientId),
+					"device_id", headers.DeviceId,
+					"client_id", headers.ClientId,
 					"status", act.ActivationStatus,
 				)
 				http.Error(w, "device activation is frozen or revoked", http.StatusForbidden)
@@ -48,9 +47,9 @@ func (h *OTAHandler) handleOTALegacy(w http.ResponseWriter, r *http.Request, hea
 			}
 
 			h.logger.Info("legacy device activation found",
-				"serial_number", logger.TruncateString(act.SerialNumber),
-				"device_id", logger.TruncateString(act.DeviceId),
-				"client_id", logger.TruncateString(act.ClientId),
+				"serial_number", act.SerialNumber,
+				"device_id", act.DeviceId,
+				"client_id", act.ClientId,
 				"activation_status", act.ActivationStatus,
 				"activated_at", act.ActivatedAt,
 			)
@@ -67,7 +66,7 @@ func (h *OTAHandler) handleOTALegacy(w http.ResponseWriter, r *http.Request, hea
 						token = tok.AccessToken
 						if markErr := h.db.UpdateDeviceAccessTokenHasExposed(r.Context(), act.SerialNumber, true); markErr != nil {
 							h.logger.Error("failed to mark device access token as exposed for legacy device",
-								"serial_number", logger.TruncateString(act.SerialNumber),
+								"serial_number", act.SerialNumber,
 								"error", markErr,
 							)
 						}
@@ -93,8 +92,8 @@ func (h *OTAHandler) handleOTALegacy(w http.ResponseWriter, r *http.Request, hea
 	pending, err := h.createPendingActivation("", headers.DeviceId, headers.ClientId)
 	if err != nil {
 		h.logger.Error("failed to create pending activation for legacy device",
-			"device_id", logger.TruncateString(headers.DeviceId),
-			"client_id", logger.TruncateString(headers.ClientId),
+			"device_id", headers.DeviceId,
+			"client_id", headers.ClientId,
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)

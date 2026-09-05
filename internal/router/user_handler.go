@@ -18,7 +18,6 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/database"
-	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 const (
@@ -102,7 +101,7 @@ func (h *UserHandler) handleBindDevice(w http.ResponseWriter, r *http.Request) {
 	// 1. 从 OTA 生成的 code 缓存中查询待激活设备信息
 	pending, found := h.otaHandler.FindPendingActivationByCode(code)
 	if !found {
-		h.logger.Warn("invalid or expired activation code", "code", logger.TruncateString(code))
+		h.logger.Warn("invalid or expired activation code", "code", code)
 		http.Error(w, "invalid or expired activation code", http.StatusBadRequest)
 		return
 	}
@@ -134,7 +133,7 @@ func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, c
 	tokenStr, err := GenerateDeviceAccessToken()
 	if err != nil {
 		h.logger.Error("failed to generate device access token",
-			"serial_number", logger.TruncateString(sn),
+			"serial_number", sn,
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -145,7 +144,7 @@ func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, c
 	act, err := h.db.BindDeviceWithSN(r.Context(), sn, pending.DeviceId, pending.ClientId, tokenStr, userId)
 	if err != nil {
 		h.logger.Error("failed to bind device with sn in transaction",
-			"serial_number", logger.TruncateString(sn),
+			"serial_number", sn,
 			"user_id", userId,
 			"error", err,
 		)
@@ -157,9 +156,9 @@ func (h *UserHandler) bindDeviceWithSN(w http.ResponseWriter, r *http.Request, c
 	h.otaHandler.DeletePendingActivation(code, pending.Challenge)
 
 	h.logger.Info("device bound successfully with existing sn in code",
-		"serial_number", logger.TruncateString(act.SerialNumber),
-		"device_id", logger.TruncateString(act.DeviceId),
-		"client_id", logger.TruncateString(act.ClientId),
+		"serial_number", act.SerialNumber,
+		"device_id", act.DeviceId,
+		"client_id", act.ClientId,
 		"user_id", userId,
 	)
 
@@ -193,7 +192,7 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 	// 1. 必填校验：code 对应信息无 sn 时，sn 与 hmac 必填
 	if sn == "" || hmacInput == "" {
 		h.logger.Warn("sn and hmac are required when code has no serial number",
-			"code", logger.TruncateString(code),
+			"code", code,
 			"sn_empty", sn == "",
 			"hmac_empty", hmacInput == "",
 		)
@@ -206,13 +205,13 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		if errors.Is(err, database.ErrCredentialNotFound) {
 			h.logger.Warn("device hmac credential not found for sn",
-				"serial_number", logger.TruncateString(sn),
+				"serial_number", sn,
 			)
 			http.Error(w, "device hmac credential not found", http.StatusForbidden)
 			return
 		}
 		h.logger.Error("failed to query device hmac credential",
-			"serial_number", logger.TruncateString(sn),
+			"serial_number", sn,
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -221,7 +220,7 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 
 	if !cred.IsAvailable() {
 		h.logger.Warn("device credential is blocked or revoked",
-			"serial_number", logger.TruncateString(sn),
+			"serial_number", sn,
 			"status", cred.CredentialStatus,
 		)
 		http.Error(w, "device credential is blocked or revoked", http.StatusForbidden)
@@ -231,7 +230,7 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 	// 3. 比对 hmac
 	if !verifyHMAC(cred.HMACKeyCiphertext, hmacInput, pending.Challenge, pending.Code) {
 		h.logger.Warn("hmac verification failed during device binding",
-			"serial_number", logger.TruncateString(sn),
+			"serial_number", sn,
 		)
 		http.Error(w, "hmac verification failed", http.StatusForbidden)
 		return
@@ -241,7 +240,7 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 	tokenStr, err := GenerateDeviceAccessToken()
 	if err != nil {
 		h.logger.Error("failed to generate device access token",
-			"serial_number", logger.TruncateString(sn),
+			"serial_number", sn,
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -252,7 +251,7 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 	act, err := h.db.BindDeviceWithSN(r.Context(), sn, pending.DeviceId, pending.ClientId, tokenStr, userId)
 	if err != nil {
 		h.logger.Error("failed to bind device without initial sn in transaction",
-			"serial_number", logger.TruncateString(sn),
+			"serial_number", sn,
 			"user_id", userId,
 			"error", err,
 		)
@@ -264,9 +263,9 @@ func (h *UserHandler) bindDeviceWithoutSN(w http.ResponseWriter, r *http.Request
 	h.otaHandler.DeletePendingActivation(code, pending.Challenge)
 
 	h.logger.Info("device bound successfully without initial sn in code",
-		"serial_number", logger.TruncateString(act.SerialNumber),
-		"device_id", logger.TruncateString(act.DeviceId),
-		"client_id", logger.TruncateString(act.ClientId),
+		"serial_number", act.SerialNumber,
+		"device_id", act.DeviceId,
+		"client_id", act.ClientId,
 		"user_id", userId,
 	)
 

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"xiaozhi-esp32-golang-server/internal/database"
-	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 // ActivateRequest 映射设备向 POST /xiaozhi/ota/activate 提交的激活请求体。
@@ -82,13 +81,13 @@ func (h *OTAHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, database.ErrCredentialNotFound) {
 			h.logger.Warn("device hmac credential not found",
-				"serial_number", logger.TruncateString(serialNumber),
+				"serial_number", serialNumber,
 			)
 			http.Error(w, "device credential not found", http.StatusForbidden)
 			return
 		}
 		h.logger.Error("failed to query device hmac credential",
-			"serial_number", logger.TruncateString(serialNumber),
+			"serial_number", serialNumber,
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -97,7 +96,7 @@ func (h *OTAHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 
 	if !cred.IsAvailable() {
 		h.logger.Warn("device hmac credential is not available",
-			"serial_number", logger.TruncateString(serialNumber),
+			"serial_number", serialNumber,
 			"status", cred.CredentialStatus,
 		)
 		http.Error(w, "device credential is blocked or revoked", http.StatusForbidden)
@@ -116,7 +115,7 @@ func (h *OTAHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 	receivedHMAC, err := hex.DecodeString(hmacHex)
 	if err != nil || !hmac.Equal(expectedHMAC, receivedHMAC) {
 		h.logger.Warn("hmac challenge verification failed",
-			"serial_number", logger.TruncateString(serialNumber),
+			"serial_number", serialNumber,
 		)
 		http.Error(w, "hmac verification failed", http.StatusForbidden)
 		return
@@ -130,8 +129,8 @@ func (h *OTAHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 	act, err := h.db.ActivateDeviceBySerialNumber(r.Context(), authSN, deviceId, clientId)
 	if err != nil {
 		h.logger.Error("failed to activate device",
-			"serial_number", logger.TruncateString(authSN),
-			"device_id", logger.TruncateString(deviceId),
+			"serial_number", authSN,
+			"device_id", deviceId,
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -148,9 +147,9 @@ func (h *OTAHandler) handleActivate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger.Info("device activated successfully via hmac challenge",
-		"serial_number", logger.TruncateString(act.SerialNumber),
-		"device_id", logger.TruncateString(act.DeviceId),
-		"client_id", logger.TruncateString(act.ClientId),
+		"serial_number", act.SerialNumber,
+		"device_id", act.DeviceId,
+		"client_id", act.ClientId,
 		"activation_status", act.ActivationStatus,
 	)
 

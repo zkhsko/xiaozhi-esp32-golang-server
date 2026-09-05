@@ -4,8 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"sync"
-
-	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 // Registry 负责进程内活跃 WebSocket 会话的所有权注册、单设备连接互斥、生命周期跟踪与优雅停机协调。
@@ -104,7 +102,7 @@ func (r *Registry) Register(s *Session, release ...func()) (func(), bool) {
 		if old, exists := r.byDevice[deviceKey]; exists && old != s {
 			oldSession = old
 			r.logger.Info("evicting duplicate session for device",
-				"device_key", logger.TruncateString(deviceKey),
+				"device_key", deviceKey,
 				"old_session_id", old.SessionId(),
 				"new_session_id", s.SessionId(),
 			)

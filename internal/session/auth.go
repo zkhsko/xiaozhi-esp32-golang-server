@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"xiaozhi-esp32-golang-server/internal/database"
-	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 // 常量定义：WebSocket 路径、请求头长度限制、协议版本与认证前缀。
@@ -217,7 +216,7 @@ func LogAuthRejection(l *slog.Logger, r *http.Request, err error) {
 	}
 	var userAgent, path, remoteAddr string
 	if r != nil {
-		userAgent = logger.TruncateString(r.UserAgent())
+		userAgent = r.UserAgent()
 		path = r.URL.Path
 		remoteAddr = r.RemoteAddr
 	}
@@ -244,7 +243,7 @@ func LogAuthSuccess(l *slog.Logger, r *http.Request, serialNumber string) {
 	l.Info("websocket upgrade authentication successful",
 		"path", path,
 		"remote_addr", remoteAddr,
-		"serial_number", logger.TruncateString(serialNumber),
+		"serial_number", serialNumber,
 	)
 }
 

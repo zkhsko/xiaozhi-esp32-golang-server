@@ -17,7 +17,6 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/database"
-	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 const (
@@ -173,11 +172,11 @@ func (h *OTAHandler) handleOTA(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("ota check request received",
 		"method", r.Method,
 		"path", r.URL.Path,
-		"device_id", logger.TruncateString(headers.DeviceId),
-		"client_id", logger.TruncateString(headers.ClientId),
-		"serial_number", logger.TruncateString(headers.SerialNumber),
-		"activation_version", logger.TruncateString(headers.ActivationVersion),
-		"user_agent", logger.TruncateString(headers.UserAgent),
+		"device_id", headers.DeviceId,
+		"client_id", headers.ClientId,
+		"serial_number", headers.SerialNumber,
+		"activation_version", headers.ActivationVersion,
+		"user_agent", headers.UserAgent,
 	)
 
 	// 根据请求头是否包含 SerialNumber 分流到对应处理框架

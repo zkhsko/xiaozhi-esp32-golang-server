@@ -269,7 +269,7 @@ func (s *Session) handleEvent(ev sessionEvent) bool {
 	switch ev.kind {
 	case eventKindTimeout:
 		s.logger.Warn("session actor timeout",
-			"serial_number", logger.TruncateString(s.serialNumber),
+			"serial_number", s.serialNumber,
 			"state", s.runtime.state.String(),
 			"timeout_text", ev.timeoutText,
 		)
@@ -278,7 +278,7 @@ func (s *Session) handleEvent(ev sessionEvent) bool {
 
 	case eventKindOutboundFailed:
 		s.logger.Warn("session outbound actor failed",
-			"serial_number", logger.TruncateString(s.serialNumber),
+			"serial_number", s.serialNumber,
 			"state", s.runtime.state.String(),
 		)
 		s.closeWithReason(websocket.StatusInternalError, "outbound failed")
@@ -331,7 +331,7 @@ func (s *Session) handleTextMessage(data []byte) bool {
 	msg, err := ParseClientMessageWithLimit(data, int(s.cfg.MaxWSTextMessageBytes))
 	if err != nil {
 		s.logger.Warn("malformed client text message",
-			"serial_number", logger.TruncateString(s.serialNumber),
+			"serial_number", s.serialNumber,
 			"error", err,
 		)
 		s.closeWithReason(websocket.StatusPolicyViolation, "malformed client message")
@@ -341,7 +341,7 @@ func (s *Session) handleTextMessage(data []byte) bool {
 	switch msg.Kind {
 	case KindHello:
 		s.logger.Warn("duplicate hello received",
-			"serial_number", logger.TruncateString(s.serialNumber),
+			"serial_number", s.serialNumber,
 			"state", s.runtime.state.String(),
 		)
 		s.closeWithReason(websocket.StatusPolicyViolation, "duplicate hello")
@@ -367,14 +367,14 @@ func (s *Session) handleTextMessage(data []byte) bool {
 
 	case KindListenDetect:
 		s.logger.Debug("client wake detect message",
-			"serial_number", logger.TruncateString(s.serialNumber),
+			"serial_number", s.serialNumber,
 			"text", msg.DetectText,
 		)
 		return false
 
 	default:
 		s.logger.Warn("unknown client message kind ignored",
-			"serial_number", logger.TruncateString(s.serialNumber),
+			"serial_number", s.serialNumber,
 			"kind", string(msg.Kind),
 		)
 		return false
@@ -386,7 +386,7 @@ func (s *Session) handleHello(data []byte) bool {
 	var helloMsg ClientHelloMessage
 	if err := json.Unmarshal(data, &helloMsg); err != nil {
 		s.logger.Warn("client hello parse failed",
-			"serial_number", logger.TruncateString(s.serialNumber),
+			"serial_number", s.serialNumber,
 			"error", err,
 		)
 		s.closeWithReason(websocket.StatusPolicyViolation, err.Error())
@@ -395,7 +395,7 @@ func (s *Session) handleHello(data []byte) bool {
 
 	if err := ValidateClientHello(&helloMsg); err != nil {
 		s.logger.Warn("client hello validation failed",
-			"serial_number", logger.TruncateString(s.serialNumber),
+			"serial_number", s.serialNumber,
 			"error", err,
 		)
 		s.closeWithReason(websocket.StatusPolicyViolation, err.Error())
@@ -424,7 +424,7 @@ func (s *Session) handleHello(data []byte) bool {
 		cancel()
 		if err != nil {
 			s.logger.Error("failed to write server hello",
-				"serial_number", logger.TruncateString(s.serialNumber),
+				"serial_number", s.serialNumber,
 				"error", err,
 			)
 			s.closeWithReason(websocket.StatusInternalError, "write hello failed")
@@ -440,7 +440,7 @@ func (s *Session) handleHello(data []byte) bool {
 	}
 
 	s.logger.Info("session ready after handshake",
-		"serial_number", logger.TruncateString(s.serialNumber),
+		"serial_number", s.serialNumber,
 		"session_id", sessionId,
 	)
 
@@ -458,7 +458,7 @@ func (s *Session) handleListenStart(mode string) {
 	}
 	if mode == "realtime" {
 		s.logger.Warn("realtime listen mode rejected",
-			"serial_number", logger.TruncateString(s.serialNumber),
+			"serial_number", s.serialNumber,
 		)
 		return
 	}
@@ -538,7 +538,7 @@ func (s *Session) handleAudioFrame(data []byte) {
 		default:
 			// 上行有界队列满，背压保护，视为链路故障并关闭 Session
 			s.logger.Error("uplink audio queue full, closing session for backpressure protection",
-				"serial_number", logger.TruncateString(s.serialNumber),
+				"serial_number", s.serialNumber,
 				"turn_id", s.runtime.currentTurnId,
 			)
 			s.closeWithReason(websocket.StatusPolicyViolation, "uplink audio buffer overflow")
@@ -553,7 +553,7 @@ func (s *Session) handleAudioFrame(data []byte) {
 			s.runtime.pendingTurn.audioBuffers = append(s.runtime.pendingTurn.audioBuffers, data)
 		} else {
 			s.logger.Error("pending turn audio buffer overflow",
-				"serial_number", logger.TruncateString(s.serialNumber),
+				"serial_number", s.serialNumber,
 			)
 			s.closeWithReason(websocket.StatusPolicyViolation, "pending audio buffer overflow")
 		}
@@ -695,7 +695,7 @@ func (s *Session) handleTurnFinished(res voice.TurnResult) bool {
 
 	case voice.TurnFailed:
 		s.logger.Error("turn failed, closing session",
-			"serial_number", logger.TruncateString(s.serialNumber),
+			"serial_number", s.serialNumber,
 			"turn_id", res.TurnId,
 			"error", res.Err,
 		)

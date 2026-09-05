@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"xiaozhi-esp32-golang-server/internal/database"
-	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 // handleOTASerialNumber 处理包含 SerialNumber 的设备 OTA 检查/配置发现请求。
@@ -26,20 +25,20 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 		if err != nil {
 			if !errors.Is(err, database.ErrActivationNotFound) {
 				h.logger.Error("failed to query device activation by serial number",
-					"serial_number", logger.TruncateString(headers.SerialNumber),
+					"serial_number", headers.SerialNumber,
 					"error", err,
 				)
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
 			}
 			h.logger.Info("device activation not found, issuing challenge only",
-				"serial_number", logger.TruncateString(headers.SerialNumber),
-				"device_id", logger.TruncateString(headers.DeviceId),
+				"serial_number", headers.SerialNumber,
+				"device_id", headers.DeviceId,
 			)
 		} else {
 			if !act.IsActive() {
 				h.logger.Warn("device activation blocked",
-					"serial_number", logger.TruncateString(headers.SerialNumber),
+					"serial_number", headers.SerialNumber,
 					"status", act.ActivationStatus,
 				)
 				http.Error(w, "device activation is frozen or revoked", http.StatusForbidden)
@@ -51,7 +50,7 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 			if err != nil {
 				if !errors.Is(err, database.ErrBindingNotFound) {
 					h.logger.Error("failed to query device user binding by serial number",
-						"serial_number", logger.TruncateString(headers.SerialNumber),
+						"serial_number", headers.SerialNumber,
 						"error", err,
 					)
 					http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -71,7 +70,7 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 				pending, err := h.createPendingActivation(headers.SerialNumber, deviceId, clientId)
 				if err != nil {
 					h.logger.Error("failed to create pending binding code",
-						"serial_number", logger.TruncateString(headers.SerialNumber),
+						"serial_number", headers.SerialNumber,
 						"error", err,
 					)
 					http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -79,9 +78,9 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 				}
 
 				h.logger.Info("device activated but unbound to user, issuing binding code",
-					"serial_number", logger.TruncateString(headers.SerialNumber),
-					"device_id", logger.TruncateString(deviceId),
-					"code", logger.TruncateString(pending.Code),
+					"serial_number", headers.SerialNumber,
+					"device_id", deviceId,
+					"code", pending.Code,
 				)
 
 				resp := Response{
@@ -98,8 +97,8 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 
 			// 设备已激活且已绑定用户：正常返回 WebSocket 配置
 			h.logger.Info("device activation and user binding verified",
-				"serial_number", logger.TruncateString(act.SerialNumber),
-				"device_id", logger.TruncateString(act.DeviceId),
+				"serial_number", act.SerialNumber,
+				"device_id", act.DeviceId,
 				"user_id", userRef.UserId,
 				"activation_status", act.ActivationStatus,
 				"activated_at", act.ActivatedAt,
@@ -117,7 +116,7 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 					token = tok.AccessToken
 					if markErr := h.db.UpdateDeviceAccessTokenHasExposed(r.Context(), headers.SerialNumber, true); markErr != nil {
 						h.logger.Error("failed to mark device access token as exposed",
-							"serial_number", logger.TruncateString(headers.SerialNumber),
+							"serial_number", headers.SerialNumber,
 							"error", markErr,
 						)
 					}
@@ -142,7 +141,7 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 	pending, err := h.createPendingActivation(headers.SerialNumber, headers.DeviceId, headers.ClientId)
 	if err != nil {
 		h.logger.Error("failed to create pending challenge",
-			"serial_number", logger.TruncateString(headers.SerialNumber),
+			"serial_number", headers.SerialNumber,
 			"error", err,
 		)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
