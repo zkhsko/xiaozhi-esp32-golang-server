@@ -2,6 +2,7 @@ package dashscope
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -123,7 +124,43 @@ func (c *LLMClient) Generate(
 		case ai.RoleUser:
 			genkitMessages = append(genkitMessages, genkitai.NewUserTextMessage(msg.Content))
 		case ai.RoleAssistant:
-			genkitMessages = append(genkitMessages, genkitai.NewModelTextMessage(msg.Content))
+			if len(msg.ToolCalls) > 0 {
+				parts := make([]*genkitai.Part, 0, len(msg.ToolCalls)+1)
+				if msg.Content != "" {
+					parts = append(parts, genkitai.NewTextPart(msg.Content))
+				}
+				for _, tc := range msg.ToolCalls {
+					argVal := tc.Arguments
+					if str, ok := argVal.(string); ok && strings.TrimSpace(str) != "" {
+						var parsed map[string]any
+						if err := json.Unmarshal([]byte(str), &parsed); err == nil {
+							argVal = parsed
+						}
+					}
+					parts = append(parts, genkitai.NewToolRequestPart(&genkitai.ToolRequest{
+						Name:  tc.Name,
+						Ref:   tc.Id,
+						Input: argVal,
+					}))
+				}
+				genkitMessages = append(genkitMessages, genkitai.NewModelMessage(parts...))
+			} else {
+				genkitMessages = append(genkitMessages, genkitai.NewModelTextMessage(msg.Content))
+			}
+		case ai.RoleTool:
+			var outputVal any = msg.Content
+			if msg.Content != "" {
+				var parsed any
+				if err := json.Unmarshal([]byte(msg.Content), &parsed); err == nil {
+					outputVal = parsed
+				}
+			}
+			part := genkitai.NewToolResponsePart(&genkitai.ToolResponse{
+				Name:   msg.ToolName,
+				Ref:    msg.ToolCallId,
+				Output: outputVal,
+			})
+			genkitMessages = append(genkitMessages, genkitai.NewMessage(genkitai.RoleTool, nil, part))
 		default:
 			genkitMessages = append(genkitMessages, genkitai.NewUserTextMessage(msg.Content))
 		}
@@ -288,5 +325,78 @@ func (c *LLMClient) Generate(
 		return ai.LLMResult{}, errors.New("empty response from dashscope")
 	}
 
-	return ai.LLMResult{FinalText: resp.Text()}, nil
+	var newMessages []ai.Message
+	hist := resp.History()
+	if len(hist) > len(genkitMessages) {
+		for _, m := range hist[len(genkitMessages):] {
+			newMessages = append(newMessages, convertGenkitMessageToAIMessage(m))
+		}
+	}
+	if len(newMessages) == 0 && resp.Text() != "" {
+		newMessages = []ai.Message{
+			{Role: ai.RoleAssistant, Content: resp.Text()},
+		}
+	}
+
+	return ai.LLMResult{
+		FinalText: resp.Text(),
+		Messages:  newMessages,
+	}, nil
+}
+
+// convertGenkitMessageToAIMessage 将 Genkit 内部消息实体转换为中立的 ai.Message。
+func convertGenkitMessageToAIMessage(m *genkitai.Message) ai.Message {
+	if m == nil {
+		return ai.Message{}
+	}
+	switch m.Role {
+	case genkitai.RoleSystem:
+		return ai.Message{Role: ai.RoleSystem, Content: m.Text()}
+	case genkitai.RoleUser:
+		return ai.Message{Role: ai.RoleUser, Content: m.Text()}
+	case genkitai.RoleModel:
+		var textParts []string
+		var toolCalls []ai.ToolCall
+		for _, p := range m.Content {
+			if p == nil {
+				continue
+			}
+			if p.IsText() && p.Text != "" {
+				textParts = append(textParts, p.Text)
+			} else if p.IsToolRequest() && p.ToolRequest != nil {
+				toolCalls = append(toolCalls, ai.ToolCall{
+					Id:        p.ToolRequest.Ref,
+					Name:      p.ToolRequest.Name,
+					Arguments: p.ToolRequest.Input,
+				})
+			}
+		}
+		return ai.Message{
+			Role:      ai.RoleAssistant,
+			Content:   strings.Join(textParts, ""),
+			ToolCalls: toolCalls,
+		}
+	case genkitai.RoleTool:
+		for _, p := range m.Content {
+			if p != nil && p.IsToolResponse() && p.ToolResponse != nil {
+				outputStr := ""
+				if s, ok := p.ToolResponse.Output.(string); ok {
+					outputStr = s
+				} else if p.ToolResponse.Output != nil {
+					if b, err := json.Marshal(p.ToolResponse.Output); err == nil {
+						outputStr = string(b)
+					}
+				}
+				return ai.Message{
+					Role:       ai.RoleTool,
+					Content:    outputStr,
+					ToolCallId: p.ToolResponse.Ref,
+					ToolName:   p.ToolResponse.Name,
+				}
+			}
+		}
+		return ai.Message{Role: ai.RoleTool, Content: m.Text()}
+	default:
+		return ai.Message{Role: ai.RoleUser, Content: m.Text()}
+	}
 }

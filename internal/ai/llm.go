@@ -20,12 +20,23 @@ const (
 	RoleSystem    MessageRole = "system"
 	RoleUser      MessageRole = "user"
 	RoleAssistant MessageRole = "assistant"
+	RoleTool      MessageRole = "tool"
 )
 
-// Message 表示一条对话历史消息。
+// ToolCall 表示大语言模型发起的单次工具调用请求。
+type ToolCall struct {
+	Id        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments any    `json:"arguments"`
+}
+
+// Message 表示一条对话历史消息（支持普通文本、助手工具调用与工具执行结果）。
 type Message struct {
-	Role    MessageRole `json:"role"`
-	Content string      `json:"content"`
+	Role       MessageRole `json:"role"`
+	Content    string      `json:"content,omitempty"`
+	ToolCalls  []ToolCall  `json:"tool_calls,omitempty"`
+	ToolCallId string      `json:"tool_call_id,omitempty"`
+	ToolName   string      `json:"tool_name,omitempty"`
 }
 
 // ToolFunc 定义工具执行函数签名。
@@ -55,6 +66,7 @@ type LLMRequest struct {
 // LLMResult 表示大语言模型生成的最终汇总结果。
 type LLMResult struct {
 	FinalText string
+	Messages  []Message
 }
 
 // LLMClient 定义流式大语言模型客户端接口。

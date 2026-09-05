@@ -60,6 +60,7 @@ type TurnResult struct {
 	Status        TurnStatus
 	UserText      string
 	AssistantText string
+	TurnMessages  []ai.Message
 	Effects       []TurnEffect
 	Err           error
 }

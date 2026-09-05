@@ -1113,3 +1113,186 @@ func TestLLMClient_Generate_DynamicDeviceMCPTool_EndToEnd(t *testing.T) {
 		t.Fatalf("expected role=tool message in second turn request, got: %v", req2Msgs)
 	}
 }
+
+func TestLLMClient_Generate_MultiTurn_PreserveToolCallHistory(t *testing.T) {
+	var requestCount atomic.Int32
+	var reqBodiesMu sync.Mutex
+	var reqBodies []map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err == nil {
+			var parsed map[string]any
+			if err := json.Unmarshal(bodyBytes, &parsed); err == nil {
+				reqBodiesMu.Lock()
+				reqBodies = append(reqBodies, parsed)
+				reqBodiesMu.Unlock()
+			}
+		}
+
+		reqNum := requestCount.Add(1)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+
+		switch reqNum {
+		case 1:
+			// Turn 1 第一步：返回 set_volume 工具调用
+			_, _ = fmt.Fprint(w, `data: {"id":"chatcmpl-t1-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_vol_1","type":"function","function":{"name":"self.audio_speaker.set_volume","arguments":"{\"volume\":40}"}}]},"index":0}]}`+"\n\n")
+			_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+			flusher.Flush()
+		case 2:
+			// Turn 1 第二步：工具执行后返回最终回复
+			_, _ = fmt.Fprint(w, `data: {"id":"chatcmpl-t1-2","choices":[{"delta":{"content":"已将音量设为40%。"},"index":0}]}`+"\n\n")
+			_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+			flusher.Flush()
+		case 3:
+			// Turn 2 第一步：基于历史继续返回 set_volume 工具调用
+			_, _ = fmt.Fprint(w, `data: {"id":"chatcmpl-t2-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_vol_2","type":"function","function":{"name":"self.audio_speaker.set_volume","arguments":"{\"volume\":50}"}}]},"index":0}]}`+"\n\n")
+			_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+			flusher.Flush()
+		case 4:
+			// Turn 2 第二步：返回最终回复
+			_, _ = fmt.Fprint(w, `data: {"id":"chatcmpl-t2-2","choices":[{"delta":{"content":"已将音量设为50%。"},"index":0}]}`+"\n\n")
+			_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	cfg := &database.LLMConfig{
+		APIKey:              "test-key",
+		Endpoint:            server.URL,
+		Model:               "qwen-plus",
+		FirstTokenTimeoutMS: 5000,
+		OverallTimeoutMS:    15000,
+	}
+	client, err := NewLLMClient(cfg)
+	if err != nil {
+		t.Fatalf("NewLLMClient failed: %v", err)
+	}
+
+	var volHistory []int
+	var volMu sync.Mutex
+	volumeTool := ai.Tool{
+		Name:        "self.audio_speaker.set_volume",
+		Description: "设置音量",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"volume": map[string]any{"type": "integer"},
+			},
+		},
+		Run: func(ctx context.Context, input any) (any, error) {
+			volMu.Lock()
+			defer volMu.Unlock()
+			if m, ok := input.(map[string]any); ok {
+				if v, ok := m["volume"].(float64); ok {
+					volHistory = append(volHistory, int(v))
+				}
+			}
+			return map[string]any{"status": "ok"}, nil
+		},
+	}
+
+	// ====== Turn 1 ======
+	t1UserText := "调大音量"
+	t1Messages := []ai.Message{
+		{Role: ai.RoleSystem, Content: "你是一个设备管家。"},
+		{Role: ai.RoleUser, Content: t1UserText},
+	}
+	res1, err := client.Generate(
+		context.Background(),
+		ai.LLMRequest{
+			Messages: t1Messages,
+			Tools:    []ai.Tool{volumeTool},
+			MaxTurns: 8,
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Turn 1 Generate failed: %v", err)
+	}
+	if res1.FinalText != "已将音量设为40%。" {
+		t.Fatalf("expected '已将音量设为40%%。', got %q", res1.FinalText)
+	}
+	if len(res1.Messages) != 3 {
+		t.Fatalf("expected 3 messages generated in Turn 1 (AssistantToolCall, ToolResp, AssistantText), got %d", len(res1.Messages))
+	}
+
+	// ====== Turn 2 ======
+	t2UserText := "再大一点"
+	t2Messages := []ai.Message{
+		{Role: ai.RoleSystem, Content: "你是一个设备管家。"},
+		{Role: ai.RoleUser, Content: t1UserText},
+	}
+	t2Messages = append(t2Messages, res1.Messages...)
+	t2Messages = append(t2Messages, ai.Message{Role: ai.RoleUser, Content: t2UserText})
+
+	res2, err := client.Generate(
+		context.Background(),
+		ai.LLMRequest{
+			Messages: t2Messages,
+			Tools:    []ai.Tool{volumeTool},
+			MaxTurns: 8,
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Turn 2 Generate failed: %v", err)
+	}
+	if res2.FinalText != "已将音量设为50%。" {
+		t.Fatalf("expected '已将音量设为50%%。', got %q", res2.FinalText)
+	}
+
+	// 验证 HTTP 捕获的请求报文
+	reqBodiesMu.Lock()
+	defer reqBodiesMu.Unlock()
+
+	if len(reqBodies) != 4 {
+		t.Fatalf("expected 4 HTTP requests across 2 turns, got %d", len(reqBodies))
+	}
+
+	// Turn 2 的首个请求 (reqBodies[2]) 必须完整包含 Turn 1 的 Tool Call 轨迹
+	t2FirstReqMsgs, ok := reqBodies[2]["messages"].([]any)
+	if !ok || len(t2FirstReqMsgs) < 6 {
+		t.Fatalf("expected >= 6 messages in Turn 2 initial request, got %v", reqBodies[2]["messages"])
+	}
+
+	// 验证顺序与角色
+	// 0: System
+	// 1: User (Turn 1: 调大音量)
+	// 2: Assistant (ToolCalls: call_vol_1)
+	// 3: Tool (tool_call_id: call_vol_1)
+	// 4: Assistant (已将音量设为40%。)
+	// 5: User (Turn 2: 再大一点)
+	msg0 := t2FirstReqMsgs[0].(map[string]any)
+	if msg0["role"] != "system" {
+		t.Errorf("msg0 expected system, got %v", msg0["role"])
+	}
+
+	msg1 := t2FirstReqMsgs[1].(map[string]any)
+	if msg1["role"] != "user" || !strings.Contains(fmt.Sprint(msg1["content"]), "调大音量") {
+		t.Errorf("msg1 expected user '调大音量', got %+v", msg1)
+	}
+
+	msg2 := t2FirstReqMsgs[2].(map[string]any)
+	if msg2["role"] != "assistant" || msg2["tool_calls"] == nil {
+		t.Errorf("msg2 expected assistant with tool_calls, got %+v", msg2)
+	}
+
+	msg3 := t2FirstReqMsgs[3].(map[string]any)
+	if msg3["role"] != "tool" || msg3["tool_call_id"] != "call_vol_1" {
+		t.Errorf("msg3 expected tool with call_vol_1, got %+v", msg3)
+	}
+
+	msg4 := t2FirstReqMsgs[4].(map[string]any)
+	if msg4["role"] != "assistant" || !strings.Contains(fmt.Sprint(msg4["content"]), "已将音量设为40") {
+		t.Errorf("msg4 expected assistant '已将音量设为40%%。', got %+v", msg4)
+	}
+
+	msg5 := t2FirstReqMsgs[5].(map[string]any)
+	if msg5["role"] != "user" || !strings.Contains(fmt.Sprint(msg5["content"]), "再大一点") {
+		t.Errorf("msg5 expected user '再大一点', got %+v", msg5)
+	}
+}

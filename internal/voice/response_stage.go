@@ -13,9 +13,10 @@ import (
 	"xiaozhi-esp32-golang-server/internal/audio"
 )
 
-// responseStageResult 包含 response 阶段汇总的助手回复文本。
+// responseStageResult 包含 response 阶段汇总的助手回复文本与本轮消息轨迹。
 type responseStageResult struct {
 	AssistantText string
+	TurnMessages  []ai.Message
 }
 
 // runResponseStage 执行 LLM 生成、流式分句与串行 TTS 合成。
@@ -51,7 +52,10 @@ func runResponseStage(
 	sentenceCh := make(chan string, 16)
 	g, gCtx := errgroup.WithContext(ctx)
 
-	var assistantTextBuilder strings.Builder
+	var (
+		assistantTextBuilder strings.Builder
+		llmRes               ai.LLMResult
+	)
 
 	// LLM 与分句 Worker
 	g.Go(func() error {
@@ -70,7 +74,6 @@ func runResponseStage(
 
 		chunks := make(chan ai.LLMChunk, 32)
 		var (
-			llmRes      ai.LLMResult
 			llmErr      error
 			llmFinished = make(chan struct{})
 		)
@@ -206,7 +209,13 @@ func runResponseStage(
 		return nil, err
 	}
 
+	assistantText := assistantTextBuilder.String()
+	if assistantText == "" && llmRes.FinalText != "" {
+		assistantText = llmRes.FinalText
+	}
+
 	return &responseStageResult{
-		AssistantText: assistantTextBuilder.String(),
+		AssistantText: assistantText,
+		TurnMessages:  llmRes.Messages,
 	}, nil
 }

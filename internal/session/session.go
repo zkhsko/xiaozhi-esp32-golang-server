@@ -655,8 +655,8 @@ func (s *Session) handleTurnFinished(res voice.TurnResult) bool {
 
 	switch res.Status {
 	case voice.TurnCompleted:
-		// 历史只在完整交付后追加
-		s.runtime.history.AppendTurn(res.UserText, res.AssistantText)
+		// 历史只在完整交付后追加，保留 Tool Call 痕迹
+		s.runtime.history.AppendTurn(res.UserText, res.AssistantText, res.TurnMessages)
 
 		// 检查是否有 close_session 副作用
 		for _, eff := range res.Effects {

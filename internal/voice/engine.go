@@ -161,9 +161,13 @@ func (e *TurnEngine) HandleTurn(
 		}
 	}
 
-	var assistantText string
+	var (
+		assistantText string
+		turnMessages  []ai.Message
+	)
 	if respRes != nil {
 		assistantText = respRes.AssistantText
+		turnMessages = respRes.TurnMessages
 	}
 
 	_ = output.End(endCtx, TurnEndCompleted)
@@ -172,6 +176,7 @@ func (e *TurnEngine) HandleTurn(
 		Status:        TurnCompleted,
 		UserText:      userText,
 		AssistantText: assistantText,
+		TurnMessages:  turnMessages,
 		Effects:       effects,
 	}
 }
