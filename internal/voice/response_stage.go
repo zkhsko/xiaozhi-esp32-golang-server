@@ -57,9 +57,14 @@ func runResponseStage(
 	g.Go(func() error {
 		defer close(sentenceCh)
 
+		tools := req.Tools
+		if req.ToolSnapshot != nil {
+			tools = req.ToolSnapshot(gCtx)
+		}
+
 		llmReq := ai.LLMRequest{
 			Messages: messages,
-			Tools:    req.Tools,
+			Tools:    tools,
 			MaxTurns: 8,
 		}
 

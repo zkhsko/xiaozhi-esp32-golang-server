@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/hraban/opus"
 
 	"xiaozhi-esp32-golang-server/internal/agentkit"
@@ -590,3 +591,211 @@ func TestSession_TurnFailed_ClosesSession(t *testing.T) {
 		t.Fatal("expected session to close on turn failure")
 	}
 }
+
+// TestSession_MCPDiscovery_AsyncNoDeadlock_DuringTurn 验证设备在握手后立即进入问答轮次时，
+// 主 Actor 协程不会死锁，MCP 发现与工具快照能够异步正常就绪并注入大模型。
+func TestSession_MCPDiscovery_AsyncNoDeadlock_DuringTurn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var (
+		sess        *Session
+		discovered  sync.Map
+		llmCalled   = make(chan struct{})
+		llmReqTools []ai.Tool
+	)
+
+	conn := &interactiveWSConn{
+		onWrite: func(p []byte) {
+			var msg map[string]json.RawMessage
+			if err := json.Unmarshal(p, &msg); err != nil {
+				return
+			}
+			var msgType string
+			if rawType, ok := msg["type"]; ok {
+				_ = json.Unmarshal(rawType, &msgType)
+			}
+			if msgType != MessageTypeMCP {
+				return
+			}
+
+			var payload map[string]any
+			if rawPayload, ok := msg["payload"]; ok {
+				_ = json.Unmarshal(rawPayload, &payload)
+			}
+
+			method, _ := payload["method"].(string)
+			reqIdFloat, _ := payload["id"].(float64)
+			reqId := int64(reqIdFloat)
+			var sessionId string
+			if rawSessId, ok := msg["session_id"]; ok {
+				_ = json.Unmarshal(rawSessId, &sessionId)
+			}
+
+			switch method {
+			case "initialize":
+				resp := map[string]any{
+					"session_id": sessionId,
+					"type":       "mcp",
+					"payload": map[string]any{
+						"jsonrpc": "2.0",
+						"id":      reqId,
+						"result": map[string]any{
+							"protocolVersion": "2024-11-05",
+							"capabilities":    map[string]any{},
+						},
+					},
+				}
+				respBytes, _ := json.Marshal(resp)
+				go func() {
+					time.Sleep(10 * time.Millisecond)
+					if sess != nil {
+						sess.postEvent(sessionEvent{
+							kind:     eventKindClientFrame,
+							isBinary: false,
+							data:     respBytes,
+						})
+					}
+				}()
+
+			case "tools/list":
+				resp := map[string]any{
+					"session_id": sessionId,
+					"type":       "mcp",
+					"payload": map[string]any{
+						"jsonrpc": "2.0",
+						"id":      reqId,
+						"result": map[string]any{
+							"tools": []map[string]any{
+								{
+									"name":        "self.audio_speaker.set_volume",
+									"description": "Set speaker volume",
+									"inputSchema": map[string]any{
+										"volume": map[string]any{
+											"type":    "integer",
+											"minimum": 0,
+											"maximum": 100,
+										},
+									},
+								},
+							},
+						},
+					},
+				}
+				respBytes, _ := json.Marshal(resp)
+				go func() {
+					time.Sleep(10 * time.Millisecond)
+					if sess != nil {
+						sess.postEvent(sessionEvent{
+							kind:     eventKindClientFrame,
+							isBinary: false,
+							data:     respBytes,
+						})
+					}
+				}()
+			}
+		},
+	}
+
+	asr := &mockASRClient{text: "把声音调大"}
+	llm := &mockLLMClient{
+		chunks: []ai.LLMChunk{
+			{Text: "好的，已为您调大音量。"},
+		},
+		onRunTool: func(runCtx context.Context, req ai.LLMRequest) {
+			llmReqTools = req.Tools
+			for _, tool := range req.Tools {
+				discovered.Store(tool.Name, true)
+			}
+			close(llmCalled)
+		},
+	}
+	tts := &mockTTSClient{}
+
+	sess = NewSession(ctx, Options{
+		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+		SerialNumber: "SN-12345678",
+		ASRClient:    asr,
+		LLMClient:    llm,
+		TTSClient:    tts,
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	start := time.Now()
+
+	// 1. 发送带 MCP 支持的 hello 握手
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		Features: &ClientFeatures{
+			MCP: true,
+		},
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	if !waitForCondition(time.Second, func() bool { return sess.SessionId() != "" }) {
+		t.Fatal("session handshake timed out")
+	}
+
+	// 2. 握手后立即发送 listen.start (manual)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     []byte(`{"type":"listen","state":"start","mode":"manual"}`),
+	})
+
+	// 3. 立即发送 listen.stop (manual)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     []byte(`{"type":"listen","state":"stop"}`),
+	})
+
+	// 4. 等待大模型被调用
+	select {
+	case <-llmCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for LLM generation (possible deadlock or long delay)")
+	}
+
+	elapsed := time.Since(start)
+	if elapsed > 3*time.Second {
+		t.Fatalf("turn took too long (%v), expected < 3s", elapsed)
+	}
+
+	// 5. 校验大模型收到的工具列表中是否成功包含了设备 MCP 工具
+	if _, ok := discovered.Load("self.audio_speaker.set_volume"); !ok {
+		t.Fatalf("expected self.audio_speaker.set_volume in LLM tools, got: %+v", llmReqTools)
+	}
+
+	sess.Close()
+	<-sess.Done()
+}
+
+type interactiveWSConn struct {
+	onWrite func(p []byte)
+}
+
+func (c *interactiveWSConn) Write(ctx context.Context, typ websocket.MessageType, p []byte) error {
+	if c.onWrite != nil {
+		c.onWrite(p)
+	}
+	return nil
+}
+

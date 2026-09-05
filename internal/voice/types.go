@@ -94,6 +94,9 @@ type TurnOutput interface {
 // AudioStream 定义上行 16 kHz 60 ms Opus 包输入通道。
 type AudioStream <-chan []byte
 
+// ToolSnapshotFunc 定义按需获取工具快照的回调函数。
+type ToolSnapshotFunc func(ctx context.Context) []ai.Tool
+
 // TurnRequest 封装启动单轮处理的完整上下文与依赖。
 type TurnRequest struct {
 	TurnId             uint64
@@ -101,6 +104,7 @@ type TurnRequest struct {
 	SystemPrompt       string
 	History            []ai.Message
 	Tools              []ai.Tool
+	ToolSnapshot       ToolSnapshotFunc
 	ASRClient          ai.ASRClient
 	LLMClient          ai.LLMClient
 	TTSClient          ai.TTSClient

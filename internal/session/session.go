@@ -602,14 +602,20 @@ func (s *Session) startTurn(mode string, prebuffer [][]byte, manualStop bool) {
 		turnOutput = s.outbound.NewTurnOutput(turnId, s.runtime.sessionId)
 	}
 
-	tools := s.toolProvider.BuildSnapshot(turnCtx, turnId, s.runtime.sessionId, effectsCh)
+	var toolSnapshotFn voice.ToolSnapshotFunc
+	if s.toolProvider != nil {
+		sessionId := s.runtime.sessionId
+		toolSnapshotFn = func(ctx context.Context) []ai.Tool {
+			return s.toolProvider.BuildSnapshot(ctx, turnId, sessionId, effectsCh)
+		}
+	}
 
 	req := voice.TurnRequest{
 		TurnId:             turnId,
 		Mode:               mode,
 		SystemPrompt:       s.systemPrompt,
 		History:            s.runtime.history.MessagesSnapshot(),
-		Tools:              tools,
+		ToolSnapshot:       toolSnapshotFn,
 		ASRClient:          s.asrClient,
 		LLMClient:          s.llmClient,
 		TTSClient:          s.ttsClient,
