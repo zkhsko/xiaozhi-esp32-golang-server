@@ -32,7 +32,7 @@
 - `internal/voice`：语音轮次终极流水线编排层（TurnEngine、阶段 Worker、增量分句与 60ms 节拍转发）。
 - `internal/agentkit`：供大模型调用的统一工具能力层，负责内置 Agent 工具的定义与执行；不拥有 WebSocket 连接或会话生命周期。
 - `internal/audio`：音频编解码（Opus 16kHz 解码与 24kHz 流式编码）。
-- `internal/ai`：ASR、LLM、TTS 的统一抽象、值对象及供应商适配边界。
+- `internal/ai`：ASR、LLM、TTS 的统一抽象、值对象及供应商适配边界；LLM 供应商适配器仅依赖中立运行时选项，不依赖数据库实体。
 - `internal/logger`：结构化日志、安全脱敏和诊断限流。
 - `internal/server`：HTTP 服务生命周期封装。
 
@@ -41,7 +41,7 @@
 ```text
 HTTP / WebSocket 入口 (internal/router)
   ├── OTA / User API  ──>  internal/database (设备生命周期)
-  ├── Admin API       ──>  internal/database (设备与 AI 配置)
+  ├── Admin API       ──>  internal/database / internal/ai/factory（设备与 AI 配置、LLM 供应商可用性校验）
   └── WebSocket Session (internal/session)
         ├── internal/database (鉴权与 Agent 运行时快照)
         ├── internal/voice (Turn 编排与流式流水线)
@@ -181,6 +181,7 @@ StateAwaitHello ──> StateReady ──> StateTurnActive ──> StateReady
 
 - **静态基础设施配置**：服务监听、公开访问地址、HTTP 生命周期、会话资源边界和数据库连接策略。
 - **动态 AI 配置**：ASR、LLM、TTS、Agent 组合及设备类型映射由数据库维护，通过管理接口更新，并在会话建立时加载。
+- **LLM 供应商状态**：供应商标识必须属于运行时工厂可识别范围；尚未实现的占位供应商只允许以禁用状态保存，禁止启用进入运行时。
 - **网络访问配置**：外部 AI 服务的访问地址、代理和调用边界随对应组件配置管理。
 
 静态配置在服务启动阶段完成严格校验；动态配置在保存和会话装配阶段校验，非法或引用不完整的配置不得进入运行时。

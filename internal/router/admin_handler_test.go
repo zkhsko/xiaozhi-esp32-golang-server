@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/database"
 )
@@ -496,6 +497,44 @@ func TestAdminASRConfigEndpoints(t *testing.T) {
 	}
 }
 
+func TestValidateLLMConfigAvailability(t *testing.T) {
+	valid := database.LLMConfig{
+		Provider:            "dashscope",
+		Endpoint:            "https://example.com/v1",
+		APIKey:              "key",
+		Model:               "qwen-plus",
+		FirstTokenTimeoutMS: 5000,
+		OverallTimeoutMS:    30000,
+		Enabled:             true,
+	}
+	if err := validateLLMConfigAvailability(&valid); err != nil {
+		t.Fatalf("expected valid config, got %v", err)
+	}
+
+	unknown := valid
+	unknown.Provider = "openai"
+	unknown.Enabled = false
+	if err := validateLLMConfigAvailability(&unknown); err == nil {
+		t.Fatal("expected unknown provider to be rejected even when disabled")
+	}
+
+	placeholder := valid
+	placeholder.Provider = "deepseek"
+	if err := validateLLMConfigAvailability(&placeholder); !errors.Is(err, ai.ErrLLMProviderNotImplemented) {
+		t.Fatalf("expected placeholder provider error, got %v", err)
+	}
+	placeholder.Enabled = false
+	if err := validateLLMConfigAvailability(&placeholder); err != nil {
+		t.Fatalf("expected disabled placeholder provider to be accepted, got %v", err)
+	}
+
+	missingKey := valid
+	missingKey.APIKey = ""
+	if err := validateLLMConfigAvailability(&missingKey); err == nil {
+		t.Fatal("expected enabled config without api key to be rejected")
+	}
+}
+
 func TestAdminLLMConfigEndpoints(t *testing.T) {
 	db := setupTestRouterDB(t)
 	cfg := &config.Config{}
@@ -570,7 +609,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	updateBody := []byte(fmt.Sprintf(`{
 		"id": %d,
 		"name": "百炼大语言模型-修改版",
-		"provider": "openai",
+		"provider": "deepseek",
 		"endpoint": "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
 		"api_key": "",
 		"model": "qwen-plus",
@@ -596,11 +635,24 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 	if found.APIKey != "sk-secret-llm-key-123456" {
 		t.Errorf("expected preserved api_key 'sk-secret-llm-key-123456', got %q", found.APIKey)
 	}
-	if found.Name != "百炼大语言模型-修改版" || found.Model != "qwen-plus" || found.Enabled != false || found.Provider != "openai" || found.ProxyURL != "socks5://127.0.0.1:1080" {
+	if found.Name != "百炼大语言模型-修改版" || found.Model != "qwen-plus" || found.Enabled != false || found.Provider != "deepseek" || found.ProxyURL != "socks5://127.0.0.1:1080" {
 		t.Errorf("unexpected updated fields in DB: %+v", found)
 	}
 
-	// 4. Single Delete
+	// 4. Placeholder providers can be saved while disabled, but cannot be enabled.
+	enableUnavailableBody := bytes.Replace(updateBody, []byte(`"enabled": false`), []byte(`"enabled": true`), 1)
+	reqEnableUnavailable := httptest.NewRequest(http.MethodPost, "/llm-config/update", bytes.NewReader(enableUnavailableBody))
+	reqEnableUnavailable.Header.Set("Content-Type", "application/json")
+	wEnableUnavailable := httptest.NewRecorder()
+	routes.ServeHTTP(wEnableUnavailable, reqEnableUnavailable)
+	if wEnableUnavailable.Code != http.StatusBadRequest {
+		t.Fatalf("expected unavailable provider enable to fail, code=%d, body=%s", wEnableUnavailable.Code, wEnableUnavailable.Body.String())
+	}
+	if !bytes.Contains(wEnableUnavailable.Body.Bytes(), []byte("llm provider not implemented")) {
+		t.Fatalf("unexpected unavailable provider error: %s", wEnableUnavailable.Body.String())
+	}
+
+	// 5. Single Delete
 	delBody := []byte(fmt.Sprintf(`{"id": %d}`, llmId))
 	reqDel := httptest.NewRequest(http.MethodPost, "/llm-config/delete", bytes.NewReader(delBody))
 	reqDel.Header.Set("Content-Type", "application/json")
@@ -616,7 +668,7 @@ func TestAdminLLMConfigEndpoints(t *testing.T) {
 		t.Fatalf("expected ErrLLMConfigNotFound after delete, got %v", err)
 	}
 
-	// 5. Batch Delete
+	// 6. Batch Delete
 	cfgA := &database.LLMConfig{Name: "A", Endpoint: "http://localhost/a", Model: "m1", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
 	cfgB := &database.LLMConfig{Name: "B", Endpoint: "http://localhost/b", Model: "m2", FirstTokenTimeoutMS: 5000, OverallTimeoutMS: 30000, Enabled: true}
 	_ = db.CreateLLMConfig(context.Background(), cfgA)

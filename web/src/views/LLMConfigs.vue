@@ -18,11 +18,12 @@
             style="width: 160px;"
           >
             <el-option label="全部平台" value="" />
-            <el-option label="阿里百炼" value="dashscope" />
-            <el-option label="OpenAI" value="openai" />
-            <el-option label="DeepSeek" value="deepseek" />
-            <el-option label="火山引擎" value="volcengine" />
-            <el-option label="Ollama" value="ollama" />
+            <el-option
+              v-for="provider in llmProviderOptions"
+              :key="provider.value"
+              :label="provider.label"
+              :value="provider.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="启用状态">
@@ -96,7 +97,7 @@
               effect="plain"
               size="small"
             >
-              {{ row.provider || 'dashscope' }}
+              {{ getProviderLabel(row.provider) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -178,6 +179,7 @@
             <el-switch
               :model-value="row.enabled"
               :loading="row._switchLoading"
+              :disabled="!row.enabled && !isLLMProviderAvailable(row.provider)"
               @change="(val: string | number | boolean) => handleToggleEnabled(row, Boolean(val))"
             />
           </template>
@@ -267,16 +269,17 @@
           <el-select
             v-model="configDialog.form.provider"
             filterable
-            allow-create
-            default-first-option
             style="width: 100%;"
+            @change="handleProviderChange"
           >
-            <el-option label="阿里百炼" value="dashscope" />
-            <el-option label="OpenAI" value="openai" />
-            <el-option label="DeepSeek" value="deepseek" />
-            <el-option label="火山引擎" value="volcengine" />
-            <el-option label="Ollama" value="ollama" />
+            <el-option
+              v-for="provider in llmProviderOptions"
+              :key="provider.value"
+              :label="provider.label"
+              :value="provider.value"
+            />
           </el-select>
+          <span class="form-item-tip">当前仅阿里百炼可启用，其他平台保留为暂未实现的占位配置</span>
         </el-form-item>
 
         <el-form-item label="服务端点" prop="endpoint">
@@ -343,6 +346,7 @@
         <el-form-item label="启用状态" prop="enabled">
           <el-switch
             v-model="configDialog.form.enabled"
+            :disabled="!configDialog.form.enabled && !isLLMProviderAvailable(configDialog.form.provider)"
             active-text="启用"
             inactive-text="禁用"
           />
@@ -381,6 +385,18 @@ import {
   type LLMConfigItem,
 } from '../api/llmConfig'
 
+const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 5000
+const DEFAULT_OVERALL_TIMEOUT_MS = 30000
+const llmProviderOptions = [
+  { label: '阿里百炼', value: 'dashscope', available: true },
+  { label: 'DeepSeek（暂未实现）', value: 'deepseek', available: false },
+  { label: 'Kimi（暂未实现）', value: 'kimi', available: false },
+  { label: 'ZAI（暂未实现）', value: 'zai', available: false },
+  { label: 'OpenRouter（暂未实现）', value: 'openrouter', available: false },
+  { label: 'xAI（暂未实现）', value: 'xai', available: false },
+  { label: 'Anthropic（暂未实现）', value: 'anthropic', available: false },
+] as const
+
 // 搜索表单
 const searchForm = reactive({
   name: '',
@@ -413,8 +429,9 @@ const configDialog = reactive({
     proxy_url: '',
     model: '',
     api_key: '',
-    first_token_timeout_ms: 5000,
-    overall_timeout_ms: 30000,
+    has_api_key: false,
+    first_token_timeout_ms: DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+    overall_timeout_ms: DEFAULT_OVERALL_TIMEOUT_MS,
     enabled: true,
   },
 })
@@ -448,6 +465,13 @@ const validateProxyURL = (_rule: any, value: string, callback: any) => {
   callback()
 }
 
+const validateAPIKey = (_rule: any, value: string, callback: any) => {
+  if (configDialog.form.enabled && !configDialog.form.has_api_key && (!value || !value.trim())) {
+    return callback(new Error('启用配置时必须填写 API Key'))
+  }
+  callback()
+}
+
 const validateOverallTimeout = (_rule: any, value: number, callback: any) => {
   if (!value) {
     return callback(new Error('请输入总超时时间'))
@@ -467,8 +491,7 @@ const configRules: FormRules = {
     { max: 128, message: '配置名称不能超过 128 字符', trigger: 'blur' },
   ],
   provider: [
-    { required: true, message: '请选择或输入服务平台', trigger: 'change' },
-    { max: 64, message: '服务平台标识不能超过 64 字符', trigger: 'blur' },
+    { required: true, message: '请选择服务平台', trigger: 'change' },
   ],
   endpoint: [
     { required: true, validator: validateEndpoint, trigger: 'blur' },
@@ -480,6 +503,9 @@ const configRules: FormRules = {
     { required: true, message: '请输入模型标识', trigger: 'blur' },
     { max: 255, message: '模型标识不能超过 255 字符', trigger: 'blur' },
   ],
+  api_key: [
+    { validator: validateAPIKey, trigger: 'blur' },
+  ],
   first_token_timeout_ms: [
     { required: true, message: '请输入首 Token 超时时间', trigger: 'blur' },
   ],
@@ -488,19 +514,42 @@ const configRules: FormRules = {
   ],
 }
 
+function normalizeLLMProvider(provider: string): string {
+  return provider.trim().toLowerCase() || 'dashscope'
+}
+
+function isLLMProviderAvailable(provider: string): boolean {
+  const normalized = normalizeLLMProvider(provider)
+  return llmProviderOptions.some((option) => option.value === normalized && option.available)
+}
+
+function getProviderLabel(provider: string): string {
+  const normalized = normalizeLLMProvider(provider)
+  return llmProviderOptions.find((option) => option.value === normalized)?.label || normalized
+}
+
+function handleProviderChange(provider: string) {
+  if (!isLLMProviderAvailable(provider) && configDialog.form.enabled) {
+    configDialog.form.enabled = false
+    ElMessage.warning('该 LLM 平台暂未实现，配置已切换为禁用状态')
+  }
+}
+
 // 平台标签颜色映射
 function getProviderTagType(provider: string): '' | 'primary' | 'success' | 'warning' | 'info' | 'danger' {
-  switch (provider) {
+  switch (normalizeLLMProvider(provider)) {
     case 'dashscope':
       return 'primary'
-    case 'openai':
-      return 'success'
     case 'deepseek':
       return 'warning'
-    case 'volcengine':
+    case 'kimi':
+    case 'zai':
+    case 'openrouter':
+    case 'xai':
+    case 'anthropic':
       return 'info'
     default:
-      return 'info'
+      return 'danger'
   }
 }
 
@@ -573,8 +622,9 @@ function openCreateDialog() {
     proxy_url: '',
     model: '',
     api_key: '',
-    first_token_timeout_ms: 5000,
-    overall_timeout_ms: 30000,
+    has_api_key: false,
+    first_token_timeout_ms: DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+    overall_timeout_ms: DEFAULT_OVERALL_TIMEOUT_MS,
     enabled: true,
   }
   configDialog.visible = true
@@ -586,13 +636,14 @@ function openEditDialog(row: LLMConfigItem) {
   configDialog.form = {
     id: row.id,
     name: row.name,
-    provider: row.provider || 'dashscope',
+    provider: normalizeLLMProvider(row.provider),
     endpoint: row.endpoint,
     proxy_url: row.proxy_url || '',
     model: row.model,
     api_key: '', // 编辑时默认留空
-    first_token_timeout_ms: row.first_token_timeout_ms || 5000,
-    overall_timeout_ms: row.overall_timeout_ms || 30000,
+    has_api_key: row.has_api_key,
+    first_token_timeout_ms: row.first_token_timeout_ms || DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+    overall_timeout_ms: row.overall_timeout_ms || DEFAULT_OVERALL_TIMEOUT_MS,
     enabled: row.enabled,
   }
   configDialog.visible = true
@@ -635,6 +686,11 @@ async function submitConfig() {
 
 // 快速切换启用状态
 async function handleToggleEnabled(row: LLMConfigItem & { _switchLoading?: boolean }, targetVal: boolean) {
+  if (targetVal && !isLLMProviderAvailable(row.provider)) {
+    ElMessage.warning('该 LLM 平台暂未实现，不能启用')
+    return
+  }
+
   row._switchLoading = true
   try {
     const res = await saveLLMConfig({

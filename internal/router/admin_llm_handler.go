@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/ai/factory"
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
@@ -59,6 +61,30 @@ type SaveLLMConfigRequest struct {
 	FirstTokenTimeoutMS int64  `json:"first_token_timeout_ms"`
 	OverallTimeoutMS    int64  `json:"overall_timeout_ms"`
 	Enabled             *bool  `json:"enabled"`
+}
+
+func validateLLMConfigAvailability(cfg *database.LLMConfig) error {
+	if err := factory.ValidateLLMProvider(cfg.Provider); err != nil {
+		return err
+	}
+	if !cfg.Enabled {
+		return nil
+	}
+	if err := factory.ValidateAvailableLLMProvider(cfg.Provider); err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return errors.New("llm api key is required when config is enabled")
+	}
+	return (ai.LLMOptions{
+		Provider:          cfg.Provider,
+		Endpoint:          cfg.Endpoint,
+		APIKey:            cfg.APIKey,
+		Model:             cfg.Model,
+		ProxyURL:          cfg.ProxyURL,
+		FirstTokenTimeout: time.Duration(cfg.FirstTokenTimeoutMS) * time.Millisecond,
+		OverallTimeout:    time.Duration(cfg.OverallTimeoutMS) * time.Millisecond,
+	}).Validate()
 }
 
 // DeleteLLMConfigRequest 删除单条 LLM 配置请求体。
@@ -163,12 +189,12 @@ func (h *AdminLLMHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Req
 
 	firstTokenTimeout := req.FirstTokenTimeoutMS
 	if firstTokenTimeout == 0 {
-		firstTokenTimeout = 5000
+		firstTokenTimeout = ai.DefaultLLMFirstTokenTimeout.Milliseconds()
 	}
 
 	overallTimeout := req.OverallTimeoutMS
 	if overallTimeout == 0 {
-		overallTimeout = 30000
+		overallTimeout = ai.DefaultLLMOverallTimeout.Milliseconds()
 	}
 
 	enabled := true
@@ -182,7 +208,7 @@ func (h *AdminLLMHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Req
 		// 创建新配置
 		cfg := &database.LLMConfig{
 			Name:                strings.TrimSpace(req.Name),
-			Provider:            provider,
+			Provider:            ai.NormalizeLLMProvider(provider),
 			Endpoint:            strings.TrimSpace(req.Endpoint),
 			APIKey:              strings.TrimSpace(req.APIKey),
 			Model:               strings.TrimSpace(req.Model),
@@ -190,6 +216,10 @@ func (h *AdminLLMHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Req
 			FirstTokenTimeoutMS: firstTokenTimeout,
 			OverallTimeoutMS:    overallTimeout,
 			Enabled:             enabled,
+		}
+		if err := validateLLMConfigAvailability(cfg); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 
 		if err := h.store.CreateLLMConfig(r.Context(), cfg); err != nil {
@@ -234,9 +264,10 @@ func (h *AdminLLMHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Req
 		apiKey = strings.TrimSpace(req.APIKey)
 	}
 
-	if strings.TrimSpace(req.Provider) == "" {
+	if provider == "" {
 		provider = existing.Provider
 	}
+	provider = ai.NormalizeLLMProvider(provider)
 
 	if req.Enabled == nil {
 		enabled = existing.Enabled
@@ -253,6 +284,10 @@ func (h *AdminLLMHandler) handleSaveLLMConfig(w http.ResponseWriter, r *http.Req
 		FirstTokenTimeoutMS: firstTokenTimeout,
 		OverallTimeoutMS:    overallTimeout,
 		Enabled:             enabled,
+	}
+	if err := validateLLMConfigAvailability(updatedCfg); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	if err := h.store.UpdateLLMConfigById(r.Context(), updatedCfg); err != nil {

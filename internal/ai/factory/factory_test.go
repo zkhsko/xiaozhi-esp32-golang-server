@@ -9,6 +9,23 @@ import (
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
+func TestValidateLLMProvider(t *testing.T) {
+	for _, provider := range []string{"", "dashscope", " DASHSCOPE ", "deepseek", "kimi", "zai", "openrouter", "xai", "anthropic"} {
+		if err := ValidateLLMProvider(provider); err != nil {
+			t.Fatalf("expected provider %q to be recognized, got %v", provider, err)
+		}
+	}
+	if err := ValidateLLMProvider("openai"); err == nil {
+		t.Fatal("expected unknown provider to be rejected")
+	}
+	if err := ValidateAvailableLLMProvider(""); err != nil {
+		t.Fatalf("expected default provider to be available, got %v", err)
+	}
+	if err := ValidateAvailableLLMProvider("deepseek"); !errors.Is(err, ai.ErrLLMProviderNotImplemented) {
+		t.Fatalf("expected placeholder provider to be unavailable, got %v", err)
+	}
+}
+
 func TestFactory_CreateClients(t *testing.T) {
 	// 1. Invalid configs
 	if _, err := CreateASRClient(nil); err == nil {

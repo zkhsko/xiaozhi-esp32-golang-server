@@ -15,6 +15,43 @@ import (
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
+const (
+	llmProviderDeepSeek   = "deepseek"
+	llmProviderKimi       = "kimi"
+	llmProviderZAI        = "zai"
+	llmProviderOpenRouter = "openrouter"
+	llmProviderXAI        = "xai"
+	llmProviderAnthropic  = "anthropic"
+)
+
+// ValidateLLMProvider 校验供应商标识是否属于当前代码识别的 LLM 供应商。
+func ValidateLLMProvider(provider string) error {
+	switch ai.NormalizeLLMProvider(provider) {
+	case ai.DefaultLLMProvider,
+		llmProviderDeepSeek,
+		llmProviderKimi,
+		llmProviderZAI,
+		llmProviderOpenRouter,
+		llmProviderXAI,
+		llmProviderAnthropic:
+		return nil
+	default:
+		return fmt.Errorf("unsupported llm provider: %s", strings.TrimSpace(provider))
+	}
+}
+
+// ValidateAvailableLLMProvider 校验供应商是否已具备可进入运行时的生产实现。
+func ValidateAvailableLLMProvider(provider string) error {
+	normalized := ai.NormalizeLLMProvider(provider)
+	if err := ValidateLLMProvider(normalized); err != nil {
+		return err
+	}
+	if normalized != ai.DefaultLLMProvider {
+		return fmt.Errorf("%w: %s", ai.ErrLLMProviderNotImplemented, normalized)
+	}
+	return nil
+}
+
 // CreateASRClient 根据数据库 ASR 配置创建对应的语音识别客户端。
 func CreateASRClient(cfg *database.ASRConfig) (ai.ASRClient, error) {
 	if cfg == nil {
@@ -34,19 +71,19 @@ func CreateASRClient(cfg *database.ASRConfig) (ai.ASRClient, error) {
 func CreateLLMClient(opts ai.LLMOptions) (ai.ManagedLLMClient, error) {
 	opts = opts.Normalized()
 	switch opts.Provider {
-	case "dashscope":
+	case ai.DefaultLLMProvider:
 		return dashscope.NewLLMClient(opts)
-	case "deepseek":
+	case llmProviderDeepSeek:
 		return deepseek.NewLLMClient(opts)
-	case "kimi":
+	case llmProviderKimi:
 		return kimi.NewLLMClient(opts)
-	case "zai":
+	case llmProviderZAI:
 		return zai.NewLLMClient(opts)
-	case "openrouter":
+	case llmProviderOpenRouter:
 		return openrouter.NewLLMClient(opts)
-	case "xai":
+	case llmProviderXAI:
 		return xai.NewLLMClient(opts)
-	case "anthropic":
+	case llmProviderAnthropic:
 		return anthropic.NewLLMClient(opts)
 	default:
 		return nil, fmt.Errorf("unsupported llm provider: %s", opts.Provider)
