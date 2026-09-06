@@ -92,14 +92,16 @@ func (e *TurnEngine) HandleTurn(
 
 	var respRes *responseStageResult
 
-	// Response Worker (LLM -> 分句 -> TTS)
+	// PCM 生产 Worker 独占流的收尾，正文与可选尾音共用下游编码器。
 	g.Go(func() error {
+		defer close(pcmTTSCh)
+
 		r, err := runResponseStage(gCtx, req, userText, pcmTTSCh)
 		if err != nil {
 			return err
 		}
 		respRes = r
-		return nil
+		return appendReadyPrompt(gCtx, req.PromptToneEnabled, r, pcmTTSCh)
 	})
 
 	// Encoder Worker (PCM -> 连续 Opus 编码 -> AudioFrame)
@@ -120,23 +122,10 @@ func (e *TurnEngine) HandleTurn(
 
 	// 汇总 Effect
 	var effects []TurnEffect
-	if respRes != nil && len(respRes.Effects) > 0 {
+	if respRes != nil {
 		effects = append(effects, respRes.Effects...)
 	}
-	if req.EffectsCh != nil {
-		for {
-			select {
-			case eff, ok := <-req.EffectsCh:
-				if !ok {
-					goto effectsDone
-				}
-				effects = append(effects, eff)
-			default:
-				goto effectsDone
-			}
-		}
-	effectsDone:
-	}
+	effects = append(effects, drainTurnEffects(req.EffectsCh)...)
 
 	// 4. 终局收口
 	endCtx, endCancel := context.WithTimeout(context.Background(), 5*time.Second)

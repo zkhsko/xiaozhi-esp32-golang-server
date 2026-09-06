@@ -59,7 +59,6 @@ type runtimeState struct {
 	turnCancel       context.CancelFunc
 	turnInputCh      chan []byte
 	turnInputClosed  bool
-	turnEffectsCh    chan voice.TurnEffect
 	pendingTurn      *PendingTurn
 	history          *ConversationHistory
 	helloTimer       *time.Timer
@@ -69,14 +68,15 @@ type runtimeState struct {
 
 // Session 负责管理单个 WebSocket 连接的生命周期、协议事件循环与 Actor 状态机。
 type Session struct {
-	conn         *websocket.Conn
-	outbound     *OutboundActor
-	events       chan sessionEvent
-	serialNumber string
-	systemPrompt string
-	cfg          SessionConfig
-	logger       *slog.Logger
-	diagLimiter  *logger.RateLimiter
+	conn              *websocket.Conn
+	outbound          *OutboundActor
+	events            chan sessionEvent
+	serialNumber      string
+	systemPrompt      string
+	promptToneEnabled bool
+	cfg               SessionConfig
+	logger            *slog.Logger
+	diagLimiter       *logger.RateLimiter
 
 	asrClient    ai.ASRClient
 	llmClient    ai.LLMClient
@@ -97,17 +97,18 @@ type Session struct {
 
 // Options 聚合构造单个 WebSocket 会话的依赖与上下文。
 type Options struct {
-	Conn          *websocket.Conn
-	SerialNumber  string
-	SystemPrompt  string
-	Config        SessionConfig
-	ASRClient     ai.ASRClient
-	LLMClient     ai.LLMClient
-	TTSClient     ai.TTSClient
-	AgentKitStore AgentKitStore
-	Logger        *slog.Logger
-	Outbound      *OutboundActor
-	VoiceEngine   *voice.TurnEngine
+	Conn              *websocket.Conn
+	SerialNumber      string
+	SystemPrompt      string
+	PromptToneEnabled bool
+	Config            SessionConfig
+	ASRClient         ai.ASRClient
+	LLMClient         ai.LLMClient
+	TTSClient         ai.TTSClient
+	AgentKitStore     AgentKitStore
+	Logger            *slog.Logger
+	Outbound          *OutboundActor
+	VoiceEngine       *voice.TurnEngine
 }
 
 // NewSession 使用具名选项创建配置就绪的 WebSocket 会话对象。
@@ -150,20 +151,21 @@ func NewSession(ctx context.Context, opts Options) *Session {
 	}
 
 	sess := &Session{
-		conn:         opts.Conn,
-		outbound:     out,
-		events:       events,
-		serialNumber: opts.SerialNumber,
-		systemPrompt: opts.SystemPrompt,
-		cfg:          cfg,
-		logger:       l,
-		diagLimiter:  diagLimiter,
-		asrClient:    opts.ASRClient,
-		llmClient:    opts.LLMClient,
-		ttsClient:    opts.TTSClient,
-		mcpBridge:    mcpBridge,
-		toolProvider: toolProvider,
-		voiceEngine:  engine,
+		conn:              opts.Conn,
+		outbound:          out,
+		events:            events,
+		serialNumber:      opts.SerialNumber,
+		systemPrompt:      opts.SystemPrompt,
+		promptToneEnabled: opts.PromptToneEnabled,
+		cfg:               cfg,
+		logger:            l,
+		diagLimiter:       diagLimiter,
+		asrClient:         opts.ASRClient,
+		llmClient:         opts.LLMClient,
+		ttsClient:         opts.TTSClient,
+		mcpBridge:         mcpBridge,
+		toolProvider:      toolProvider,
+		voiceEngine:       engine,
 		runtime: runtimeState{
 			state:   StateAwaitHello,
 			history: NewConversationHistory(cfg.MaxHistoryTurns),
@@ -585,7 +587,7 @@ func (s *Session) handleAudioFrame(data []byte) {
 
 // playGreetingPrompt 异步以 Session 作用域（turnId: 0）下发就绪提示音。
 func (s *Session) playGreetingPrompt() {
-	if s.outbound == nil || s.runtime.state == StateClosed {
+	if !s.promptToneEnabled || s.outbound == nil || s.runtime.state == StateClosed {
 		return
 	}
 
@@ -624,7 +626,6 @@ func (s *Session) startTurn(mode string, prebuffer [][]byte, manualStop bool) {
 	s.runtime.turnInputCh = inputCh
 
 	effectsCh := make(chan voice.TurnEffect, 8)
-	s.runtime.turnEffectsCh = effectsCh
 
 	// 注入预缓冲音频
 	for _, pkt := range prebuffer {
@@ -665,6 +666,7 @@ func (s *Session) startTurn(mode string, prebuffer [][]byte, manualStop bool) {
 		TurnId:             turnId,
 		Mode:               mode,
 		SystemPrompt:       s.systemPrompt,
+		PromptToneEnabled:  s.promptToneEnabled,
 		History:            s.runtime.history.MessagesSnapshot(),
 		ToolSnapshot:       toolSnapshotFn,
 		ASRClient:          s.asrClient,
@@ -702,7 +704,6 @@ func (s *Session) handleTurnFinished(res voice.TurnResult) bool {
 	s.runtime.turnCancel = nil
 	s.runtime.turnInputCh = nil
 	s.runtime.turnInputClosed = false
-	s.runtime.turnEffectsCh = nil
 
 	switch res.Status {
 	case voice.TurnCompleted:

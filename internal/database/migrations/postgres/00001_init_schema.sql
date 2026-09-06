@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS agent_config (
     tts_config_id BIGINT NOT NULL,                                  -- 引用 tts_config.id
     system_prompt TEXT NOT NULL,                                    -- Agent 系统提示词
     voice VARCHAR(128) NOT NULL,                                    -- Agent 使用的 TTS 音色
+    prompt_tone_enabled BOOLEAN NOT NULL DEFAULT TRUE,              -- 是否播放就绪提示音，新会话生效
     enabled BOOLEAN NOT NULL DEFAULT FALSE,                         -- 是否启用
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,      -- 创建时间
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP       -- 最近更新时间

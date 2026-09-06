@@ -203,15 +203,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 7. 构造专属 Session 并注册到会话注册表，统一注销与名额释放顺序
 	sess := NewSession(r.Context(), Options{
-		Conn:          conn,
-		SerialNumber:  tok.SerialNumber,
-		SystemPrompt:  snapshot.Agent.SystemPrompt,
-		Config:        mapSessionConfig(h.cfg),
-		ASRClient:     asrClient,
-		LLMClient:     llmClient,
-		TTSClient:     ttsClient,
-		AgentKitStore: h.agentKitStore,
-		Logger:        h.logger,
+		Conn:              conn,
+		SerialNumber:      tok.SerialNumber,
+		SystemPrompt:      snapshot.Agent.SystemPrompt,
+		PromptToneEnabled: snapshot.Agent.PromptToneEnabled,
+		Config:            mapSessionConfig(h.cfg),
+		ASRClient:         asrClient,
+		LLMClient:         llmClient,
+		TTSClient:         ttsClient,
+		AgentKitStore:     h.agentKitStore,
+		Logger:            h.logger,
 	})
 	unregister, registered := h.registry.Register(sess, release)
 	if !registered {

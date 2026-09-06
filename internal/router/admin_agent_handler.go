@@ -28,19 +28,20 @@ type AgentConfigStore interface {
 
 // AgentConfigItem 表示单条 Agent 配置 DTO。
 type AgentConfigItem struct {
-	Id           uint64    `json:"id"`
-	Name         string    `json:"name"`
-	ASRConfigId  uint64    `json:"asr_config_id"`
-	ASRName      string    `json:"asr_name,omitempty"`
-	LLMConfigId  uint64    `json:"llm_config_id"`
-	LLMName      string    `json:"llm_name,omitempty"`
-	TTSConfigId  uint64    `json:"tts_config_id"`
-	TTSName      string    `json:"tts_name,omitempty"`
-	SystemPrompt string    `json:"system_prompt"`
-	Voice        string    `json:"voice"`
-	Enabled      bool      `json:"enabled"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	Id                uint64    `json:"id"`
+	Name              string    `json:"name"`
+	ASRConfigId       uint64    `json:"asr_config_id"`
+	ASRName           string    `json:"asr_name,omitempty"`
+	LLMConfigId       uint64    `json:"llm_config_id"`
+	LLMName           string    `json:"llm_name,omitempty"`
+	TTSConfigId       uint64    `json:"tts_config_id"`
+	TTSName           string    `json:"tts_name,omitempty"`
+	SystemPrompt      string    `json:"system_prompt"`
+	Voice             string    `json:"voice"`
+	PromptToneEnabled bool      `json:"prompt_tone_enabled"`
+	Enabled           bool      `json:"enabled"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // AgentConfigListData Agent 配置列表响应数据。
@@ -53,14 +54,15 @@ type AgentConfigListData struct {
 
 // SaveAgentConfigRequest 保存或更新 Agent 配置请求体。
 type SaveAgentConfigRequest struct {
-	Id           uint64 `json:"id"`
-	Name         string `json:"name"`
-	ASRConfigId  uint64 `json:"asr_config_id"`
-	LLMConfigId  uint64 `json:"llm_config_id"`
-	TTSConfigId  uint64 `json:"tts_config_id"`
-	SystemPrompt string `json:"system_prompt"`
-	Voice        string `json:"voice"`
-	Enabled      *bool  `json:"enabled"`
+	Id                uint64 `json:"id"`
+	Name              string `json:"name"`
+	ASRConfigId       uint64 `json:"asr_config_id"`
+	LLMConfigId       uint64 `json:"llm_config_id"`
+	TTSConfigId       uint64 `json:"tts_config_id"`
+	SystemPrompt      string `json:"system_prompt"`
+	Voice             string `json:"voice"`
+	PromptToneEnabled *bool  `json:"prompt_tone_enabled"`
+	Enabled           *bool  `json:"enabled"`
 }
 
 // DeleteAgentConfigRequest 删除单条 Agent 配置请求体。
@@ -151,19 +153,20 @@ func (h *AdminAgentHandler) handleListAgentConfigs(w http.ResponseWriter, r *htt
 	items := make([]AgentConfigItem, 0, len(configs))
 	for _, cfg := range configs {
 		items = append(items, AgentConfigItem{
-			Id:           cfg.Id,
-			Name:         cfg.Name,
-			ASRConfigId:  cfg.ASRConfigId,
-			ASRName:      asrMap[cfg.ASRConfigId],
-			LLMConfigId:  cfg.LLMConfigId,
-			LLMName:      llmMap[cfg.LLMConfigId],
-			TTSConfigId:  cfg.TTSConfigId,
-			TTSName:      ttsMap[cfg.TTSConfigId],
-			SystemPrompt: cfg.SystemPrompt,
-			Voice:        cfg.Voice,
-			Enabled:      cfg.Enabled,
-			CreatedAt:    cfg.CreatedAt,
-			UpdatedAt:    cfg.UpdatedAt,
+			Id:                cfg.Id,
+			Name:              cfg.Name,
+			ASRConfigId:       cfg.ASRConfigId,
+			ASRName:           asrMap[cfg.ASRConfigId],
+			LLMConfigId:       cfg.LLMConfigId,
+			LLMName:           llmMap[cfg.LLMConfigId],
+			TTSConfigId:       cfg.TTSConfigId,
+			TTSName:           ttsMap[cfg.TTSConfigId],
+			SystemPrompt:      cfg.SystemPrompt,
+			Voice:             cfg.Voice,
+			PromptToneEnabled: cfg.PromptToneEnabled,
+			Enabled:           cfg.Enabled,
+			CreatedAt:         cfg.CreatedAt,
+			UpdatedAt:         cfg.UpdatedAt,
 		})
 	}
 
@@ -197,15 +200,21 @@ func (h *AdminAgentHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http
 	}
 
 	if req.Id == 0 {
+		promptToneEnabled := true
+		if req.PromptToneEnabled != nil {
+			promptToneEnabled = *req.PromptToneEnabled
+		}
+
 		// 创建新配置
 		cfg := &database.AgentConfig{
-			Name:         strings.TrimSpace(req.Name),
-			ASRConfigId:  req.ASRConfigId,
-			LLMConfigId:  req.LLMConfigId,
-			TTSConfigId:  req.TTSConfigId,
-			SystemPrompt: strings.TrimSpace(req.SystemPrompt),
-			Voice:        strings.TrimSpace(req.Voice),
-			Enabled:      enabled,
+			Name:              strings.TrimSpace(req.Name),
+			ASRConfigId:       req.ASRConfigId,
+			LLMConfigId:       req.LLMConfigId,
+			TTSConfigId:       req.TTSConfigId,
+			SystemPrompt:      strings.TrimSpace(req.SystemPrompt),
+			Voice:             strings.TrimSpace(req.Voice),
+			PromptToneEnabled: promptToneEnabled,
+			Enabled:           enabled,
 		}
 
 		if err := h.store.CreateAgentConfig(r.Context(), cfg); err != nil {
@@ -217,16 +226,17 @@ func (h *AdminAgentHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http
 			Success: true,
 			Message: "Agent 配置创建成功",
 			Data: AgentConfigItem{
-				Id:           cfg.Id,
-				Name:         cfg.Name,
-				ASRConfigId:  cfg.ASRConfigId,
-				LLMConfigId:  cfg.LLMConfigId,
-				TTSConfigId:  cfg.TTSConfigId,
-				SystemPrompt: cfg.SystemPrompt,
-				Voice:        cfg.Voice,
-				Enabled:      cfg.Enabled,
-				CreatedAt:    cfg.CreatedAt,
-				UpdatedAt:    cfg.UpdatedAt,
+				Id:                cfg.Id,
+				Name:              cfg.Name,
+				ASRConfigId:       cfg.ASRConfigId,
+				LLMConfigId:       cfg.LLMConfigId,
+				TTSConfigId:       cfg.TTSConfigId,
+				SystemPrompt:      cfg.SystemPrompt,
+				Voice:             cfg.Voice,
+				PromptToneEnabled: cfg.PromptToneEnabled,
+				Enabled:           cfg.Enabled,
+				CreatedAt:         cfg.CreatedAt,
+				UpdatedAt:         cfg.UpdatedAt,
 			},
 		})
 		return
@@ -276,15 +286,21 @@ func (h *AdminAgentHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http
 		enabled = *req.Enabled
 	}
 
+	promptToneEnabled := existing.PromptToneEnabled
+	if req.PromptToneEnabled != nil {
+		promptToneEnabled = *req.PromptToneEnabled
+	}
+
 	updatedCfg := &database.AgentConfig{
-		Id:           req.Id,
-		Name:         name,
-		ASRConfigId:  asrId,
-		LLMConfigId:  llmId,
-		TTSConfigId:  ttsId,
-		SystemPrompt: systemPrompt,
-		Voice:        voice,
-		Enabled:      enabled,
+		Id:                req.Id,
+		Name:              name,
+		ASRConfigId:       asrId,
+		LLMConfigId:       llmId,
+		TTSConfigId:       ttsId,
+		SystemPrompt:      systemPrompt,
+		Voice:             voice,
+		PromptToneEnabled: promptToneEnabled,
+		Enabled:           enabled,
 	}
 
 	if err := h.store.UpdateAgentConfigById(r.Context(), updatedCfg); err != nil {
@@ -296,15 +312,16 @@ func (h *AdminAgentHandler) handleSaveAgentConfig(w http.ResponseWriter, r *http
 		Success: true,
 		Message: "Agent 配置更新成功",
 		Data: AgentConfigItem{
-			Id:           updatedCfg.Id,
-			Name:         updatedCfg.Name,
-			ASRConfigId:  updatedCfg.ASRConfigId,
-			LLMConfigId:  updatedCfg.LLMConfigId,
-			TTSConfigId:  updatedCfg.TTSConfigId,
-			SystemPrompt: updatedCfg.SystemPrompt,
-			Voice:        updatedCfg.Voice,
-			Enabled:      updatedCfg.Enabled,
-			UpdatedAt:    time.Now(),
+			Id:                updatedCfg.Id,
+			Name:              updatedCfg.Name,
+			ASRConfigId:       updatedCfg.ASRConfigId,
+			LLMConfigId:       updatedCfg.LLMConfigId,
+			TTSConfigId:       updatedCfg.TTSConfigId,
+			SystemPrompt:      updatedCfg.SystemPrompt,
+			Voice:             updatedCfg.Voice,
+			PromptToneEnabled: updatedCfg.PromptToneEnabled,
+			Enabled:           updatedCfg.Enabled,
+			UpdatedAt:         time.Now(),
 		},
 	})
 }

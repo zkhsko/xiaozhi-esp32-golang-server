@@ -103,6 +103,7 @@ type TurnRequest struct {
 	TurnId             uint64
 	Mode               string // "auto" or "manual"
 	SystemPrompt       string
+	PromptToneEnabled  bool
 	History            []ai.Message
 	Tools              []ai.Tool
 	ToolSnapshot       ToolSnapshotFunc

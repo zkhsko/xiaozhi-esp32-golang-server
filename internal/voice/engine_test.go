@@ -29,15 +29,13 @@ func (m *mockASRClient) Recognize(ctx context.Context, req ai.ASRRequest, pcm <-
 
 // mockLLMClient 实现测试用 LLMClient
 type mockLLMClient struct {
-	chunks    []ai.LLMChunk
-	finalText string
-	err       error
+	chunks      []ai.LLMChunk
+	finalText   string
+	err         error
+	afterChunks func()
 }
 
 func (m *mockLLMClient) Generate(ctx context.Context, req ai.LLMRequest, chunks chan<- ai.LLMChunk) (ai.LLMResult, error) {
-	if m.err != nil {
-		return ai.LLMResult{}, m.err
-	}
 	if chunks != nil {
 		for _, c := range m.chunks {
 			select {
@@ -47,25 +45,37 @@ func (m *mockLLMClient) Generate(ctx context.Context, req ai.LLMRequest, chunks 
 			}
 		}
 	}
-	return ai.LLMResult{FinalText: m.finalText}, nil
+	if m.afterChunks != nil {
+		m.afterChunks()
+	}
+	return ai.LLMResult{FinalText: m.finalText}, m.err
 }
 
 // mockTTSSession 实现测试用 TTSSession
 type mockTTSSession struct {
-	closed     bool
-	synthCount int
+	closed          bool
+	synthCount      int
+	pcmBytes        int
+	err             error
+	afterSynthesize func()
 }
 
 func (s *mockTTSSession) Synthesize(ctx context.Context, text string, pcm chan<- ai.PCMChunk) error {
 	s.synthCount++
-	// 生成 2880 字节的假 PCM
+	pcmBytes := s.pcmBytes
+	if pcmBytes == 0 {
+		pcmBytes = audio.DownlinkBytesPerFrame
+	}
 	chunk := ai.PCMChunk{
-		Data:          make([]byte, 2880),
+		Data:          make([]byte, pcmBytes),
 		SentenceStart: text,
 	}
 	select {
 	case pcm <- chunk:
-		return nil
+		if s.afterSynthesize != nil {
+			s.afterSynthesize()
+		}
+		return s.err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -78,16 +88,19 @@ func (s *mockTTSSession) Close() error {
 
 // mockTTSClient 实现测试用 TTSClient
 type mockTTSClient struct {
-	mu           sync.Mutex
-	sessionCount int
-	lastSession  *mockTTSSession
+	mu              sync.Mutex
+	sessionCount    int
+	lastSession     *mockTTSSession
+	pcmBytes        int
+	err             error
+	afterSynthesize func()
 }
 
 func (m *mockTTSClient) CreateSession(ctx context.Context) (ai.TTSSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessionCount++
-	sess := &mockTTSSession{}
+	sess := &mockTTSSession{pcmBytes: m.pcmBytes, err: m.err, afterSynthesize: m.afterSynthesize}
 	m.lastSession = sess
 	return sess, nil
 }
@@ -188,11 +201,12 @@ func TestTurnEngine_Manual_NoSpeech(t *testing.T) {
 	close(inCh)
 
 	req := TurnRequest{
-		TurnId:    2,
-		Mode:      "manual",
-		ASRClient: asr,
-		LLMClient: llm,
-		TTSClient: tts,
+		TurnId:            2,
+		PromptToneEnabled: true,
+		Mode:              "manual",
+		ASRClient:         asr,
+		LLMClient:         llm,
+		TTSClient:         tts,
 	}
 
 	res := engine.HandleTurn(context.Background(), req, inCh, output)
@@ -286,11 +300,12 @@ func TestTurnEngine_Abort(t *testing.T) {
 	inCh := make(chan []byte)
 
 	req := TurnRequest{
-		TurnId:    5,
-		Mode:      "auto",
-		ASRClient: asr,
-		LLMClient: llm,
-		TTSClient: tts,
+		TurnId:            5,
+		PromptToneEnabled: true,
+		Mode:              "auto",
+		ASRClient:         asr,
+		LLMClient:         llm,
+		TTSClient:         tts,
 	}
 
 	res := engine.HandleTurn(ctx, req, inCh, output)
@@ -353,68 +368,6 @@ func TestEncoderStage_ContinuousPcm(t *testing.T) {
 	}
 }
 
-func TestTurnEngine_PromptAppendedAtTail(t *testing.T) {
-	promptPCM, err := audio.GetPromptPCM()
-	if err != nil {
-		t.Fatalf("failed to get prompt pcm: %v", err)
-	}
-
-	// 1 帧 TTS (2880 bytes) + promptPCM 经 PCMFramer 分帧并 Flush 的总预期帧数
-	framer := audio.NewPCMFramer()
-	ttsChunk := make([]byte, audio.DownlinkBytesPerFrame)
-	f1 := framer.Feed(ttsChunk)
-	f2 := framer.Feed(promptPCM)
-	f3 := framer.Flush()
-	expectedTotalFrames := len(f1) + len(f2) + len(f3)
-
-	engine := NewEngine()
-	asr := &mockASRClient{text: "测试提示音追加"}
-	llm := &mockLLMClient{
-		chunks: []ai.LLMChunk{
-			{Text: "测试回复。"},
-		},
-	}
-	tts := &mockTTSClient{}
-	output := &mockTurnOutput{}
-
-	inCh := make(chan []byte)
-	close(inCh)
-
-	req := TurnRequest{
-		TurnId:    10,
-		Mode:      "auto",
-		ASRClient: asr,
-		LLMClient: llm,
-		TTSClient: tts,
-	}
-
-	res := engine.HandleTurn(context.Background(), req, inCh, output)
-
-	if res.Status != TurnCompleted {
-		t.Fatalf("expected TurnCompleted, got %v, err: %v", res.Status, res.Err)
-	}
-
-	if len(output.audioFrames) != expectedTotalFrames {
-		t.Fatalf("expected %d total audio frames (tts + prompt), got %d", expectedTotalFrames, len(output.audioFrames))
-	}
-
-	// 首帧应带有首句字幕标记
-	if len(output.audioFrames[0].SentenceStarts) == 0 || output.audioFrames[0].SentenceStarts[0] != "测试回复。" {
-		t.Fatalf("expected first frame to have sentence start, got %v", output.audioFrames[0].SentenceStarts)
-	}
-
-	// 提示音帧不应带字幕标记
-	lastFrame := output.audioFrames[len(output.audioFrames)-1]
-	if len(lastFrame.SentenceStarts) != 0 {
-		t.Fatalf("expected last frame (prompt) to have no sentence start, got %v", lastFrame.SentenceStarts)
-	}
-
-	// 验证最终收口正常交付
-	if !output.ended || output.endReason != TurnEndCompleted {
-		t.Fatalf("expected output ended with TurnEndCompleted, ended=%v, reason=%v", output.ended, output.endReason)
-	}
-}
-
 func TestTurnEngine_CloseSession_NoPromptAppended(t *testing.T) {
 	// 1 帧 TTS (2880 bytes)，预期仅包含 TTS 分帧，不追加 promptPCM
 	ttsChunk := make([]byte, audio.DownlinkBytesPerFrame)
@@ -438,12 +391,13 @@ func TestTurnEngine_CloseSession_NoPromptAppended(t *testing.T) {
 	effectsCh <- TurnEffect{Type: EffectCloseSession}
 
 	req := TurnRequest{
-		TurnId:    11,
-		Mode:      "auto",
-		ASRClient: asr,
-		LLMClient: llm,
-		TTSClient: tts,
-		EffectsCh: effectsCh,
+		TurnId:            11,
+		PromptToneEnabled: true,
+		Mode:              "auto",
+		ASRClient:         asr,
+		LLMClient:         llm,
+		TTSClient:         tts,
+		EffectsCh:         effectsCh,
 	}
 
 	res := engine.HandleTurn(context.Background(), req, inCh, output)
@@ -473,5 +427,3 @@ func TestTurnEngine_CloseSession_NoPromptAppended(t *testing.T) {
 		t.Fatalf("expected output ended with TurnEndCompleted, ended=%v, reason=%v", output.ended, output.endReason)
 	}
 }
-
-

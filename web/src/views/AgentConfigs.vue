@@ -148,6 +148,14 @@
           </template>
         </el-table-column>
 
+        <el-table-column prop="prompt_tone_enabled" label="就绪提示音" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.prompt_tone_enabled ? 'success' : 'info'" size="small">
+              {{ row.prompt_tone_enabled ? '开启' : '关闭' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+
         <el-table-column prop="enabled" label="启用状态" width="100" align="center">
           <template #default="{ row }">
             <el-switch
@@ -314,6 +322,17 @@
           />
         </el-form-item>
 
+        <el-form-item label="就绪提示音" prop="prompt_tone_enabled">
+          <el-switch
+            v-model="configDialog.form.prompt_tone_enabled"
+            active-text="开启"
+            inactive-text="关闭"
+          />
+          <div class="text-muted">
+            控制首次交互、唤醒和回复结束时的提示音，不影响回复语音。保存后仅新会话生效，已连接设备需重连。
+          </div>
+        </el-form-item>
+
         <el-form-item label="启用状态" prop="enabled">
           <el-switch
             v-model="configDialog.form.enabled"
@@ -421,6 +440,7 @@ const configDialog = reactive({
     tts_config_id: undefined as number | undefined,
     system_prompt: '',
     voice: '',
+    prompt_tone_enabled: true,
     enabled: true,
   },
 })
@@ -586,6 +606,7 @@ function openCreateDialog() {
     tts_config_id: ttsOptions.value[0]?.id,
     system_prompt: '',
     voice: '',
+    prompt_tone_enabled: true,
     enabled: true,
   }
   if (configDialog.form.tts_config_id) {
@@ -606,6 +627,7 @@ function openEditDialog(row: AgentConfigItem) {
     tts_config_id: row.tts_config_id,
     system_prompt: row.system_prompt,
     voice: row.voice,
+    prompt_tone_enabled: row.prompt_tone_enabled,
     enabled: row.enabled,
   }
   configDialog.visible = true
@@ -633,6 +655,7 @@ async function submitConfig() {
         tts_config_id: configDialog.form.tts_config_id!,
         system_prompt: configDialog.form.system_prompt.trim(),
         voice: configDialog.form.voice.trim(),
+        prompt_tone_enabled: configDialog.form.prompt_tone_enabled,
         enabled: configDialog.form.enabled,
       }
       const res = await saveAgentConfig(payload)

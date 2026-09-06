@@ -160,6 +160,7 @@ CREATE TABLE IF NOT EXISTS `agent_config` (
     `tts_config_id` BIGINT UNSIGNED NOT NULL COMMENT '引用 tts_config.id',
     `system_prompt` TEXT NOT NULL COMMENT 'Agent 系统提示词',
     `voice` VARCHAR(128) NOT NULL COMMENT 'Agent 使用的 TTS 音色',
+    `prompt_tone_enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否播放就绪提示音，新会话生效',
     `enabled` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用（1: 是, 0: 否）',
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
     `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',

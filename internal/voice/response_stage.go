@@ -10,17 +10,18 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
-	"xiaozhi-esp32-golang-server/internal/audio"
 )
 
 // responseStageResult 包含 response 阶段汇总的助手回复文本、本轮消息轨迹与执行副作用。
 type responseStageResult struct {
-	AssistantText string
-	TurnMessages  []ai.Message
-	Effects       []TurnEffect
+	AssistantText      string
+	HasSynthesizedText bool
+	TurnMessages       []ai.Message
+	Effects            []TurnEffect
 }
 
 // runResponseStage 执行 LLM 生成、流式分句与串行 TTS 合成。
+// 输出通道由 Engine 关闭，以便正文结束后继续追加本轮尾音。
 func runResponseStage(
 	ctx context.Context,
 	req TurnRequest,
@@ -56,7 +57,6 @@ func runResponseStage(
 	var (
 		assistantTextBuilder strings.Builder
 		llmRes               ai.LLMResult
-		turnEffects          []TurnEffect
 	)
 
 	// LLM 与分句 Worker
@@ -148,8 +148,6 @@ func runResponseStage(
 
 	// TTS Worker
 	g.Go(func() error {
-		defer close(pcmTTSCh)
-
 		var ttsSession ai.TTSSession
 		defer func() {
 			if ttsSession != nil {
@@ -189,45 +187,6 @@ func runResponseStage(
 			}
 		}
 
-		// 收集本轮执行过程中产生的全部副作用
-		if req.EffectsCh != nil {
-			for {
-				select {
-				case eff, ok := <-req.EffectsCh:
-					if !ok {
-						goto drainEffectsDone
-					}
-					turnEffects = append(turnEffects, eff)
-				default:
-					goto drainEffectsDone
-				}
-			}
-		drainEffectsDone:
-		}
-
-		hasCloseSession := false
-		for _, eff := range turnEffects {
-			if eff.Type == EffectCloseSession {
-				hasCloseSession = true
-				break
-			}
-		}
-
-		// 若合成了有效回复文本且未结束会话，在语音输出流末尾追加提示音
-		if assistantTextBuilder.Len() > 0 && !hasCloseSession {
-			promptPCM, err := audio.GetPromptPCM()
-			if err != nil {
-				return fmt.Errorf("get prompt pcm: %w", err)
-			}
-			if len(promptPCM) > 0 {
-				select {
-				case pcmTTSCh <- ai.PCMChunk{Data: promptPCM}:
-				case <-gCtx.Done():
-					return gCtx.Err()
-				}
-			}
-		}
-
 		return nil
 	})
 
@@ -241,8 +200,9 @@ func runResponseStage(
 	}
 
 	return &responseStageResult{
-		AssistantText: assistantText,
-		TurnMessages:  llmRes.Messages,
-		Effects:       turnEffects,
+		AssistantText:      assistantText,
+		HasSynthesizedText: assistantTextBuilder.Len() > 0,
+		TurnMessages:       llmRes.Messages,
+		Effects:            drainTurnEffects(req.EffectsCh),
 	}, nil
 }

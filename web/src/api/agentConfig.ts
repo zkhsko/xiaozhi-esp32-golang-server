@@ -9,6 +9,7 @@ export interface AgentConfigItem {
   tts_name?: string
   system_prompt: string
   voice: string
+  prompt_tone_enabled: boolean
   enabled: boolean
   created_at: string
   updated_at: string
@@ -42,6 +43,7 @@ export interface SaveAgentConfigParams {
   tts_config_id: number
   system_prompt: string
   voice: string
+  prompt_tone_enabled?: boolean
   enabled?: boolean
 }
 

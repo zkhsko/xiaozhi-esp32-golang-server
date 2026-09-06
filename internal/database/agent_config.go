@@ -51,7 +51,7 @@ var (
 // AgentConfig 映射 agent_config AI Agent 配置表。
 //
 // 业务用途：
-// 自由组合一条 ASR、一条 LLM 和一条 TTS 配置，独立保存系统提示词和音色。
+// 自由组合一条 ASR、一条 LLM 和一条 TTS 配置，独立保存系统提示词、音色和提示音开关。
 //
 // 字段约束与索引规范：
 // - id: 主键自增。
@@ -61,20 +61,24 @@ var (
 // - tts_config_id: 引用 tts_config.id，非空，普通索引 idx_agent_config_tts_config_id。
 // - system_prompt: Agent 系统提示词，最大 16384 字节。
 // - voice: Agent 使用的 TTS 音色，最大 128 字节。
+// - prompt_tone_enabled: 是否播放就绪提示音，仅在新会话加载。
 // - enabled: 是否启用（true 表示可供设备选择绑定），普通索引 idx_agent_config_enabled。
 // - created_at: 创建时间。
 // - updated_at: 更新时间。
+//
+// 提示音的创建默认值由调用方解析，不使用 ORM 默认值标签，避免显式 false 被覆盖为 true。
 type AgentConfig struct {
-	Id           uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
-	Name         string    `gorm:"column:name;size:128;not null" json:"name"`
-	ASRConfigId  uint64    `gorm:"column:asr_config_id;not null;index:idx_agent_config_asr_config_id" json:"asr_config_id"`
-	LLMConfigId  uint64    `gorm:"column:llm_config_id;not null;index:idx_agent_config_llm_config_id" json:"llm_config_id"`
-	TTSConfigId  uint64    `gorm:"column:tts_config_id;not null;index:idx_agent_config_tts_config_id" json:"tts_config_id"`
-	SystemPrompt string    `gorm:"column:system_prompt;type:text;not null" json:"system_prompt"`
-	Voice        string    `gorm:"column:voice;size:128;not null" json:"voice"`
-	Enabled      bool      `gorm:"column:enabled;not null;index:idx_agent_config_enabled;default:false" json:"enabled"`
-	CreatedAt    time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
-	UpdatedAt    time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
+	Id                uint64    `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
+	Name              string    `gorm:"column:name;size:128;not null" json:"name"`
+	ASRConfigId       uint64    `gorm:"column:asr_config_id;not null;index:idx_agent_config_asr_config_id" json:"asr_config_id"`
+	LLMConfigId       uint64    `gorm:"column:llm_config_id;not null;index:idx_agent_config_llm_config_id" json:"llm_config_id"`
+	TTSConfigId       uint64    `gorm:"column:tts_config_id;not null;index:idx_agent_config_tts_config_id" json:"tts_config_id"`
+	SystemPrompt      string    `gorm:"column:system_prompt;type:text;not null" json:"system_prompt"`
+	Voice             string    `gorm:"column:voice;size:128;not null" json:"voice"`
+	PromptToneEnabled bool      `gorm:"column:prompt_tone_enabled;not null" json:"prompt_tone_enabled"`
+	Enabled           bool      `gorm:"column:enabled;not null;index:idx_agent_config_enabled;default:false" json:"enabled"`
+	CreatedAt         time.Time `gorm:"column:created_at;autoCreateTime" json:"created_at"`
+	UpdatedAt         time.Time `gorm:"column:updated_at;autoUpdateTime" json:"updated_at"`
 }
 
 // TableName 指定 AgentConfig 对应的表名。
@@ -84,11 +88,12 @@ func (AgentConfig) TableName() string {
 
 // AgentSnapshot 包含运行时 Agent 的基本信息。
 type AgentSnapshot struct {
-	Id           uint64 `json:"id"`
-	Name         string `json:"name"`
-	SystemPrompt string `json:"system_prompt"`
-	Voice        string `json:"voice"`
-	Enabled      bool   `json:"enabled"`
+	Id                uint64 `json:"id"`
+	Name              string `json:"name"`
+	SystemPrompt      string `json:"system_prompt"`
+	Voice             string `json:"voice"`
+	PromptToneEnabled bool   `json:"prompt_tone_enabled"`
+	Enabled           bool   `json:"enabled"`
 }
 
 // AgentRuntimeSnapshot 包含运行时 Agent 及其关联 ASR、LLM、TTS 组件的完整配置快照。
@@ -241,7 +246,7 @@ func (d *Database) FindAgentConfigById(ctx context.Context, id uint64) (*AgentCo
 	return &cfg, nil
 }
 
-// UpdateAgentConfigById 按主键 Id 覆盖更新 Agent 配置（更新组合、提示词和音色）。
+// UpdateAgentConfigById 按主键 Id 覆盖更新 Agent 配置。
 // 更新结果影响行数为 0 时返回 ErrAgentConfigNotFound。
 func (d *Database) UpdateAgentConfigById(ctx context.Context, cfg *AgentConfig) error {
 	if d == nil || d.gormDB == nil {
@@ -269,14 +274,15 @@ func (d *Database) UpdateAgentConfigById(ctx context.Context, cfg *AgentConfig) 
 		}
 
 		updates := map[string]any{
-			"name":          strings.TrimSpace(cfg.Name),
-			"asr_config_id": cfg.ASRConfigId,
-			"llm_config_id": cfg.LLMConfigId,
-			"tts_config_id": cfg.TTSConfigId,
-			"system_prompt": strings.TrimSpace(cfg.SystemPrompt),
-			"voice":         strings.TrimSpace(cfg.Voice),
-			"enabled":       cfg.Enabled,
-			"updated_at":    time.Now(),
+			"name":                strings.TrimSpace(cfg.Name),
+			"asr_config_id":       cfg.ASRConfigId,
+			"llm_config_id":       cfg.LLMConfigId,
+			"tts_config_id":       cfg.TTSConfigId,
+			"system_prompt":       strings.TrimSpace(cfg.SystemPrompt),
+			"voice":               strings.TrimSpace(cfg.Voice),
+			"prompt_tone_enabled": cfg.PromptToneEnabled,
+			"enabled":             cfg.Enabled,
+			"updated_at":          time.Now(),
 		}
 
 		res := tx.Model(&AgentConfig{}).Where("id = ?", cfg.Id).Updates(updates)

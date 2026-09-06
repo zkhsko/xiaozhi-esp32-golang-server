@@ -127,7 +127,7 @@ func decodeEmbeddedPrompt(oggData []byte) ([]byte, error) {
 }
 
 // GetPromptPCM 返回内嵌提示音的 24 kHz 单声道 16-bit PCM 数据。
-// 返回值为独立切片拷贝，确保跨并发安全。
+// 成功时返回非空的独立切片拷贝，确保跨并发安全。
 func GetPromptPCM() ([]byte, error) {
 	initPromptData()
 	if promptInitErr != nil {

@@ -505,11 +505,12 @@ func (d *Database) ResolveAgentRuntimeSnapshotByDeviceType(ctx context.Context, 
 	// 内存组装 Snapshot
 	return &AgentRuntimeSnapshot{
 		Agent: AgentSnapshot{
-			Id:           agent.Id,
-			Name:         agent.Name,
-			SystemPrompt: agent.SystemPrompt,
-			Voice:        agent.Voice,
-			Enabled:      agent.Enabled,
+			Id:                agent.Id,
+			Name:              agent.Name,
+			SystemPrompt:      agent.SystemPrompt,
+			Voice:             agent.Voice,
+			PromptToneEnabled: agent.PromptToneEnabled,
+			Enabled:           agent.Enabled,
 		},
 		ASRConfig: asr,
 		LLMConfig: llm,
