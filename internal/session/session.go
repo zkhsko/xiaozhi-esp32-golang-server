@@ -15,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
+	"xiaozhi-esp32-golang-server/internal/audio"
 	"xiaozhi-esp32-golang-server/internal/logger"
 	"xiaozhi-esp32-golang-server/internal/voice"
 )
@@ -63,6 +64,7 @@ type runtimeState struct {
 	history          *ConversationHistory
 	helloTimer       *time.Timer
 	listeningTimer   *time.Timer
+	promptOnNextAuto bool
 }
 
 // Session 负责管理单个 WebSocket 连接的生命周期、协议事件循环与 Actor 状态机。
@@ -366,10 +368,14 @@ func (s *Session) handleTextMessage(data []byte) bool {
 		return false
 
 	case KindListenDetect:
-		s.logger.Debug("client wake detect message",
+		s.logger.Info("client wake detect message",
 			"serial_number", s.serialNumber,
 			"text", msg.DetectText,
 		)
+		if s.runtime.state == StateReady {
+			s.runtime.promptOnNextAuto = false
+			s.playGreetingPrompt()
+		}
 		return false
 
 	default:
@@ -433,6 +439,7 @@ func (s *Session) handleHello(data []byte) bool {
 	}
 
 	s.runtime.state = StateReady
+	s.runtime.promptOnNextAuto = true
 
 	// 客户端若支持 MCP，使用 session 上下文启动后台发现
 	if helloMsg.SupportsMCP() && s.mcpBridge != nil && s.outbound != nil {
@@ -463,6 +470,15 @@ func (s *Session) handleListenStart(mode string) {
 		return
 	}
 
+	// manual 模式明确不需要提示音
+	if strings.EqualFold(mode, "manual") {
+		s.runtime.promptOnNextAuto = false
+	} else if strings.EqualFold(mode, "auto") && s.runtime.promptOnNextAuto {
+		// 仅在 auto 模式且处于建连初始状态时下发就绪提示音
+		s.runtime.promptOnNextAuto = false
+		s.playGreetingPrompt()
+	}
+
 	if s.runtime.state == StateReady {
 		s.startTurn(mode, nil, false)
 		return
@@ -474,8 +490,12 @@ func (s *Session) handleListenStart(mode string) {
 			return
 		}
 		// 已进入回答播报阶段，暂存下一轮
-		s.runtime.pendingTurn = &PendingTurn{
-			mode: mode,
+		if s.runtime.pendingTurn == nil {
+			s.runtime.pendingTurn = &PendingTurn{
+				mode: mode,
+			}
+		} else {
+			s.runtime.pendingTurn.mode = mode
 		}
 	}
 }
@@ -547,17 +567,48 @@ func (s *Session) handleAudioFrame(data []byte) {
 	}
 
 	// 已处于回答阶段（turnInputClosed=true）
-	if s.runtime.pendingTurn != nil {
-		capacity := s.cfg.ASRPCMQueueCapacity
-		if len(s.runtime.pendingTurn.audioBuffers) < capacity {
-			s.runtime.pendingTurn.audioBuffers = append(s.runtime.pendingTurn.audioBuffers, data)
-		} else {
-			s.logger.Error("pending turn audio buffer overflow",
-				"serial_number", s.serialNumber,
-			)
-			s.closeWithReason(websocket.StatusPolicyViolation, "pending audio buffer overflow")
+	if s.runtime.pendingTurn == nil {
+		s.runtime.pendingTurn = &PendingTurn{
+			mode: "auto",
 		}
 	}
+	capacity := s.cfg.ASRPCMQueueCapacity
+	if len(s.runtime.pendingTurn.audioBuffers) < capacity {
+		s.runtime.pendingTurn.audioBuffers = append(s.runtime.pendingTurn.audioBuffers, data)
+	} else {
+		s.logger.Error("pending turn audio buffer overflow",
+			"serial_number", s.serialNumber,
+		)
+		s.closeWithReason(websocket.StatusPolicyViolation, "pending audio buffer overflow")
+	}
+}
+
+// playGreetingPrompt 异步以 Session 作用域（turnId: 0）下发就绪提示音。
+func (s *Session) playGreetingPrompt() {
+	if s.outbound == nil || s.runtime.state == StateClosed {
+		return
+	}
+
+	pkts, err := audio.GetPromptOpusPackets()
+	if err != nil || len(pkts) == 0 {
+		s.logger.Warn("failed to load prompt opus packets for greeting",
+			"serial_number", s.serialNumber,
+			"error", err,
+		)
+		return
+	}
+
+	sessionId := s.runtime.sessionId
+	go func() {
+		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+		defer cancel()
+		if err := s.outbound.PlayPromptSession(ctx, sessionId, pkts); err != nil {
+			s.logger.Warn("play greeting prompt failed",
+				"serial_number", s.serialNumber,
+				"error", err,
+			)
+		}
+	}()
 }
 
 // startTurn 启动新一轮语音问答。

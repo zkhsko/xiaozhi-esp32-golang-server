@@ -18,6 +18,10 @@ var (
 	promptOnce    sync.Once
 	promptPCMData []byte
 	promptInitErr error
+
+	promptOpusOnce    sync.Once
+	promptOpusPackets [][]byte
+	promptOpusErr     error
 )
 
 // initPromptData 在首次调用时解码内嵌的 prompt.opus 文件并生成标准 PCM 数据。
@@ -131,5 +135,52 @@ func GetPromptPCM() ([]byte, error) {
 	}
 	res := make([]byte, len(promptPCMData))
 	copy(res, promptPCMData)
+	return res, nil
+}
+
+// GetPromptOpusPackets 返回内嵌提示音预编码后的 24 kHz 60 ms 单声道 Opus 数据包列表。
+// 返回值为切片拷贝，确保跨并发读写安全。
+func GetPromptOpusPackets() ([][]byte, error) {
+	promptOpusOnce.Do(func() {
+		pcm, err := GetPromptPCM()
+		if err != nil {
+			promptOpusErr = fmt.Errorf("get prompt pcm: %w", err)
+			return
+		}
+
+		enc, err := NewEncoder(DefaultMaxOpusPacketBytes)
+		if err != nil {
+			promptOpusErr = fmt.Errorf("create prompt encoder: %w", err)
+			return
+		}
+		defer enc.Close()
+
+		streamEnc := NewStreamEncoder(enc)
+		defer streamEnc.Close()
+
+		pkts, err := streamEnc.Feed(pcm)
+		if err != nil {
+			promptOpusErr = fmt.Errorf("encode prompt pcm: %w", err)
+			return
+		}
+
+		flushPkts, err := streamEnc.Flush()
+		if err != nil {
+			promptOpusErr = fmt.Errorf("flush prompt encoder: %w", err)
+			return
+		}
+
+		promptOpusPackets = append(pkts, flushPkts...)
+	})
+
+	if promptOpusErr != nil {
+		return nil, promptOpusErr
+	}
+
+	res := make([][]byte, len(promptOpusPackets))
+	for i, p := range promptOpusPackets {
+		res[i] = make([]byte, len(p))
+		copy(res[i], p)
+	}
 	return res, nil
 }

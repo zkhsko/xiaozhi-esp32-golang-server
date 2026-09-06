@@ -210,6 +210,63 @@ func (a *OutboundActor) SendTextSession(ctx context.Context, payload []byte) err
 	})
 }
 
+// PlayPromptSession 以 Session 作用域（turnId: 0）同步下发提示音（tts.start -> opus -> tts.stop）。
+func (a *OutboundActor) PlayPromptSession(ctx context.Context, sessionId string, opusPackets [][]byte) error {
+	if len(opusPackets) == 0 {
+		return nil
+	}
+
+	startData, err := EncodeTTSStartMessage(sessionId)
+	if err != nil {
+		return err
+	}
+	stopData, err := EncodeTTSStopMessage(sessionId)
+	if err != nil {
+		return err
+	}
+
+	if err := a.SendTextSession(ctx, startData); err != nil {
+		return err
+	}
+
+	const frameInterval = 60 * time.Millisecond
+	nextTick := time.Now().Add(frameInterval)
+
+	for i, pkt := range opusPackets {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		err := a.sendBatchSync(ctx, outboundBatch{
+			turnId: 0,
+			items: []outboundItem{
+				{typ: itemBinary, payload: pkt},
+			},
+		})
+		if err != nil {
+			return err
+		}
+
+		if i < len(opusPackets)-1 {
+			waitDuration := time.Until(nextTick)
+			if waitDuration > 0 {
+				timer := time.NewTimer(waitDuration)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				case <-timer.C:
+				}
+			}
+			nextTick = time.Now().Add(frameInterval)
+		}
+	}
+
+	return a.SendTextSession(ctx, stopData)
+}
+
 func (a *OutboundActor) sendBatchSync(ctx context.Context, b outboundBatch) error {
 	if ctx == nil {
 		ctx = context.Background()

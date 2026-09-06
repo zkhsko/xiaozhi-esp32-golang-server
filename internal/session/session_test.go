@@ -32,13 +32,23 @@ func createValid16kOpusPacket() []byte {
 }
 
 type mockASRClient struct {
-	text string
-	err  error
+	text   string
+	err    error
+	onFeed func([]byte)
 }
 
 func (m *mockASRClient) Recognize(ctx context.Context, req ai.ASRRequest, pcm <-chan []byte) (string, error) {
 	if m.err != nil {
 		return "", m.err
+	}
+	if m.onFeed != nil && pcm != nil {
+		select {
+		case chunk, ok := <-pcm:
+			if ok {
+				m.onFeed(chunk)
+			}
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 	return m.text, nil
 }
@@ -797,5 +807,325 @@ func (c *interactiveWSConn) Write(ctx context.Context, typ websocket.MessageType
 		c.onWrite(p)
 	}
 	return nil
+}
+
+func TestSession_GreetingPrompt_AutoMode_PlaysPrompt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	asr := &mockASRClient{text: "你好"}
+	llm := &mockLLMClient{chunks: []ai.LLMChunk{{Text: "你好呀"}}}
+	tts := &mockTTSClient{}
+
+	sess := NewSession(ctx, Options{
+		Conn:         nil,
+		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+		SerialNumber: "SN-12345678",
+		ASRClient:    asr,
+		LLMClient:    llm,
+		TTSClient:    tts,
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	if !waitForCondition(time.Second, func() bool { return sess.SessionId() != "" }) {
+		t.Fatal("handshake timed out")
+	}
+
+	// 握手阶段职责分离，不应下发提示音（只有 1 条 ServerHello）
+	if len(conn.getMessages()) != 1 {
+		t.Fatalf("expected only 1 ServerHello message during handshake, got %d", len(conn.getMessages()))
+	}
+
+	// 客户端进入 auto 模式的 listen.start
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     []byte(`{"type":"listen","state":"start","mode":"auto"}`),
+	})
+
+	// 等待 auto 模式下的就绪提示音完整下发 (tts.start, opus frames, tts.stop)
+	ok := waitForCondition(2*time.Second, func() bool {
+		msgs := conn.getMessages()
+		hasStart := false
+		hasAudio := false
+		hasStop := false
+		for _, m := range msgs {
+			if bytes.Contains(m.payload, []byte(`"state":"start"`)) {
+				hasStart = true
+			}
+			if m.msgType == websocket.MessageBinary && len(m.payload) > 0 {
+				hasAudio = true
+			}
+			if bytes.Contains(m.payload, []byte(`"state":"stop"`)) {
+				hasStop = true
+			}
+		}
+		return hasStart && hasAudio && hasStop
+	})
+
+	if !ok {
+		t.Fatalf("expected prompt in auto mode, got messages: %d", len(conn.getMessages()))
+	}
+
+	// 验证提示音为 Session 作用域，不污染历史
+	if sess.runtime.history.Len() != 0 {
+		t.Fatalf("expected empty conversation history for session prompt, got %d", sess.runtime.history.Len())
+	}
+
+	sess.Close()
+	<-sess.Done()
+}
+
+func TestSession_GreetingPrompt_ManualMode_NoPrompt(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	asr := &mockASRClient{text: ""}
+	llm := &mockLLMClient{chunks: []ai.LLMChunk{{Text: "你好呀"}}}
+	tts := &mockTTSClient{}
+
+	sess := NewSession(ctx, Options{
+		Conn:         nil,
+		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+		SerialNumber: "SN-12345678",
+		ASRClient:    asr,
+		LLMClient:    llm,
+		TTSClient:    tts,
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	if !waitForCondition(time.Second, func() bool { return sess.SessionId() != "" }) {
+		t.Fatal("handshake timed out")
+	}
+
+	// 发送 manual 模式的 listen.start
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     []byte(`{"type":"listen","state":"start","mode":"manual"}`),
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	// manual 模式下不应触发任何下行提示音
+	msgs := conn.getMessages()
+	for _, m := range msgs {
+		if bytes.Contains(m.payload, []byte(`"state":"start"`)) || bytes.Contains(m.payload, []byte(`"state":"stop"`)) {
+			t.Fatalf("manual mode should not trigger prompt audio, but got: %s", string(m.payload))
+		}
+	}
+
+	sess.Close()
+	<-sess.Done()
+}
+
+func TestSession_GreetingPrompt_TransitionToTurn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	var receivedAudioChunks [][]byte
+	asr := &mockASRClient{
+		text: "我想听音乐",
+		onFeed: func(data []byte) {
+			receivedAudioChunks = append(receivedAudioChunks, data)
+		},
+	}
+	llm := &mockLLMClient{
+		chunks: []ai.LLMChunk{
+			{Text: "好的，这就为您播放音乐。"},
+		},
+	}
+	tts := &mockTTSClient{}
+
+	sess := NewSession(ctx, Options{
+		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+		SerialNumber: "SN-12345678",
+		ASRClient:    asr,
+		LLMClient:    llm,
+		TTSClient:    tts,
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	// 1. 发送 hello
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	if !waitForCondition(time.Second, func() bool { return sess.SessionId() != "" }) {
+		t.Fatal("session handshake timed out")
+	}
+
+	// 2. 发送 listen.start (auto) 开启首轮问答 Turn 1
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     []byte(`{"type":"listen","state":"start","mode":"auto"}`),
+	})
+
+	validOpus := createValid16kOpusPacket()
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: true,
+		data:     validOpus,
+	})
+
+	// 3. 等待后续正式问答轮次完成
+	ok := waitForCondition(3*time.Second, func() bool {
+		return sess.runtime.history.Len() == 2
+	})
+
+	if !ok {
+		t.Fatalf("expected 2 history entries after user turn, got %d", sess.runtime.history.Len())
+	}
+
+	if sess.runtime.currentTurnId != 1 {
+		t.Fatalf("expected first conversation turn to have turnId 1, got %d", sess.runtime.currentTurnId)
+	}
+
+	if len(receivedAudioChunks) == 0 {
+		t.Fatal("expected audio chunk to be fed into ASR")
+	}
+
+	sess.Close()
+	<-sess.Done()
+}
+
+func TestSession_GreetingPrompt_OnWakeWordDetect(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	sess := NewSession(ctx, Options{
+		Conn:         nil,
+		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+		SerialNumber: "SN-12345678",
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	// 1. 握手
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	ok := waitForCondition(time.Second, func() bool {
+		return sess.SessionId() != "" && sess.runtime.state == StateReady
+	})
+	if !ok {
+		t.Fatal("handshake timed out")
+	}
+
+	initialMsgCount := len(conn.getMessages())
+	if initialMsgCount != 1 {
+		t.Fatalf("expected exactly 1 handshake response, got %d", initialMsgCount)
+	}
+
+	// 2. 发送 wake detect 消息
+	detectMsg := []byte(`{"type":"listen","state":"detect","text":"你好小智"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     detectMsg,
+	})
+
+	// 3. 验证触发了 Session 级 Greeting 提示音 (增加了新的 tts.start, 音频帧, tts.stop)
+	ok = waitForCondition(2*time.Second, func() bool {
+		return len(conn.getMessages()) > initialMsgCount && sess.runtime.state == StateReady
+	})
+
+	if !ok {
+		t.Fatalf("expected greeting prompt triggered after wake detect, initial msgs: %d, current msgs: %d", initialMsgCount, len(conn.getMessages()))
+	}
+
+	if sess.runtime.currentTurnId != 0 {
+		t.Fatalf("expected currentTurnId to remain 0 after wake word prompt, got %d", sess.runtime.currentTurnId)
+	}
+
+	sess.Close()
+	<-sess.Done()
 }
 

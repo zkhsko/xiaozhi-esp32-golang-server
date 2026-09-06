@@ -92,3 +92,30 @@ func TestDecodeEmbeddedPrompt_InvalidData(t *testing.T) {
 		t.Errorf("expected error for invalid ogg data, got nil")
 	}
 }
+
+func TestGetPromptOpusPackets_Basic(t *testing.T) {
+	pkts, err := GetPromptOpusPackets()
+	if err != nil {
+		t.Fatalf("GetPromptOpusPackets failed: %v", err)
+	}
+
+	if len(pkts) == 0 {
+		t.Fatalf("expected non-empty opus packets, got 0")
+	}
+
+	for i, pkt := range pkts {
+		if len(pkt) == 0 {
+			t.Errorf("packet %d is empty", i)
+		}
+	}
+
+	// 验证副本独立性
+	pkts[0][0] ^= 0xFF
+	pktsSecond, err := GetPromptOpusPackets()
+	if err != nil {
+		t.Fatalf("second call failed: %v", err)
+	}
+	if pktsSecond[0][0] == pkts[0][0] {
+		t.Errorf("expected GetPromptOpusPackets to return independent copy")
+	}
+}
