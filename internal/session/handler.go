@@ -133,11 +133,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RejectUpgrade(w, r, h.logger, err)
 		return
 	}
-	llmClient, err := factory.CreateLLMClient(&snapshot.LLMConfig)
+	llmOpts := ai.LLMOptions{
+		Provider:          snapshot.LLMConfig.Provider,
+		Endpoint:          snapshot.LLMConfig.Endpoint,
+		APIKey:            snapshot.LLMConfig.APIKey,
+		Model:             snapshot.LLMConfig.Model,
+		ProxyURL:          snapshot.LLMConfig.ProxyURL,
+		FirstTokenTimeout: time.Duration(snapshot.LLMConfig.FirstTokenTimeoutMS) * time.Millisecond,
+		OverallTimeout:    time.Duration(snapshot.LLMConfig.OverallTimeoutMS) * time.Millisecond,
+	}
+	llmClient, err := factory.CreateLLMClient(llmOpts)
 	if err != nil {
 		RejectUpgrade(w, r, h.logger, err)
 		return
 	}
+	defer func() {
+		_ = llmClient.Close()
+	}()
+
 	ttsOpts := ai.TTSOptions{
 		Provider:       snapshot.TTSConfig.Provider,
 		Endpoint:       snapshot.TTSConfig.Endpoint,

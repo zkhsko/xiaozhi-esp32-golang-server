@@ -30,30 +30,26 @@ func CreateASRClient(cfg *database.ASRConfig) (ai.ASRClient, error) {
 	}
 }
 
-// CreateLLMClient 根据数据库 LLM 配置创建对应的大语言模型客户端。
-func CreateLLMClient(cfg *database.LLMConfig) (ai.LLMClient, error) {
-	if cfg == nil {
-		return nil, fmt.Errorf("llm config is nil")
-	}
-
-	provider := strings.TrimSpace(cfg.Provider)
-	switch strings.ToLower(provider) {
-	case "dashscope", "":
-		return dashscope.NewLLMClient(cfg)
+// CreateLLMClient 根据 LLM 运行时配置创建对应的大语言模型客户端。
+func CreateLLMClient(opts ai.LLMOptions) (ai.ManagedLLMClient, error) {
+	opts = opts.Normalized()
+	switch opts.Provider {
+	case "dashscope":
+		return dashscope.NewLLMClient(opts)
 	case "deepseek":
-		return deepseek.NewLLMClient(cfg)
+		return deepseek.NewLLMClient(opts)
 	case "kimi":
-		return kimi.NewLLMClient(cfg)
+		return kimi.NewLLMClient(opts)
 	case "zai":
-		return zai.NewLLMClient(cfg)
+		return zai.NewLLMClient(opts)
 	case "openrouter":
-		return openrouter.NewLLMClient(cfg)
+		return openrouter.NewLLMClient(opts)
 	case "xai":
-		return xai.NewLLMClient(cfg)
+		return xai.NewLLMClient(opts)
 	case "anthropic":
-		return anthropic.NewLLMClient(cfg)
+		return anthropic.NewLLMClient(opts)
 	default:
-		return nil, fmt.Errorf("unsupported llm provider: %s", provider)
+		return nil, fmt.Errorf("unsupported llm provider: %s", opts.Provider)
 	}
 }
 

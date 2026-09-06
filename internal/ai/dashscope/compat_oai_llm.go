@@ -2,14 +2,10 @@ package dashscope
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	genkitai "github.com/firebase/genkit/go/ai"
@@ -18,7 +14,6 @@ import (
 	"github.com/openai/openai-go/option"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
-	"xiaozhi-esp32-golang-server/internal/database"
 )
 
 func boolPtr(b bool) *bool {
@@ -27,80 +22,66 @@ func boolPtr(b bool) *bool {
 
 // LLMClient 实现基于 Genkit DashScope 插件的大语言模型客户端。
 type LLMClient struct {
-	endpoint          string
-	apiKey            string
 	model             string
 	firstTokenTimeout time.Duration
 	overallTimeout    time.Duration
 	genkit            *genkit.Genkit
+	transport         *http.Transport
 }
 
-// NewLLMClient 基于数据库 LLM 配置实体构造 DashScope LLM 客户端实例。
-func NewLLMClient(cfg *database.LLMConfig, opts ...option.RequestOption) (*LLMClient, error) {
-	if cfg == nil {
-		return nil, errors.New("llm config cannot be nil")
+var _ ai.ManagedLLMClient = (*LLMClient)(nil)
+
+// NewLLMClient 基于运行时配置构造 DashScope LLM 客户端实例。
+func NewLLMClient(opts ai.LLMOptions) (*LLMClient, error) {
+	opts = opts.Normalized()
+	if err := opts.Validate(); err != nil {
+		return nil, err
 	}
-	if strings.TrimSpace(cfg.APIKey) == "" {
+	if opts.APIKey == "" {
 		return nil, errors.New("dashscope api key is required")
-	}
-	if strings.TrimSpace(cfg.Endpoint) == "" {
-		return nil, errors.New("dashscope llm endpoint is required")
-	}
-	if strings.TrimSpace(cfg.Model) == "" {
-		return nil, errors.New("dashscope llm model is required")
-	}
-
-	firstTokenTimeout := time.Duration(cfg.FirstTokenTimeoutMS) * time.Millisecond
-	if firstTokenTimeout <= 0 {
-		firstTokenTimeout = 15 * time.Second
-	}
-
-	overallTimeout := time.Duration(cfg.OverallTimeoutMS) * time.Millisecond
-	if overallTimeout <= 0 {
-		overallTimeout = 60 * time.Second
-	}
-
-	if overallTimeout <= firstTokenTimeout {
-		return nil, fmt.Errorf("llm overall timeout (%v) must be greater than first token timeout (%v)", overallTimeout, firstTokenTimeout)
-	}
-
-	var httpClient *http.Client
-	if strings.TrimSpace(cfg.ProxyURL) != "" {
-		proxyURL, err := url.Parse(strings.TrimSpace(cfg.ProxyURL))
-		if err != nil {
-			return nil, fmt.Errorf("parse proxy url: %w", err)
-		}
-		httpClient = &http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			},
-		}
 	}
 
 	pluginOpts := []option.RequestOption{
-		option.WithBaseURL(strings.TrimSpace(cfg.Endpoint)),
+		option.WithBaseURL(opts.Endpoint),
 		option.WithMaxRetries(0),
 	}
-	if httpClient != nil {
-		pluginOpts = append(pluginOpts, option.WithHTTPClient(httpClient))
+
+	var transport *http.Transport
+	if opts.ProxyURL != "" {
+		proxyURL, err := url.Parse(opts.ProxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse proxy url: %w", err)
+		}
+		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			return nil, errors.New("default http transport has unexpected type")
+		}
+		transport = defaultTransport.Clone()
+		transport.Proxy = http.ProxyURL(proxyURL)
+		pluginOpts = append(pluginOpts, option.WithHTTPClient(&http.Client{Transport: transport}))
 	}
-	pluginOpts = append(pluginOpts, opts...)
 
 	plugin := &dashscope.DashScope{
-		APIKey: strings.TrimSpace(cfg.APIKey),
+		APIKey: opts.APIKey,
 		Opts:   pluginOpts,
 	}
-
 	g := genkit.Init(context.Background(), genkit.WithPlugins(plugin))
 
 	return &LLMClient{
-		endpoint:          strings.TrimSpace(cfg.Endpoint),
-		apiKey:            strings.TrimSpace(cfg.APIKey),
-		model:             strings.TrimSpace(cfg.Model),
-		firstTokenTimeout: firstTokenTimeout,
-		overallTimeout:    overallTimeout,
+		model:             opts.Model,
+		firstTokenTimeout: opts.FirstTokenTimeout,
+		overallTimeout:    opts.OverallTimeout,
 		genkit:            g,
+		transport:         transport,
 	}, nil
+}
+
+// Close 释放当前客户端拥有的 HTTP 空闲连接资源。
+func (c *LLMClient) Close() error {
+	if c != nil && c.transport != nil {
+		c.transport.CloseIdleConnections()
+	}
+	return nil
 }
 
 // Generate 基于上下文、请求与流式增量通道执行完整的模型生成与工具调用循环。
@@ -116,287 +97,65 @@ func (c *LLMClient) Generate(
 		return ai.LLMResult{}, errors.New("messages cannot be empty")
 	}
 
-	genkitMessages := make([]*genkitai.Message, 0, len(request.Messages))
-	for _, msg := range request.Messages {
-		switch msg.Role {
-		case ai.RoleSystem:
-			genkitMessages = append(genkitMessages, genkitai.NewSystemTextMessage(msg.Content))
-		case ai.RoleUser:
-			genkitMessages = append(genkitMessages, genkitai.NewUserTextMessage(msg.Content))
-		case ai.RoleAssistant:
-			if len(msg.ToolCalls) > 0 {
-				parts := make([]*genkitai.Part, 0, len(msg.ToolCalls)+1)
-				if msg.Content != "" {
-					parts = append(parts, genkitai.NewTextPart(msg.Content))
-				}
-				for _, tc := range msg.ToolCalls {
-					argVal := tc.Arguments
-					if str, ok := argVal.(string); ok && strings.TrimSpace(str) != "" {
-						var parsed map[string]any
-						if err := json.Unmarshal([]byte(str), &parsed); err == nil {
-							argVal = parsed
-						}
-					}
-					parts = append(parts, genkitai.NewToolRequestPart(&genkitai.ToolRequest{
-						Name:  tc.Name,
-						Ref:   tc.Id,
-						Input: argVal,
-					}))
-				}
-				genkitMessages = append(genkitMessages, genkitai.NewModelMessage(parts...))
-			} else {
-				genkitMessages = append(genkitMessages, genkitai.NewModelTextMessage(msg.Content))
-			}
-		case ai.RoleTool:
-			var outputVal any = msg.Content
-			if msg.Content != "" {
-				var parsed any
-				if err := json.Unmarshal([]byte(msg.Content), &parsed); err == nil {
-					outputVal = parsed
-				}
-			}
-			part := genkitai.NewToolResponsePart(&genkitai.ToolResponse{
-				Name:   msg.ToolName,
-				Ref:    msg.ToolCallId,
-				Output: outputVal,
-			})
-			genkitMessages = append(genkitMessages, genkitai.NewMessage(genkitai.RoleTool, nil, part))
-		default:
-			genkitMessages = append(genkitMessages, genkitai.NewUserTextMessage(msg.Content))
-		}
+	genkitMessages, err := toGenkitMessages(request.Messages)
+	if err != nil {
+		return ai.LLMResult{}, err
 	}
-
-	// 统一工具适配：将中立的 ai.Tool 结构转换为 Genkit 原生的 ToolRef。
-	// 无论该工具是服务端内置函数还是远程 ESP32 硬件 MCP 外设，均通过统一的 WithInputSchema 声明参数契约，
-	// 并将执行体挂载到 tool.Run 闭包。在模型生成过程中，Genkit 统一负责多轮工具调用派发与 role=tool 回填。
-	genkitTools := make([]genkitai.ToolRef, 0, len(request.Tools))
-	for _, t := range request.Tools {
-		tool := t
-		toolOpts := make([]genkitai.ToolOption, 0, 1)
-		if len(tool.Parameters) > 0 {
-			toolOpts = append(toolOpts, genkitai.WithInputSchema(tool.Parameters))
-		}
-		gTool := genkitai.NewTool(tool.Name, tool.Description, func(tc *genkitai.ToolContext, input any) (any, error) {
-			if tool.Run != nil {
-				return tool.Run(tc.Context, input)
-			}
-			return nil, fmt.Errorf("tool %s has no run handler", tool.Name)
-		}, toolOpts...)
-		genkitTools = append(genkitTools, gTool)
-	}
-
-	var currentIteration atomic.Int32
-	var firstTokenTimedOut atomic.Bool
-
-	timeoutMiddleware := genkitai.MiddlewareFunc(func(mCtx context.Context) (*genkitai.Hooks, error) {
-		return &genkitai.Hooks{
-			WrapGenerate: func(wCtx context.Context, params *genkitai.GenerateParams, next genkitai.GenerateNext) (*genkitai.ModelResponse, error) {
-				currentIteration.Store(int32(params.Iteration))
-				return next(wCtx, params)
-			},
-			WrapModel: func(wCtx context.Context, params *genkitai.ModelParams, next genkitai.ModelNext) (*genkitai.ModelResponse, error) {
-				modelCtx, modelCancel := context.WithCancel(wCtx)
-				defer modelCancel()
-
-				var timerMu sync.Mutex
-				var firstTokenReceived bool
-				var modelTimedOut bool
-
-				timer := time.AfterFunc(c.firstTokenTimeout, func() {
-					timerMu.Lock()
-					if !firstTokenReceived {
-						modelTimedOut = true
-						firstTokenTimedOut.Store(true)
-						modelCancel()
-					}
-					timerMu.Unlock()
-				})
-				defer func() {
-					timerMu.Lock()
-					timer.Stop()
-					timerMu.Unlock()
-				}()
-
-				origCallback := params.Callback
-				params.Callback = func(cbCtx context.Context, chunk *genkitai.ModelResponseChunk) error {
-					timerMu.Lock()
-					if !firstTokenReceived {
-						hasContent := (chunk != nil) && (chunk.Text() != "" || chunk.Reasoning() != "")
-						if !hasContent && chunk != nil {
-							for _, p := range chunk.Content {
-								if p != nil && (p.IsText() || p.IsToolRequest() || p.IsReasoning()) {
-									hasContent = true
-									break
-								}
-							}
-						}
-						if hasContent {
-							firstTokenReceived = true
-							timer.Stop()
-						}
-					}
-					timerMu.Unlock()
-
-					if origCallback != nil {
-						return origCallback(cbCtx, chunk)
-					}
-					return nil
-				}
-
-				resp, err := next(modelCtx, params)
-				if err != nil {
-					timerMu.Lock()
-					timedOut := modelTimedOut
-					timerMu.Unlock()
-					if timedOut {
-						return nil, fmt.Errorf("%w: first token timeout (%v)", ai.ErrFirstTokenTimeout, c.firstTokenTimeout)
-					}
-					return nil, err
-				}
-				return resp, nil
-			},
-		}, nil
-	})
-
-	streamCallback := func(cbCtx context.Context, chunk *genkitai.ModelResponseChunk) error {
-		if chunk == nil {
-			return nil
-		}
-		if chunk.Role != "" && chunk.Role != genkitai.RoleModel {
-			return nil
-		}
-		text := chunk.Text()
-		if text == "" {
-			return nil
-		}
-		if chunks != nil {
-			select {
-			case chunks <- ai.LLMChunk{
-				Text:      text,
-				Iteration: int(currentIteration.Load()),
-			}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		return nil
+	genkitTools, err := toGenkitTools(request.Tools)
+	if err != nil {
+		return ai.LLMResult{}, err
 	}
 
 	overallCtx, overallCancel := context.WithTimeout(ctx, c.overallTimeout)
 	defer overallCancel()
 
+	observer := newGenerationObserver()
 	maxTurns := request.MaxTurns
 	if maxTurns <= 0 {
-		maxTurns = 8
-	}
-
-	chatCfg := &dashscope.ChatConfig{
-		EnableThinking: boolPtr(false),
+		maxTurns = ai.DefaultLLMMaxTurns
 	}
 
 	resp, err := genkit.Generate(
 		overallCtx,
 		c.genkit,
-		genkitai.WithModel(dashscope.ModelRef(c.model, chatCfg)),
+		genkitai.WithModel(dashscope.ModelRef(c.model, &dashscope.ChatConfig{EnableThinking: boolPtr(false)})),
 		genkitai.WithMessages(genkitMessages...),
 		genkitai.WithTools(genkitTools...),
 		genkitai.WithMaxTurns(maxTurns),
-		genkitai.WithUse(timeoutMiddleware),
-		genkitai.WithStreaming(streamCallback),
+		genkitai.WithUse(observer.timeoutMiddleware(c.firstTokenTimeout)),
+		genkitai.WithStreaming(observer.streamCallback(overallCtx, chunks)),
 	)
-
 	if err != nil {
-		if errors.Is(err, ai.ErrFirstTokenTimeout) || firstTokenTimedOut.Load() {
-			return ai.LLMResult{}, fmt.Errorf("%w (%v): %w", ai.ErrFirstTokenTimeout, c.firstTokenTimeout, err)
-		}
-		if errors.Is(err, genkitai.ErrMaxTurnsExceeded) {
-			return ai.LLMResult{}, fmt.Errorf("%w: %w", ai.ErrMaxTurnsExceeded, err)
-		}
-		if errors.Is(overallCtx.Err(), context.DeadlineExceeded) {
-			return ai.LLMResult{}, fmt.Errorf("%w (%v): %w", ai.ErrOverallTimeout, c.overallTimeout, overallCtx.Err())
-		}
-		if errors.Is(ctx.Err(), context.Canceled) {
-			return ai.LLMResult{}, ctx.Err()
-		}
-		return ai.LLMResult{}, fmt.Errorf("dashscope generate: %w", err)
+		return ai.LLMResult{}, c.normalizeGenerateError(ctx, overallCtx, observer, err)
 	}
-
 	if resp == nil {
 		return ai.LLMResult{}, errors.New("empty response from dashscope")
 	}
 
-	var newMessages []ai.Message
-	hist := resp.History()
-	if len(hist) > len(genkitMessages) {
-		for _, m := range hist[len(genkitMessages):] {
-			newMessages = append(newMessages, convertGenkitMessageToAIMessage(m))
-		}
+	result, err := toLLMResult(resp, len(genkitMessages))
+	if err != nil {
+		return ai.LLMResult{}, fmt.Errorf("convert dashscope response: %w", err)
 	}
-	if len(newMessages) == 0 && resp.Text() != "" {
-		newMessages = []ai.Message{
-			{Role: ai.RoleAssistant, Content: resp.Text()},
-		}
-	}
-
-	return ai.LLMResult{
-		FinalText: resp.Text(),
-		Messages:  newMessages,
-	}, nil
+	return result, nil
 }
 
-// convertGenkitMessageToAIMessage 将 Genkit 内部消息实体转换为中立的 ai.Message。
-func convertGenkitMessageToAIMessage(m *genkitai.Message) ai.Message {
-	if m == nil {
-		return ai.Message{}
+func (c *LLMClient) normalizeGenerateError(
+	ctx context.Context,
+	overallCtx context.Context,
+	observer *generationObserver,
+	err error,
+) error {
+	if errors.Is(err, ai.ErrFirstTokenTimeout) || observer.firstTokenTimeoutOccurred() {
+		return fmt.Errorf("%w (%v): %w", ai.ErrFirstTokenTimeout, c.firstTokenTimeout, err)
 	}
-	switch m.Role {
-	case genkitai.RoleSystem:
-		return ai.Message{Role: ai.RoleSystem, Content: m.Text()}
-	case genkitai.RoleUser:
-		return ai.Message{Role: ai.RoleUser, Content: m.Text()}
-	case genkitai.RoleModel:
-		var textParts []string
-		var toolCalls []ai.ToolCall
-		for _, p := range m.Content {
-			if p == nil {
-				continue
-			}
-			if p.IsText() && p.Text != "" {
-				textParts = append(textParts, p.Text)
-			} else if p.IsToolRequest() && p.ToolRequest != nil {
-				toolCalls = append(toolCalls, ai.ToolCall{
-					Id:        p.ToolRequest.Ref,
-					Name:      p.ToolRequest.Name,
-					Arguments: p.ToolRequest.Input,
-				})
-			}
-		}
-		return ai.Message{
-			Role:      ai.RoleAssistant,
-			Content:   strings.Join(textParts, ""),
-			ToolCalls: toolCalls,
-		}
-	case genkitai.RoleTool:
-		for _, p := range m.Content {
-			if p != nil && p.IsToolResponse() && p.ToolResponse != nil {
-				outputStr := ""
-				if s, ok := p.ToolResponse.Output.(string); ok {
-					outputStr = s
-				} else if p.ToolResponse.Output != nil {
-					if b, err := json.Marshal(p.ToolResponse.Output); err == nil {
-						outputStr = string(b)
-					}
-				}
-				return ai.Message{
-					Role:       ai.RoleTool,
-					Content:    outputStr,
-					ToolCallId: p.ToolResponse.Ref,
-					ToolName:   p.ToolResponse.Name,
-				}
-			}
-		}
-		return ai.Message{Role: ai.RoleTool, Content: m.Text()}
-	default:
-		return ai.Message{Role: ai.RoleUser, Content: m.Text()}
+	if errors.Is(err, genkitai.ErrMaxTurnsExceeded) {
+		return fmt.Errorf("%w: %w", ai.ErrMaxTurnsExceeded, err)
 	}
+	if errors.Is(overallCtx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("%w (%v): %w", ai.ErrOverallTimeout, c.overallTimeout, overallCtx.Err())
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return fmt.Errorf("dashscope generate: %w", err)
 }

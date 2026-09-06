@@ -71,7 +71,7 @@ func runResponseStage(
 		llmReq := ai.LLMRequest{
 			Messages: messages,
 			Tools:    tools,
-			MaxTurns: 8,
+			MaxTurns: ai.DefaultLLMMaxTurns,
 		}
 
 		chunks := make(chan ai.LLMChunk, 32)
@@ -88,14 +88,14 @@ func runResponseStage(
 
 		splitter := NewSentenceSplitter()
 		var (
-			chunkCount       int
-			currentIteration = -1
+			chunkCount  int
+			currentStep = -1
 		)
 
 		for chunk := range chunks {
 			chunkCount++
-			if currentIteration != -1 && chunk.Iteration != currentIteration {
-				// 迭代切换，刷新分句器残余
+			if currentStep != -1 && chunk.Step != currentStep {
+				// 模型调用步骤切换，刷新分句器残余
 				for _, s := range splitter.Flush() {
 					select {
 					case sentenceCh <- s:
@@ -104,7 +104,7 @@ func runResponseStage(
 					}
 				}
 			}
-			currentIteration = chunk.Iteration
+			currentStep = chunk.Step
 
 			sentences := splitter.Feed(chunk.Text)
 			for _, s := range sentences {

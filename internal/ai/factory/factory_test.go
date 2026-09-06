@@ -3,18 +3,19 @@ package factory
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
 func TestFactory_CreateClients(t *testing.T) {
-	// 1. Nil configs
+	// 1. Invalid configs
 	if _, err := CreateASRClient(nil); err == nil {
 		t.Error("expected error for nil asr config, got nil")
 	}
-	if _, err := CreateLLMClient(nil); err == nil {
-		t.Error("expected error for nil llm config, got nil")
+	if _, err := CreateLLMClient(ai.LLMOptions{}); err == nil {
+		t.Error("expected error for empty llm options, got nil")
 	}
 	unsupportedTTS := ai.TTSOptions{Provider: "unsupported", Endpoint: "ws://example.com", APIKey: "key", Model: "m", Voice: "voice"}
 	if _, err := CreateTTSClient(unsupportedTTS); err == nil {
@@ -24,13 +25,13 @@ func TestFactory_CreateClients(t *testing.T) {
 	// 3. Placeholder providers return ErrLLMProviderNotImplemented
 	placeholderProviders := []string{"deepseek", "kimi", "zai", "openrouter", "xai", "anthropic"}
 	for _, p := range placeholderProviders {
-		cfg := &database.LLMConfig{
+		opts := ai.LLMOptions{
 			Provider: p,
 			Endpoint: "https://example.com",
 			APIKey:   "key",
 			Model:    "m",
 		}
-		_, err := CreateLLMClient(cfg)
+		_, err := CreateLLMClient(opts)
 		if err == nil {
 			t.Errorf("expected error for placeholder provider %s, got nil", p)
 		} else if !errors.Is(err, ai.ErrLLMProviderNotImplemented) {
@@ -58,21 +59,24 @@ func TestFactory_CreateClients(t *testing.T) {
 	}
 
 	for _, p := range []string{"dashscope", ""} {
-		llmCfg := &database.LLMConfig{
-			Provider:            p,
-			Endpoint:            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-			APIKey:              "test-key",
-			Model:               "qwen-plus",
-			FirstTokenTimeoutMS: 5000,
-			OverallTimeoutMS:    30000,
-			ProxyURL:            "http://127.0.0.1:8080",
+		llmOpts := ai.LLMOptions{
+			Provider:          p,
+			Endpoint:          "https://dashscope.aliyuncs.com/compatible-mode/v1",
+			APIKey:            "test-key",
+			Model:             "qwen-plus",
+			FirstTokenTimeout: 5 * time.Second,
+			OverallTimeout:    30 * time.Second,
+			ProxyURL:          "http://127.0.0.1:8080",
 		}
-		llmClient, err := CreateLLMClient(llmCfg)
+		llmClient, err := CreateLLMClient(llmOpts)
 		if err != nil {
 			t.Fatalf("CreateLLMClient(%q) failed: %v", p, err)
 		}
 		if llmClient == nil {
 			t.Fatalf("expected non-nil llm client for provider %q", p)
+		}
+		if err := llmClient.Close(); err != nil {
+			t.Fatalf("CloseLLMClient(%q) failed: %v", p, err)
 		}
 	}
 

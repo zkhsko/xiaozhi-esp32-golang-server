@@ -16,70 +16,65 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
-	"xiaozhi-esp32-golang-server/internal/database"
 )
 
-func TestNewLLMClient_Validation(t *testing.T) {
-	// 1. Nil config
-	if _, err := NewLLMClient(nil); err == nil {
-		t.Error("expected error for nil config")
+func testLLMOptions(endpoint string) ai.LLMOptions {
+	return ai.LLMOptions{
+		APIKey:            "test-key",
+		Endpoint:          endpoint,
+		Model:             "qwen-plus",
+		FirstTokenTimeout: 5 * time.Second,
+		OverallTimeout:    15 * time.Second,
 	}
+}
 
-	// 2. Empty API key
-	cfg := &database.LLMConfig{Endpoint: "http://example.com", Model: "qwen-plus"}
-	if _, err := NewLLMClient(cfg); err == nil {
+func newTestLLMClient(t *testing.T, opts ai.LLMOptions) *LLMClient {
+	t.Helper()
+	client, err := NewLLMClient(opts)
+	if err != nil {
+		t.Fatalf("NewLLMClient failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = client.Close()
+	})
+	return client
+}
+
+func TestNewLLMClient_Validation(t *testing.T) {
+	if _, err := NewLLMClient(ai.LLMOptions{Endpoint: "http://example.com", Model: "qwen-plus"}); err == nil {
 		t.Error("expected error for empty APIKey")
 	}
-
-	// 3. Empty Endpoint
-	cfg = &database.LLMConfig{APIKey: "key", Model: "qwen-plus"}
-	if _, err := NewLLMClient(cfg); err == nil {
+	if _, err := NewLLMClient(ai.LLMOptions{APIKey: "key", Model: "qwen-plus"}); err == nil {
 		t.Error("expected error for empty Endpoint")
 	}
-
-	// 4. Empty Model
-	cfg = &database.LLMConfig{APIKey: "key", Endpoint: "http://example.com"}
-	if _, err := NewLLMClient(cfg); err == nil {
+	if _, err := NewLLMClient(ai.LLMOptions{APIKey: "key", Endpoint: "http://example.com"}); err == nil {
 		t.Error("expected error for empty Model")
 	}
-
-	// 5. Overall timeout <= First token timeout
-	cfg = &database.LLMConfig{
-		APIKey:              "key",
-		Endpoint:            "http://example.com",
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 5000,
-		OverallTimeoutMS:    3000,
-	}
-	if _, err := NewLLMClient(cfg); err == nil {
+	if _, err := NewLLMClient(ai.LLMOptions{
+		APIKey:            "key",
+		Endpoint:          "http://example.com",
+		Model:             "qwen-plus",
+		FirstTokenTimeout: 5 * time.Second,
+		OverallTimeout:    3 * time.Second,
+	}); err == nil {
 		t.Error("expected error when overall timeout <= first token timeout")
 	}
-
-	// 6. Invalid Proxy URL
-	cfg = &database.LLMConfig{
-		APIKey:              "key",
-		Endpoint:            "http://example.com",
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 3000,
-		OverallTimeoutMS:    10000,
-		ProxyURL:            "://invalid-url",
-	}
-	if _, err := NewLLMClient(cfg); err == nil {
+	if _, err := NewLLMClient(ai.LLMOptions{
+		APIKey:   "key",
+		Endpoint: "http://example.com",
+		Model:    "qwen-plus",
+		ProxyURL: "://invalid-url",
+	}); err == nil {
 		t.Error("expected error for invalid proxy url")
 	}
 
-	// 7. Valid config
-	cfg = &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            "http://example.com",
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 3000,
-		OverallTimeoutMS:    10000,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	client := newTestLLMClient(t, ai.LLMOptions{
+		APIKey:            "test-key",
+		Endpoint:          "http://example.com",
+		Model:             "qwen-plus",
+		FirstTokenTimeout: 3 * time.Second,
+		OverallTimeout:    10 * time.Second,
+	})
 	if client == nil {
 		t.Fatal("expected non-nil client")
 	}
@@ -122,17 +117,7 @@ func TestLLMClient_Generate_StreamingAndThinkingCheck(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 5000,
-		OverallTimeoutMS:    15000,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	client := newTestLLMClient(t, testLLMOptions(server.URL))
 
 	var streamedText strings.Builder
 	var chunkCount int
@@ -213,17 +198,7 @@ func TestLLMClient_Generate_ToolCalls_ExecutionAndLoop(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 5000,
-		OverallTimeoutMS:    15000,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	client := newTestLLMClient(t, testLLMOptions(server.URL))
 
 	timeTool := ai.Tool{
 		Name:        "get_time",
@@ -343,19 +318,12 @@ func TestLLMClient_Generate_FirstTokenTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 100,
-		OverallTimeoutMS:    10000,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	opts := testLLMOptions(server.URL)
+	opts.FirstTokenTimeout = 100 * time.Millisecond
+	opts.OverallTimeout = 10 * time.Second
+	client := newTestLLMClient(t, opts)
 
-	_, err = client.Generate(
+	_, err := client.Generate(
 		context.Background(),
 		ai.LLMRequest{
 			Messages: []ai.Message{{Role: ai.RoleUser, Content: "test"}},
@@ -392,17 +360,10 @@ func TestLLMClient_Generate_FirstTokenTimeout_OnSecondTurn(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 150,
-		OverallTimeoutMS:    10000,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	opts := testLLMOptions(server.URL)
+	opts.FirstTokenTimeout = 150 * time.Millisecond
+	opts.OverallTimeout = 10 * time.Second
+	client := newTestLLMClient(t, opts)
 
 	testTool := ai.Tool{
 		Name:        "test_tool",
@@ -412,7 +373,7 @@ func TestLLMClient_Generate_FirstTokenTimeout_OnSecondTurn(t *testing.T) {
 		},
 	}
 
-	_, err = client.Generate(
+	_, err := client.Generate(
 		context.Background(),
 		ai.LLMRequest{
 			Messages: []ai.Message{{Role: ai.RoleUser, Content: "test"}},
@@ -437,17 +398,10 @@ func TestLLMClient_Generate_OverallTimeout_DuringTool(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 500,
-		OverallTimeoutMS:    800,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	opts := testLLMOptions(server.URL)
+	opts.FirstTokenTimeout = 500 * time.Millisecond
+	opts.OverallTimeout = 800 * time.Millisecond
+	client := newTestLLMClient(t, opts)
 
 	slowTool := ai.Tool{
 		Name:        "slow_tool",
@@ -462,7 +416,7 @@ func TestLLMClient_Generate_OverallTimeout_DuringTool(t *testing.T) {
 		},
 	}
 
-	_, err = client.Generate(
+	_, err := client.Generate(
 		context.Background(),
 		ai.LLMRequest{
 			Messages: []ai.Message{{Role: ai.RoleUser, Content: "test"}},
@@ -478,28 +432,49 @@ func TestLLMClient_Generate_OverallTimeout_DuringTool(t *testing.T) {
 	}
 }
 
+func TestLLMClient_Generate_StreamBackpressureHonorsOverallTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `data: {"id":"chatcmpl-1","choices":[{"delta":{"content":"blocked"},"index":0}]}`+"\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	opts := testLLMOptions(server.URL)
+	opts.FirstTokenTimeout = 100 * time.Millisecond
+	opts.OverallTimeout = 300 * time.Millisecond
+	client := newTestLLMClient(t, opts)
+
+	chunks := make(chan ai.LLMChunk)
+	startedAt := time.Now()
+	_, err := client.Generate(
+		context.Background(),
+		ai.LLMRequest{Messages: []ai.Message{{Role: ai.RoleUser, Content: "test"}}},
+		chunks,
+	)
+	if !errors.Is(err, ai.ErrOverallTimeout) {
+		t.Fatalf("expected ErrOverallTimeout, got: %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 2*time.Second {
+		t.Fatalf("stream backpressure ignored overall timeout, elapsed=%v", elapsed)
+	}
+}
+
 func TestLLMClient_Generate_ContextCanceled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 5000,
-		OverallTimeoutMS:    10000,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	opts := testLLMOptions(server.URL)
+	opts.OverallTimeout = 10 * time.Second
+	client := newTestLLMClient(t, opts)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // 取消
 
-	_, err = client.Generate(
+	_, err := client.Generate(
 		ctx,
 		ai.LLMRequest{
 			Messages: []ai.Message{{Role: ai.RoleUser, Content: "test"}},
@@ -524,17 +499,10 @@ func TestLLMClient_Generate_MaxTurnsExceeded(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 2000,
-		OverallTimeoutMS:    10000,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	opts := testLLMOptions(server.URL)
+	opts.FirstTokenTimeout = 2 * time.Second
+	opts.OverallTimeout = 10 * time.Second
+	client := newTestLLMClient(t, opts)
 
 	loopTool := ai.Tool{
 		Name:        "loop_tool",
@@ -544,7 +512,7 @@ func TestLLMClient_Generate_MaxTurnsExceeded(t *testing.T) {
 		},
 	}
 
-	_, err = client.Generate(
+	_, err := client.Generate(
 		context.Background(),
 		ai.LLMRequest{
 			Messages: []ai.Message{{Role: ai.RoleUser, Content: "test"}},
@@ -585,17 +553,7 @@ func TestLLMClient_Generate_ConcurrentToolExecution(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 5000,
-		OverallTimeoutMS:    15000,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	client := newTestLLMClient(t, testLLMOptions(server.URL))
 
 	toolA := ai.Tool{
 		Name:        "tool_a",
@@ -660,20 +618,10 @@ func TestLLMClient_Generate_WithTools_SchemaPayloadVerification(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 5000,
-		OverallTimeoutMS:    15000,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	client := newTestLLMClient(t, testLLMOptions(server.URL))
 
 	// 1. 无工具调用测试
-	_, err = client.Generate(
+	_, err := client.Generate(
 		context.Background(),
 		ai.LLMRequest{
 			Messages: []ai.Message{
@@ -707,6 +655,9 @@ func TestLLMClient_Generate_WithTools_SchemaPayloadVerification(t *testing.T) {
 			},
 			"required": []string{"query"},
 		},
+		Run: func(context.Context, any) (any, error) {
+			return nil, nil
+		},
 	}
 	toolB := ai.Tool{
 		Name:        "custom.mute",
@@ -714,6 +665,9 @@ func TestLLMClient_Generate_WithTools_SchemaPayloadVerification(t *testing.T) {
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
+		},
+		Run: func(context.Context, any) (any, error) {
+			return nil, nil
 		},
 	}
 
@@ -811,17 +765,7 @@ func TestLLMClient_Generate_TypedStructToolResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 5000,
-		OverallTimeoutMS:    15000,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	client := newTestLLMClient(t, testLLMOptions(server.URL))
 
 	structTool := ai.Tool{
 		Name:        "server.get_time",
@@ -1018,17 +962,9 @@ func TestLLMClient_Generate_DynamicDeviceMCPTool_EndToEnd(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 5000,
-		OverallTimeoutMS:    10000,
-	}
-	llmClient, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	opts := testLLMOptions(server.URL)
+	opts.OverallTimeout = 10 * time.Second
+	llmClient := newTestLLMClient(t, opts)
 
 	// 3. 执行流式 Generate
 	res, err := llmClient.Generate(
@@ -1160,17 +1096,7 @@ func TestLLMClient_Generate_MultiTurn_PreserveToolCallHistory(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := &database.LLMConfig{
-		APIKey:              "test-key",
-		Endpoint:            server.URL,
-		Model:               "qwen-plus",
-		FirstTokenTimeoutMS: 5000,
-		OverallTimeoutMS:    15000,
-	}
-	client, err := NewLLMClient(cfg)
-	if err != nil {
-		t.Fatalf("NewLLMClient failed: %v", err)
-	}
+	client := newTestLLMClient(t, testLLMOptions(server.URL))
 
 	var volHistory []int
 	var volMu sync.Mutex
