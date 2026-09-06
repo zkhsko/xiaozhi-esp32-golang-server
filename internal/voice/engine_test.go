@@ -415,3 +415,63 @@ func TestTurnEngine_PromptAppendedAtTail(t *testing.T) {
 	}
 }
 
+func TestTurnEngine_CloseSession_NoPromptAppended(t *testing.T) {
+	// 1 帧 TTS (2880 bytes)，预期仅包含 TTS 分帧，不追加 promptPCM
+	ttsChunk := make([]byte, audio.DownlinkBytesPerFrame)
+	framer := audio.NewPCMFramer()
+	expectedTTSFrames := len(framer.Feed(ttsChunk)) + len(framer.Flush())
+
+	engine := NewEngine()
+	asr := &mockASRClient{text: "退出会话"}
+	llm := &mockLLMClient{
+		chunks: []ai.LLMChunk{
+			{Text: "再见，祝您生活愉快！"},
+		},
+	}
+	tts := &mockTTSClient{}
+	output := &mockTurnOutput{}
+
+	inCh := make(chan []byte)
+	close(inCh)
+
+	effectsCh := make(chan TurnEffect, 4)
+	effectsCh <- TurnEffect{Type: EffectCloseSession}
+
+	req := TurnRequest{
+		TurnId:    11,
+		Mode:      "auto",
+		ASRClient: asr,
+		LLMClient: llm,
+		TTSClient: tts,
+		EffectsCh: effectsCh,
+	}
+
+	res := engine.HandleTurn(context.Background(), req, inCh, output)
+
+	if res.Status != TurnCompleted {
+		t.Fatalf("expected TurnCompleted, got %v, err: %v", res.Status, res.Err)
+	}
+
+	if len(output.audioFrames) != expectedTTSFrames {
+		t.Fatalf("expected exactly %d audio frames (only tts, no prompt), got %d", expectedTTSFrames, len(output.audioFrames))
+	}
+
+	// 验证 Effects 包含 EffectCloseSession
+	hasCloseEffect := false
+	for _, eff := range res.Effects {
+		if eff.Type == EffectCloseSession {
+			hasCloseEffect = true
+			break
+		}
+	}
+	if !hasCloseEffect {
+		t.Fatal("expected TurnResult.Effects to contain EffectCloseSession")
+	}
+
+	// 验证最终收口正常交付
+	if !output.ended || output.endReason != TurnEndCompleted {
+		t.Fatalf("expected output ended with TurnEndCompleted, ended=%v, reason=%v", output.ended, output.endReason)
+	}
+}
+
+

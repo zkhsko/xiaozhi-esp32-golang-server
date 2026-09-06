@@ -120,6 +120,9 @@ func (e *TurnEngine) HandleTurn(
 
 	// 汇总 Effect
 	var effects []TurnEffect
+	if respRes != nil && len(respRes.Effects) > 0 {
+		effects = append(effects, respRes.Effects...)
+	}
 	if req.EffectsCh != nil {
 		for {
 			select {

@@ -397,6 +397,103 @@ func TestSession_CloseSession_Tool_ClosesSession(t *testing.T) {
 	}
 }
 
+func TestSession_CloseSession_Tool_NoPromptAppended(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &mockWSConn{}
+	asr := &mockASRClient{text: "再见"}
+	llm := &mockLLMClient{
+		chunks: []ai.LLMChunk{
+			{Text: "好的，下次再见！"},
+		},
+		onRunTool: func(ctx context.Context, req ai.LLMRequest) {
+			for _, tool := range req.Tools {
+				if tool.Name == agentkit.ToolCloseSession {
+					_, _ = tool.Run(ctx, map[string]any{"reason": "用户要求退出"})
+				}
+			}
+		},
+	}
+	tts := &mockTTSClient{}
+
+	sess := NewSession(ctx, Options{
+		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+		SerialNumber: "SN-12345678",
+		ASRClient:    asr,
+		LLMClient:    llm,
+		TTSClient:    tts,
+		Logger:       slog.Default(),
+	})
+
+	go func() {
+		_ = sess.Run()
+	}()
+
+	// 握手
+	helloMsg := ClientHelloMessage{
+		Type:      "hello",
+		Version:   1,
+		Transport: "websocket",
+		AudioParams: ClientAudioParams{
+			Format:        "opus",
+			SampleRate:    16000,
+			Channels:      1,
+			FrameDuration: 60,
+		},
+	}
+	raw, _ := json.Marshal(helloMsg)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     raw,
+	})
+
+	waitForCondition(time.Second, func() bool {
+		return sess.SessionId() != ""
+	})
+
+	// manual 模式下启动轮次（无建连 greeting 提示音干扰）
+	listenRaw := []byte(`{"type":"listen","state":"start","mode":"manual"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     listenRaw,
+	})
+
+	// 发送单包音频并手动停止输入
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: true,
+		data:     createValid16kOpusPacket(),
+	})
+	stopRaw := []byte(`{"type":"listen","state":"stop"}`)
+	sess.postEvent(sessionEvent{
+		kind:     eventKindClientFrame,
+		isBinary: false,
+		data:     stopRaw,
+	})
+
+	select {
+	case <-sess.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected session to close after close_session tool execution")
+	}
+
+	msgs := conn.getMessages()
+	var binCount int
+	for _, m := range msgs {
+		if m.msgType == websocket.MessageBinary {
+			binCount++
+		}
+	}
+
+	// 结束会话时不播提示音，仅应下发 mockTTSClient 生成的 1 帧音频数据
+	if binCount != 1 {
+		t.Fatalf("expected exactly 1 binary audio frame (no prompt audio), got %d", binCount)
+	}
+}
+
 func TestSession_Abort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
