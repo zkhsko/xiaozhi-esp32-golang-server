@@ -66,7 +66,7 @@ func (m *mockWSConn) getMessages() []mockWSMsg {
 
 func TestOutboundActor_SendTextSession(t *testing.T) {
 	conn := &mockWSConn{}
-	out := NewOutboundActor(context.Background(), conn, 10, 5*time.Second, nil, nil)
+	out := NewOutboundActor(context.Background(), conn, 10, 5*time.Second, nil)
 	defer out.Close()
 
 	err := out.SendTextSession(context.Background(), []byte(`{"type":"hello"}`))
@@ -85,7 +85,7 @@ func TestOutboundActor_SendTextSession(t *testing.T) {
 
 func TestOutboundActor_TurnOutput_FirstFrameBatch(t *testing.T) {
 	conn := &mockWSConn{}
-	out := NewOutboundActor(context.Background(), conn, 10, 5*time.Second, nil, nil)
+	out := NewOutboundActor(context.Background(), conn, 10, 5*time.Second, nil)
 	defer out.Close()
 
 	turnOutput := out.NewTurnOutput(1, "sess-1")
@@ -168,7 +168,7 @@ func TestOutboundActor_TurnOutput_FirstFrameBatch(t *testing.T) {
 
 func TestOutboundActor_NoTTSStart_NoTTSStop(t *testing.T) {
 	conn := &mockWSConn{}
-	out := NewOutboundActor(context.Background(), conn, 10, 5*time.Second, nil, nil)
+	out := NewOutboundActor(context.Background(), conn, 10, 5*time.Second, nil)
 	defer out.Close()
 
 	turnOutput := out.NewTurnOutput(2, "sess-2")
@@ -198,7 +198,7 @@ func TestOutboundActor_InvalidateTurn_Precision(t *testing.T) {
 	conn := &mockWSConn{
 		writeDelay: 50 * time.Millisecond,
 	}
-	out := NewOutboundActor(context.Background(), conn, 20, 5*time.Second, nil, nil)
+	out := NewOutboundActor(context.Background(), conn, 20, 5*time.Second, nil)
 	defer out.Close()
 
 	turn1 := out.NewTurnOutput(1, "sess-1")

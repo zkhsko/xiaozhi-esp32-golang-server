@@ -113,15 +113,6 @@ type ClientMessage struct {
 	// DetectText 唤醒词文本（仅在 Kind == KindListenDetect 时有效）。
 	DetectText string `json:"text,omitempty"`
 
-	// AbortReason 中断原因（仅在 Kind == KindAbort 时有效）。
-	AbortReason string `json:"reason,omitempty"`
-
-	// RawType 未知扩展消息的原始 type 字段。
-	RawType string `json:"raw_type,omitempty"`
-
-	// RawPayload 未知扩展消息的原始 JSON 载荷（供诊断日志等使用）。
-	RawPayload json.RawMessage `json:"raw_payload,omitempty"`
-
 	// Payload 设备 MCP 消息的 JSON 载荷。
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
@@ -200,8 +191,6 @@ func ParseClientMessage(data []byte) (*ClientMessage, error) {
 
 	default:
 		msg.Kind = KindUnknownExtension
-		msg.RawType = msgType
-		msg.RawPayload = data
 		return msg, nil
 	}
 }
@@ -285,7 +274,6 @@ func parseAbortMessage(rawMap map[string]json.RawMessage, msg *ClientMessage) (*
 		if utf8.RuneCountInString(reason) > MaxTextFieldLength {
 			return nil, fmt.Errorf("%w: abort 'reason' length %d exceeds max %d", ErrFieldTooLong, utf8.RuneCountInString(reason), MaxTextFieldLength)
 		}
-		msg.AbortReason = reason
 	}
 	return msg, nil
 }

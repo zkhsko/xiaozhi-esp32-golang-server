@@ -88,7 +88,7 @@ func TestAudioV2Validation(t *testing.T) {
 
 func TestConnAudioVectors(t *testing.T) {
 	for _, tc := range audioVectors(t) {
-		conn, peer, ctx := testConnection(t, Options{Version: tc.version, MaxTextMessageBytes: 16, MaxOpusPacketBytes: 3})
+		conn, peer, ctx := testConnection(t, Options{Version: tc.version, MaxTextMessageBytes: 1, MaxOpusPacketBytes: 3})
 		if err := peer.Write(ctx, websocket.MessageBinary, tc.wire); err != nil {
 			t.Fatal(err)
 		}

@@ -46,6 +46,7 @@ cp config.example.yaml config.yaml
 server:
   listen_addr: ":8080"
   websocket_url: "ws://192.168.1.100:8080/xiaozhi/v1/"
+  websocket_version: 1
 
 database:
   driver: "sqlite"
@@ -86,7 +87,7 @@ curl http://127.0.0.1:8080/xiaozhi/ota/
      -H "Content-Type: application/json" \
      -d '{"code": "123456"}'
    ```
-5. **自动建连与对话**：绑定成功后设备再次请求 OTA 接口自动获取专属 Access Token，并建立 WebSocket v1 连接进入待命对话状态。
+5. **自动建连与对话**：绑定成功后设备再次请求 OTA 接口自动获取专属 Access Token，按下发的协议版本建立 WebSocket 连接。服务端支持 v1、v2、v3，默认下发 v1。
 
 ---
 
@@ -96,12 +97,15 @@ curl http://127.0.0.1:8080/xiaozhi/ota/
 | --- | --- | --- |
 | `server.listen_addr` | 监听端口 | `:8080` |
 | `server.websocket_url` | 下发给设备的 WebSocket 地址 | `ws://<局域网IP>:8080/xiaozhi/v1/` |
+| `server.websocket_version` | OTA 下发的协议版本，可选 `1`、`2`、`3` | `1` |
 | `server.max_concurrent_sessions` | 最大并发会话上限 | `10`（超限返回 503） |
 | `session.max_history_turns` | 上下文保留轮数 | `6`（FIFO 滚动淘汰） |
 | `database.driver` | 数据库驱动类型（`sqlite` / `mysql` / `postgres`） | `sqlite` |
 | `database.dsn` | 数据库连接字符串（DSN） | `file:xiaozhi-dev.db?_journal_mode=WAL&_busy_timeout=5000` |
 
 > **提示：** AI 模型（ASR/LLM/TTS）、音色、提示词及代理配置均已完全纯数据库化，由管理后台或数据表动态驱动，无需在配置文件中配置。
+
+三个协议版本均使用 `/xiaozhi/v1/` 路径。版本配置仅控制 OTA 下发，服务端始终接受三个受支持版本；单条连接的 `Protocol-Version` 请求头必须与 `hello.version` 一致。当前支持 `auto` 和 `manual` 收音，不支持 `realtime` 或服务端 AEC。详细边界见 [WebSocket 协议接入](docs/agents/websocket-protocol.md)。
 
 ---
 

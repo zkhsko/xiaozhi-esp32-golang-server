@@ -97,10 +97,11 @@ func TestProtocolVoiceCycle(t *testing.T) {
 				conn, peer := newSessionTestConnection(t, ctx, version, SessionConfig{})
 				pcm := make(chan []byte, 1)
 				sess := NewSession(ctx, Options{
-					Conn:      conn,
-					ASRClient: &mockASRClient{text: "test", onFeed: func(data []byte) { pcm <- bytes.Clone(data) }},
-					LLMClient: &mockLLMClient{chunks: []ai.LLMChunk{{Text: "Hello."}}},
-					TTSClient: &mockTTSClient{},
+					Conn:              conn,
+					PromptToneEnabled: mode == "manual",
+					ASRClient:         &mockASRClient{text: "test", onFeed: func(data []byte) { pcm <- bytes.Clone(data) }},
+					LLMClient:         &mockLLMClient{chunks: []ai.LLMChunk{{Text: "Hello."}}},
+					TTSClient:         &mockTTSClient{},
 				})
 				go func() { _ = sess.Run() }()
 				defer func() { sess.Close(); <-sess.Done() }()
@@ -161,8 +162,16 @@ func TestProtocolVoiceCycle(t *testing.T) {
 						stops++
 					}
 				}
-				if frames != 1 || starts != 1 || transcripts != 1 {
-					t.Fatalf("frames=%d starts=%d transcripts=%d", frames, starts, transcripts)
+				wantFrames := 1
+				if mode == "manual" {
+					promptPCM, err := audio.GetPromptPCM()
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantFrames += (len(promptPCM) + audio.DownlinkBytesPerFrame - 1) / audio.DownlinkBytesPerFrame
+				}
+				if frames != wantFrames || starts != 1 || transcripts != 1 {
+					t.Fatalf("frames=%d (want %d) starts=%d transcripts=%d", frames, wantFrames, starts, transcripts)
 				}
 				select {
 				case data := <-pcm:
@@ -174,6 +183,124 @@ func TestProtocolVoiceCycle(t *testing.T) {
 				}
 				if !waitForCondition(time.Second, func() bool { return sess.runtime.history.Len() == 2 }) {
 					t.Fatal("turn history was not committed")
+				}
+			})
+		}
+	}
+}
+
+func TestProtocolMCPDiscovery(t *testing.T) {
+	for _, version := range testProtocolVersions {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			conn, peer := newSessionTestConnection(t, ctx, version, SessionConfig{})
+			sess := NewSession(ctx, Options{Conn: conn})
+			go func() { _ = sess.Run() }()
+			defer func() { sess.Close(); <-sess.Done() }()
+			var hello ClientHelloMessage
+			if err := json.Unmarshal(protocolHello(t, version), &hello); err != nil {
+				t.Fatal(err)
+			}
+			hello.Features = &ClientFeatures{MCP: true}
+			data, err := json.Marshal(hello)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := peer.Write(ctx, websocket.MessageText, data); err != nil {
+				t.Fatal(err)
+			}
+			typ, data, err := peer.Read(ctx)
+			if err != nil || typ != websocket.MessageText {
+				t.Fatalf("server hello: type=%v err=%v", typ, err)
+			}
+			var serverHello ServerHelloMessage
+			if err := json.Unmarshal(data, &serverHello); err != nil || serverHello.SessionId == "" {
+				t.Fatalf("invalid server hello: %s, %v", data, err)
+			}
+			for _, step := range []struct {
+				method string
+				result json.RawMessage
+			}{
+				{"initialize", json.RawMessage(`{"protocolVersion":"2024-11-05","capabilities":{}}`)},
+				{"tools/list", json.RawMessage(`{"tools":[{"name":"self.test","description":"Test device tool","inputSchema":{"type":"object","properties":{}}}]}`)},
+			} {
+				typ, data, err := peer.Read(ctx)
+				if err != nil || typ != websocket.MessageText {
+					t.Fatalf("MCP %s: type=%v err=%v", step.method, typ, err)
+				}
+				var message DownlinkMCPMessage
+				if err := json.Unmarshal(data, &message); err != nil || message.Type != MessageTypeMCP || message.SessionId != serverHello.SessionId {
+					t.Fatalf("invalid MCP envelope: %s, %v", data, err)
+				}
+				var request struct {
+					Id     int64  `json:"id"`
+					Method string `json:"method"`
+				}
+				if err := json.Unmarshal(message.Payload, &request); err != nil || request.Method != step.method || request.Id <= 0 {
+					t.Fatalf("invalid MCP request: %s, %v", message.Payload, err)
+				}
+				response, err := json.Marshal(map[string]any{
+					"type":       "mcp",
+					"session_id": serverHello.SessionId,
+					"payload":    map[string]any{"jsonrpc": "2.0", "id": request.Id, "result": step.result},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := peer.Write(ctx, websocket.MessageText, response); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := sess.mcpBridge.WaitReady(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if tools := sess.mcpBridge.Tools(); len(tools) != 1 || tools[0].Name != "self.test" {
+				t.Fatalf("discovered tools = %+v", tools)
+			}
+		})
+	}
+}
+
+func TestProtocolInvalidAudio(t *testing.T) {
+	for _, version := range testProtocolVersions {
+		for _, kind := range []string{"empty", "oversized", "invalid_type"} {
+			if version == ws.Version1 && kind == "invalid_type" {
+				continue
+			}
+			t.Run(fmt.Sprintf("%d/%s", version, kind), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				cfg := SessionConfig{MaxOpusPacketBytes: 128}
+				conn, peer := newSessionTestConnection(t, ctx, version, cfg)
+				sess := NewSession(ctx, Options{Conn: conn, Config: cfg})
+				go func() { _ = sess.Run() }()
+				defer func() { sess.Close(); <-sess.Done() }()
+				if err := peer.Write(ctx, websocket.MessageText, protocolHello(t, version)); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := peer.Read(ctx); err != nil {
+					t.Fatal(err)
+				}
+				wire := deviceAudioPacket(t, version, nil)
+				want := websocket.StatusPolicyViolation
+				switch kind {
+				case "oversized":
+					wire = deviceAudioPacket(t, version, make([]byte, 129))
+					want = websocket.StatusMessageTooBig
+				case "invalid_type":
+					wire = deviceAudioPacket(t, version, []byte{0x11})
+					if version == ws.Version2 {
+						wire[3] = 1
+					} else {
+						wire[0] = 1
+					}
+				}
+				if err := peer.Write(ctx, websocket.MessageBinary, wire); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := peer.Read(ctx); websocket.CloseStatus(err) != want {
+					t.Fatalf("close = %v, want %v", err, want)
 				}
 			})
 		}

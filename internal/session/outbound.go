@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -48,7 +47,6 @@ type OutboundActor struct {
 	conn         WSConn
 	queue        chan outboundBatch
 	writeTimeout time.Duration
-	logger       *slog.Logger
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -68,14 +66,10 @@ func NewOutboundActor(
 	conn WSConn,
 	capacity int,
 	writeTimeout time.Duration,
-	l *slog.Logger,
 	onFailed func(err error),
 ) *OutboundActor {
 	if conn == nil {
 		panic("session: outbound actor requires non-nil WSConn")
-	}
-	if l == nil {
-		l = slog.Default()
 	}
 	if capacity <= 0 {
 		capacity = 100
@@ -92,7 +86,6 @@ func NewOutboundActor(
 		conn:         conn,
 		queue:        make(chan outboundBatch, capacity),
 		writeTimeout: writeTimeout,
-		logger:       l,
 		ctx:          actCtx,
 		cancel:       cancel,
 		done:         make(chan struct{}),

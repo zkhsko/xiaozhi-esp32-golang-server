@@ -29,7 +29,7 @@ const (
 	eventKindHelloTimeout
 	eventKindTurnInputClosed
 	eventKindTurnFinished
-	eventKindTimeout
+	eventKindListeningTimeout
 	eventKindOutboundFailed
 	eventKindCloseRequest
 )
@@ -41,7 +41,6 @@ type sessionEvent struct {
 	data        []byte
 	turnId      uint64
 	turnResult  voice.TurnResult
-	timeoutText string
 	closeCode   websocket.StatusCode
 	closeReason string
 }
@@ -78,7 +77,6 @@ type Session struct {
 	promptToneEnabled bool
 	cfg               SessionConfig
 	logger            *slog.Logger
-	diagLimiter       *logger.RateLimiter
 
 	asrClient    ai.ASRClient
 	llmClient    ai.LLMClient
@@ -136,7 +134,6 @@ func NewSession(ctx context.Context, opts Options) *Session {
 		opts.Conn,
 		cfg.DownlinkOpusQueueCapacity,
 		cfg.WebsocketWriteTimeout,
-		l,
 		func(err error) {
 			select {
 			case events <- sessionEvent{kind: eventKindOutboundFailed}:
@@ -154,7 +151,6 @@ func NewSession(ctx context.Context, opts Options) *Session {
 		promptToneEnabled: opts.PromptToneEnabled,
 		cfg:               cfg,
 		logger:            l,
-		diagLimiter:       diagLimiter,
 		asrClient:         opts.ASRClient,
 		llmClient:         opts.LLMClient,
 		ttsClient:         opts.TTSClient,
@@ -274,13 +270,15 @@ func (s *Session) handleEvent(ev sessionEvent) bool {
 		s.closeWithReason(websocket.StatusPolicyViolation, "hello timeout")
 		return true
 
-	case eventKindTimeout:
-		s.logger.Warn("session actor timeout",
+	case eventKindListeningTimeout:
+		if s.runtime.state != StateTurnActive || ev.turnId != s.runtime.currentTurnId || s.runtime.turnInputClosed {
+			return false
+		}
+		s.logger.Warn("session listening timeout",
 			"serial_number", s.serialNumber,
-			"state", s.runtime.state.String(),
-			"timeout_text", ev.timeoutText,
+			"turn_id", ev.turnId,
 		)
-		s.closeWithReason(ev.closeCode, ev.closeReason)
+		s.closeWithReason(websocket.StatusPolicyViolation, "listening timeout")
 		return true
 
 	case eventKindOutboundFailed:
@@ -643,10 +641,8 @@ func (s *Session) startTurn(mode string, prebuffer [][]byte, manualStop bool) {
 	} else if strings.EqualFold(mode, "auto") {
 		s.runtime.listeningTimer = time.AfterFunc(s.cfg.MaxListeningDuration, func() {
 			s.postEvent(sessionEvent{
-				kind:        eventKindTimeout,
-				timeoutText: "max listening duration exceeded",
-				closeCode:   websocket.StatusPolicyViolation,
-				closeReason: "listening timeout",
+				kind:   eventKindListeningTimeout,
+				turnId: turnId,
 			})
 		})
 	}
@@ -819,11 +815,6 @@ func (s *Session) SessionId() string {
 		return v.(string)
 	}
 	return ""
-}
-
-// SerialNumber 返回当前会话绑定的设备硬件序列号。
-func (s *Session) SerialNumber() string {
-	return s.serialNumber
 }
 
 // DeviceKey 返回用于单设备互斥注册的设备唯一键。

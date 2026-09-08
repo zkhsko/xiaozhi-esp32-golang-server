@@ -141,6 +141,57 @@ func TestSessionWireHelloTimeout(t *testing.T) {
 	}
 }
 
+func TestSessionWireListeningTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cfg := SessionConfig{MaxListeningDuration: 30 * time.Millisecond}
+	conn, peer := newSessionTestConnection(t, ctx, ws.Version1, cfg)
+	sess := NewSession(ctx, Options{Conn: conn, Config: cfg, ASRClient: &waitingASRClient{}})
+	go func() { _ = sess.Run() }()
+	defer func() { sess.Close(); <-sess.Done() }()
+	if err := peer.Write(ctx, websocket.MessageText, []byte(promptToneTestHello)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := peer.Read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Write(ctx, websocket.MessageText, []byte(`{"type":"listen","state":"start","mode":"auto"}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := peer.Read(ctx)
+	var closeErr websocket.CloseError
+	if !errors.As(err, &closeErr) || closeErr.Code != websocket.StatusPolicyViolation || closeErr.Reason != "listening timeout" {
+		t.Fatalf("listening timeout = %v", err)
+	}
+}
+
+func TestSessionIgnoresStaleListeningTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		state       State
+		turnId      uint64
+		inputClosed bool
+	}{
+		{"previous_turn", StateTurnActive, 1, false},
+		{"input_closed", StateTurnActive, 2, true},
+		{"turn_finished", StateReady, 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			conn, peer := newSessionTestConnection(t, ctx, ws.Version1, SessionConfig{})
+			sess := NewSession(ctx, Options{Conn: conn})
+			defer func() { _ = peer.CloseNow(); sess.cleanup() }()
+			sess.runtime.state = tc.state
+			sess.runtime.currentTurnId = 2
+			sess.runtime.turnInputClosed = tc.inputClosed
+			if sess.handleEvent(sessionEvent{kind: eventKindListeningTimeout, turnId: tc.turnId}) || sess.ctx.Err() != nil {
+				t.Fatal("stale listening timeout closed the session")
+			}
+		})
+	}
+}
+
 func TestSessionWireIgnoresLateHelloTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -190,5 +241,48 @@ func TestSessionCloseCancelsTurnBeforeHandshake(t *testing.T) {
 	case <-closed:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
+	}
+}
+
+func TestSessionAudioBackpressure(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		name := "active"
+		if pending {
+			name = "pending"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cfg := SessionConfig{ASRPCMQueueCapacity: 1}
+			conn, peer := newSessionTestConnection(t, ctx, ws.Version1, cfg)
+			sess := NewSession(ctx, Options{Conn: conn, Config: cfg})
+			defer sess.cleanup()
+			sess.runtime.state = StateTurnActive
+			turnCtx, turnCancel := context.WithCancel(sess.ctx)
+			sess.runtime.turnCancel = turnCancel
+			if pending {
+				sess.runtime.turnInputClosed = true
+				sess.runtime.pendingTurn = &PendingTurn{audioBuffers: [][]byte{{0x11}}}
+			} else {
+				sess.runtime.turnInputCh = make(chan []byte, 1)
+				sess.runtime.turnInputCh <- []byte{0x11}
+			}
+			closed := make(chan struct{})
+			go func() {
+				sess.handleAudioFrame([]byte{0x22})
+				close(closed)
+			}()
+			if _, _, err := peer.Read(ctx); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+				t.Fatalf("backpressure close = %v", err)
+			}
+			select {
+			case <-closed:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if turnCtx.Err() == nil || sess.ctx.Err() == nil {
+				t.Fatal("backpressure did not cancel the turn and session")
+			}
+		})
 	}
 }
