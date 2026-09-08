@@ -11,7 +11,7 @@ import (
 
 var (
 	ErrInvalidAudioFrame = errors.New("invalid audio frame")
-	ErrMessageTooLarge   = errors.New("message exceeds read limit")
+	ErrMessageTooLarge   = errors.New("message exceeds size limit")
 )
 
 type Options struct {
@@ -36,7 +36,11 @@ func NewConn(raw *websocket.Conn, opts Options) (*Conn, error) {
 	if opts.MaxTextMessageBytes <= 0 || opts.MaxOpusPacketBytes <= 0 {
 		return nil, errors.New("message read limits must be positive")
 	}
-	readLimit := max(opts.MaxTextMessageBytes, int64(opts.MaxOpusPacketBytes))
+	headerSize := int64(opts.Version.headerSize())
+	if int64(opts.MaxOpusPacketBytes) > math.MaxInt64-headerSize-1 {
+		return nil, errors.New("audio read limit is too large")
+	}
+	readLimit := max(opts.MaxTextMessageBytes, int64(opts.MaxOpusPacketBytes)+headerSize)
 	if readLimit == math.MaxInt64 {
 		return nil, errors.New("message read limit is too large")
 	}
@@ -61,19 +65,21 @@ func (c *Conn) Read(ctx context.Context) (websocket.MessageType, []byte, error) 
 			return 0, nil, ErrMessageTooLarge
 		}
 	} else {
-		if len(data) == 0 {
-			return 0, nil, ErrInvalidAudioFrame
-		}
-		if len(data) > c.options.MaxOpusPacketBytes {
-			return 0, nil, ErrMessageTooLarge
+		data, err = decodeAudio(c.options.Version, data, c.options.MaxOpusPacketBytes)
+		if err != nil {
+			return 0, nil, err
 		}
 	}
 	return typ, data, nil
 }
 
 func (c *Conn) Write(ctx context.Context, typ websocket.MessageType, data []byte) error {
-	if typ == websocket.MessageBinary && len(data) == 0 {
-		return ErrInvalidAudioFrame
+	if typ == websocket.MessageBinary {
+		var err error
+		data, err = encodeAudio(c.options.Version, data)
+		if err != nil {
+			return err
+		}
 	}
 	return c.raw.Write(ctx, typ, data)
 }

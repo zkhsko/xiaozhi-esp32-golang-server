@@ -8,7 +8,10 @@ import (
 
 type Version int
 
-const Version1 Version = 1
+const (
+	Version1 Version = 1
+	Version2 Version = 2
+)
 
 var ErrUnsupportedVersion = errors.New("unsupported websocket protocol version")
 
@@ -26,8 +29,15 @@ func ParseVersion(value string) (Version, error) {
 }
 
 func (v Version) Validate() error {
-	if v != Version1 {
+	if v != Version1 && v != Version2 {
 		return ErrUnsupportedVersion
 	}
 	return nil
+}
+
+func (v Version) headerSize() int {
+	if v == Version2 {
+		return 16
+	}
+	return 0
 }
