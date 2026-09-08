@@ -9,9 +9,6 @@ import (
 
 // 文本消息解析相关的上限常量。
 const (
-	// MaxClientTextMessageBytes 客户端 WebSocket 文本消息最大允许字节数（32 KiB）。
-	MaxClientTextMessageBytes = 32768
-
 	// MaxTextFieldLength 文本字段（如 session_id, text, reason 等）的最大字符数限制。
 	MaxTextFieldLength = 1024
 )
@@ -77,9 +74,6 @@ var (
 	// ErrEmptyMessage 消息为空字节。
 	ErrEmptyMessage = errors.New("empty client message")
 
-	// ErrMessageTooLarge 消息大小超出限制。
-	ErrMessageTooLarge = errors.New("client message exceeds maximum allowed size")
-
 	// ErrInvalidJSON JSON 语法非法。
 	ErrInvalidJSON = errors.New("invalid json format")
 
@@ -132,27 +126,10 @@ type ClientMessage struct {
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
-// IsExtension 判断当前消息是否为未知扩展消息。
-func (m *ClientMessage) IsExtension() bool {
-	return m != nil && m.Kind == KindUnknownExtension
-}
-
 // ParseClientMessage 解析客户端上行文本消息，并执行协议字段校验与强类型分类。
-// 消息总长度受 MaxClientTextMessageBytes 限制。
 func ParseClientMessage(data []byte) (*ClientMessage, error) {
-	return ParseClientMessageWithLimit(data, MaxClientTextMessageBytes)
-}
-
-// ParseClientMessageWithLimit 解析客户端上行文本消息并指定最大允许字节数。
-func ParseClientMessageWithLimit(data []byte, maxBytes int) (*ClientMessage, error) {
 	if len(data) == 0 {
 		return nil, ErrEmptyMessage
-	}
-	if maxBytes <= 0 {
-		maxBytes = MaxClientTextMessageBytes
-	}
-	if len(data) > maxBytes {
-		return nil, fmt.Errorf("%w: size %d exceeds limit %d", ErrMessageTooLarge, len(data), maxBytes)
 	}
 
 	var rawMap map[string]json.RawMessage

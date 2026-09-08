@@ -12,6 +12,7 @@ import (
 	"xiaozhi-esp32-golang-server/internal/ai/factory"
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/database"
+	"xiaozhi-esp32-golang-server/internal/protocol/ws"
 )
 
 // Handler 处理 WebSocket 协议升级、设备智能体动态加载、会话准入控制与连接生命周期。
@@ -69,19 +70,6 @@ func NewHandler(opts HandlerOptions) *Handler {
 	}
 }
 
-// Registry 返回当前关联的会话注册表。
-func (h *Handler) Registry() *Registry {
-	return h.registry
-}
-
-// Limiter 返回当前关联的会话准入控制器。
-func (h *Handler) Limiter() *SessionLimiter {
-	if h.registry != nil {
-		return h.registry.Limiter()
-	}
-	return nil
-}
-
 // Close 优雅关闭会话处理器及其关联的注册表。
 func (h *Handler) Close(ctx context.Context) error {
 	if h.registry != nil {
@@ -109,7 +97,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		maxHeaderBytes = h.cfg.Server.MaxHTTPHeaderBytes
 	}
 
-	tok, err := AuthenticateUpgrade(r, h.db, maxHeaderBytes)
+	if err := ValidateHeaders(r.Header, maxHeaderBytes, MaxTotalHeaderBytes); err != nil {
+		RejectUpgrade(w, r, h.logger, err)
+		return
+	}
+	versions := r.Header.Values("Protocol-Version")
+	if len(versions) != 1 {
+		RejectUpgrade(w, r, h.logger, ws.ErrUnsupportedVersion)
+		return
+	}
+	version, err := ws.ParseVersion(versions[0])
+	if err != nil {
+		RejectUpgrade(w, r, h.logger, err)
+		return
+	}
+	tok, err := AuthenticateUpgrade(r, h.db)
 	if err != nil {
 		RejectUpgrade(w, r, h.logger, err)
 		return
@@ -183,7 +185,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		CompressionMode:    websocket.CompressionDisabled,
 		InsecureSkipVerify: true,
 	}
-	conn, err := websocket.Accept(w, r, opts)
+	raw, err := websocket.Accept(w, r, opts)
 	if err != nil {
 		release()
 		h.logger.Error("websocket upgrade failed",
@@ -192,10 +194,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-	defer conn.Close(websocket.StatusInternalError, "session closed")
+	defer raw.Close(websocket.StatusInternalError, "session closed")
+	cfg := NormalizeConfig(mapSessionConfig(h.cfg))
+	conn, err := ws.NewConn(raw, ws.Options{
+		Version:             version,
+		MaxTextMessageBytes: cfg.MaxWSTextMessageBytes,
+		MaxOpusPacketBytes:  cfg.MaxOpusPacketBytes,
+	})
+	if err != nil {
+		release()
+		h.logger.Error("websocket configuration failed", "error", err)
+		return
+	}
 
 	h.logger.Info("websocket session connected",
 		"serial_number", tok.SerialNumber,
+		"protocol_version", version,
 		"device_type", tok.DeviceType,
 		"agent_id", snapshot.Agent.Id,
 		"active_sessions", h.registry.Limiter().ActiveCount(),
@@ -207,7 +221,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		SerialNumber:      tok.SerialNumber,
 		SystemPrompt:      snapshot.Agent.SystemPrompt,
 		PromptToneEnabled: snapshot.Agent.PromptToneEnabled,
-		Config:            mapSessionConfig(h.cfg),
+		Config:            cfg,
 		ASRClient:         asrClient,
 		LLMClient:         llmClient,
 		TTSClient:         ttsClient,

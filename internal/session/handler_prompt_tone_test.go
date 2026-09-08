@@ -80,7 +80,7 @@ func TestHandler_PromptToneNewSessionsOnly(t *testing.T) {
 		if _, _, err := conn.Read(ctx); err != nil {
 			t.Fatal(err)
 		}
-		sess := handler.Registry().GetBySerial(serialNumber)
+		sess := testSessionBySerial(handler.registry, serialNumber)
 		if sess == nil {
 			t.Fatal("session was not registered")
 		}

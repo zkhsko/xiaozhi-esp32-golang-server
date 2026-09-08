@@ -45,27 +45,6 @@ func (r *Registry) ActiveCount() int {
 	return len(r.sessions)
 }
 
-// GetBySerial 查询指定序列号当前关联的活跃会话，若不存在则返回 nil。
-func (r *Registry) GetBySerial(serialNumber string) *Session {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.byDevice[serialNumber]
-}
-
-// GetByDevice 查询指定设备唯一标识（序列号 SN）当前关联的活跃会话，若不存在则返回 nil。
-func (r *Registry) GetByDevice(deviceKey string) *Session {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.byDevice[deviceKey]
-}
-
-// IsClosed 返回会话注册表是否已进入关闭状态。
-func (r *Registry) IsClosed() bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.closed
-}
-
 // Acquire 尝试为新会话获取准入名额。
 // 若注册表已关闭或并发已满，返回 (nil, false)；
 // 成功时返回释放函数与 true。释放函数保证幂等执行。
@@ -137,17 +116,6 @@ func (r *Registry) Register(s *Session, release ...func()) (func(), bool) {
 		})
 	}
 	return cleanup, true
-}
-
-// Sessions 返回当前所有活跃会话的快照副本。
-func (r *Registry) Sessions() []*Session {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	result := make([]*Session, 0, len(r.sessions))
-	for s := range r.sessions {
-		result = append(result, s)
-	}
-	return result
 }
 
 // Shutdown 执行优雅关闭：停止新会话准入、广播取消所有活跃会话，并等待会话协程退出。

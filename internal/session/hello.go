@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"xiaozhi-esp32-golang-server/internal/protocol/ws"
 )
 
 // WebSocket hello 握手相关的协议常量。
@@ -41,9 +43,6 @@ const (
 	// TransportWebSocket 传输层协议标识。
 	TransportWebSocket = "websocket"
 
-	// ClientProtocolVersion 客户端协议版本号。
-	ClientProtocolVersion = 1
-
 	// DefaultHelloTimeout 默认 hello 握手超时时间。
 	DefaultHelloTimeout = 10 * time.Second
 
@@ -54,15 +53,12 @@ const (
 // 客户端 hello 校验与握手相关的哨兵错误。
 var (
 	ErrInvalidMessageType   = errors.New("invalid message type, expected hello")
-	ErrInvalidProtocolVer   = errors.New("invalid protocol version, expected 1")
+	ErrInvalidProtocolVer   = errors.New("hello version differs from connection version")
 	ErrInvalidTransport     = errors.New("invalid transport, expected websocket")
 	ErrInvalidAudioFormat   = errors.New("invalid audio format, expected opus")
 	ErrInvalidSampleRate    = errors.New("invalid sample rate, expected 16000")
 	ErrInvalidChannels      = errors.New("invalid audio channels, expected 1")
 	ErrInvalidFrameDuration = errors.New("invalid frame duration, expected 60")
-	ErrDuplicateHello       = errors.New("duplicate hello message received")
-	ErrHelloTimeout         = errors.New("hello handshake timeout")
-	ErrBinaryFirstMessage   = errors.New("first message must be text hello, binary received")
 )
 
 // ClientAudioParams 定义客户端声明的上行音频参数。
@@ -109,11 +105,6 @@ type ServerHelloMessage struct {
 	AudioParams ServerAudioParams `json:"audio_params"`
 }
 
-// genericMessageHeader 用于快速提取消息类型。
-type genericMessageHeader struct {
-	Type string `json:"type"`
-}
-
 // GenerateSessionId 生成 16 字节（32 个十六进制字符）加密安全的随机会话 Id。
 func GenerateSessionId() (string, error) {
 	var b [16]byte
@@ -124,14 +115,14 @@ func GenerateSessionId() (string, error) {
 }
 
 // ValidateClientHello 严格校验客户端 hello 握手消息的各项字段。
-func ValidateClientHello(msg *ClientHelloMessage) error {
+func ValidateClientHello(msg *ClientHelloMessage, version ws.Version) error {
 	if msg == nil {
 		return errors.New("nil client hello message")
 	}
 	if msg.Type != MessageTypeHello {
 		return ErrInvalidMessageType
 	}
-	if msg.Version != ClientProtocolVersion {
+	if msg.Version != int(version) {
 		return ErrInvalidProtocolVer
 	}
 	if msg.Transport != TransportWebSocket {

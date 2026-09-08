@@ -152,7 +152,7 @@ func TestOTAActivateWithHMAC_Reactivation_InvalidatesOldTokenAndBinding(t *testi
 	wsReq.Header.Set("Authorization", "Bearer "+oldToken)
 	wsReq.Header.Set("Protocol-Version", "1")
 	wsReq.Header.Set("Serial-Number", testSN)
-	tok, err := session.AuthenticateUpgrade(wsReq, db, 0)
+	tok, err := session.AuthenticateUpgrade(wsReq, db)
 	if err != nil || tok.SerialNumber != testSN {
 		t.Fatalf("expected initial auth to succeed, got sn: %v, err: %v", tok, err)
 	}
@@ -203,7 +203,7 @@ func TestOTAActivateWithHMAC_Reactivation_InvalidatesOldTokenAndBinding(t *testi
 	wsReqAfter.Header.Set("Authorization", "Bearer "+oldToken)
 	wsReqAfter.Header.Set("Protocol-Version", "1")
 	wsReqAfter.Header.Set("Serial-Number", testSN)
-	_, authErr := session.AuthenticateUpgrade(wsReqAfter, db, 0)
+	_, authErr := session.AuthenticateUpgrade(wsReqAfter, db)
 	if authErr == nil {
 		t.Fatalf("expected old token to fail WebSocket auth after reactivation, but succeeded")
 	}

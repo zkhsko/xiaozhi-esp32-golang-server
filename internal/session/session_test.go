@@ -126,9 +126,7 @@ func TestSession_Handshake_Success(t *testing.T) {
 	defer cancel()
 
 	conn := &mockWSConn{}
-	sess := NewSession(ctx, Options{
-		Conn:         nil,
-		Outbound:     NewOutboundActor(ctx, conn, 10, 5*time.Second, nil, nil),
+	sess := newTestSession(t, ctx, conn, Options{
 		SerialNumber: "SN-12345678",
 		Logger:       slog.Default(),
 	})
@@ -181,9 +179,7 @@ func TestSession_DuplicateHello_Rejected(t *testing.T) {
 	defer cancel()
 
 	conn := &mockWSConn{}
-	sess := NewSession(ctx, Options{
-		Conn:         nil,
-		Outbound:     NewOutboundActor(ctx, conn, 10, 5*time.Second, nil, nil),
+	sess := newTestSession(t, ctx, conn, Options{
 		SerialNumber: "SN-12345678",
 		Logger:       slog.Default(),
 	})
@@ -246,8 +242,7 @@ func TestSession_AutoTurn_FullCycle(t *testing.T) {
 	}
 	tts := &mockTTSClient{}
 
-	sess := NewSession(ctx, Options{
-		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+	sess := newTestSession(t, ctx, conn, Options{
 		SerialNumber: "SN-12345678",
 		ASRClient:    asr,
 		LLMClient:    llm,
@@ -351,8 +346,7 @@ func TestSession_CloseSession_Tool_ClosesSession(t *testing.T) {
 	}
 	tts := &mockTTSClient{}
 
-	sess := NewSession(ctx, Options{
-		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+	sess := newTestSession(t, ctx, conn, Options{
 		SerialNumber: "SN-12345678",
 		ASRClient:    asr,
 		LLMClient:    llm,
@@ -424,9 +418,8 @@ func TestSession_CloseSession_Tool_NoPromptAppended(t *testing.T) {
 	}
 	tts := &mockTTSClient{}
 
-	sess := NewSession(ctx, Options{
+	sess := newTestSession(t, ctx, conn, Options{
 		PromptToneEnabled: true,
-		Outbound:          NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
 		SerialNumber:      "SN-12345678",
 		ASRClient:         asr,
 		LLMClient:         llm,
@@ -513,8 +506,7 @@ func TestSession_Abort(t *testing.T) {
 	}
 	tts := &mockTTSClient{}
 
-	sess := NewSession(ctx, Options{
-		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+	sess := newTestSession(t, ctx, conn, Options{
 		SerialNumber: "SN-12345678",
 		ASRClient:    asr,
 		LLMClient:    llm,
@@ -584,8 +576,7 @@ func TestSession_Manual_NoSpeech_ResetsToReady(t *testing.T) {
 	llm := &mockLLMClient{}
 	tts := &mockTTSClient{}
 
-	sess := NewSession(ctx, Options{
-		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+	sess := newTestSession(t, ctx, conn, Options{
 		SerialNumber: "SN-12345678",
 		ASRClient:    asr,
 		LLMClient:    llm,
@@ -655,8 +646,7 @@ func TestSession_TurnFailed_ClosesSession(t *testing.T) {
 	llm := &mockLLMClient{}
 	tts := &mockTTSClient{}
 
-	sess := NewSession(ctx, Options{
-		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+	sess := newTestSession(t, ctx, conn, Options{
 		SerialNumber: "SN-12345678",
 		ASRClient:    asr,
 		LLMClient:    llm,
@@ -827,8 +817,7 @@ func TestSession_MCPDiscovery_AsyncNoDeadlock_DuringTurn(t *testing.T) {
 	}
 	tts := &mockTTSClient{}
 
-	sess = NewSession(ctx, Options{
-		Outbound:     NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
+	sess = newTestSession(t, ctx, conn, Options{
 		SerialNumber: "SN-12345678",
 		ASRClient:    asr,
 		LLMClient:    llm,
@@ -933,9 +922,8 @@ func TestSession_GreetingPrompt_TransitionToTurn(t *testing.T) {
 	}
 	tts := &mockTTSClient{}
 
-	sess := NewSession(ctx, Options{
+	sess := newTestSession(t, ctx, conn, Options{
 		PromptToneEnabled: true,
-		Outbound:          NewOutboundActor(ctx, conn, 20, 5*time.Second, nil, nil),
 		SerialNumber:      "SN-12345678",
 		ASRClient:         asr,
 		LLMClient:         llm,

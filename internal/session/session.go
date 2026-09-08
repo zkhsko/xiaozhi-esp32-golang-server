@@ -17,6 +17,7 @@ import (
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/audio"
 	"xiaozhi-esp32-golang-server/internal/logger"
+	"xiaozhi-esp32-golang-server/internal/protocol/ws"
 	"xiaozhi-esp32-golang-server/internal/voice"
 )
 
@@ -25,6 +26,7 @@ type sessionEventKind int
 
 const (
 	eventKindClientFrame sessionEventKind = iota
+	eventKindHelloTimeout
 	eventKindTurnInputClosed
 	eventKindTurnFinished
 	eventKindTimeout
@@ -68,7 +70,7 @@ type runtimeState struct {
 
 // Session 负责管理单个 WebSocket 连接的生命周期、协议事件循环与 Actor 状态机。
 type Session struct {
-	conn              *websocket.Conn
+	conn              *ws.Conn
 	outbound          *OutboundActor
 	events            chan sessionEvent
 	serialNumber      string
@@ -97,7 +99,7 @@ type Session struct {
 
 // Options 聚合构造单个 WebSocket 会话的依赖与上下文。
 type Options struct {
-	Conn              *websocket.Conn
+	Conn              *ws.Conn
 	SerialNumber      string
 	SystemPrompt      string
 	PromptToneEnabled bool
@@ -107,12 +109,13 @@ type Options struct {
 	TTSClient         ai.TTSClient
 	AgentKitStore     AgentKitStore
 	Logger            *slog.Logger
-	Outbound          *OutboundActor
-	VoiceEngine       *voice.TurnEngine
 }
 
 // NewSession 使用具名选项创建配置就绪的 WebSocket 会话对象。
 func NewSession(ctx context.Context, opts Options) *Session {
+	if opts.Conn == nil {
+		panic("session: connection is required")
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -128,27 +131,19 @@ func NewSession(ctx context.Context, opts Options) *Session {
 	diagLimiter := logger.NewDiagRateLimiter()
 	mcpBridge := NewMCPBridge(l, diagLimiter)
 	toolProvider := NewToolProvider(mcpBridge, opts.AgentKitStore, l)
-	engine := opts.VoiceEngine
-	if engine == nil {
-		engine = voice.NewEngine()
-	}
-
-	out := opts.Outbound
-	if out == nil && opts.Conn != nil {
-		out = NewOutboundActor(
-			sessionCtx,
-			opts.Conn,
-			cfg.DownlinkOpusQueueCapacity,
-			cfg.WebsocketWriteTimeout,
-			l,
-			func(err error) {
-				select {
-				case events <- sessionEvent{kind: eventKindOutboundFailed}:
-				default:
-				}
-			},
-		)
-	}
+	out := NewOutboundActor(
+		sessionCtx,
+		opts.Conn,
+		cfg.DownlinkOpusQueueCapacity,
+		cfg.WebsocketWriteTimeout,
+		l,
+		func(err error) {
+			select {
+			case events <- sessionEvent{kind: eventKindOutboundFailed}:
+			case <-sessionCtx.Done():
+			}
+		},
+	)
 
 	sess := &Session{
 		conn:              opts.Conn,
@@ -165,7 +160,7 @@ func NewSession(ctx context.Context, opts Options) *Session {
 		ttsClient:         opts.TTSClient,
 		mcpBridge:         mcpBridge,
 		toolProvider:      toolProvider,
-		voiceEngine:       engine,
+		voiceEngine:       voice.NewEngine(),
 		runtime: runtimeState{
 			state:   StateAwaitHello,
 			history: NewConversationHistory(cfg.MaxHistoryTurns),
@@ -184,12 +179,7 @@ func (s *Session) Run() error {
 
 	// 启动 Hello 超时定时器
 	s.runtime.helloTimer = time.AfterFunc(s.cfg.HelloTimeout, func() {
-		s.postEvent(sessionEvent{
-			kind:        eventKindTimeout,
-			timeoutText: "hello timeout",
-			closeCode:   websocket.StatusPolicyViolation,
-			closeReason: "hello timeout",
-		})
+		s.postEvent(sessionEvent{kind: eventKindHelloTimeout})
 	})
 
 	go s.readPump()
@@ -217,13 +207,19 @@ func (s *Session) postEvent(ev sessionEvent) {
 
 // readPump 独占从底层 WebSocket 读取文本与二进制帧并投递给 Actor。
 func (s *Session) readPump() {
-	if s.conn == nil {
-		return
-	}
-
 	for {
 		msgType, data, err := s.conn.Read(s.ctx)
 		if err != nil {
+			if errors.Is(err, ws.ErrMessageTooLarge) || errors.Is(err, ws.ErrInvalidAudioFrame) {
+				code := websocket.StatusPolicyViolation
+				reason := "invalid audio frame"
+				if errors.Is(err, ws.ErrMessageTooLarge) {
+					code = websocket.StatusMessageTooBig
+					reason = "message exceeds read limit"
+				}
+				s.postEvent(sessionEvent{kind: eventKindCloseRequest, closeCode: code, closeReason: reason})
+				return
+			}
 			var closeErr websocket.CloseError
 			if errors.As(err, &closeErr) {
 				s.postEvent(sessionEvent{
@@ -271,6 +267,13 @@ func (s *Session) readPump() {
 // handleEvent 是 Session Actor 的唯一状态机转移收口。
 func (s *Session) handleEvent(ev sessionEvent) bool {
 	switch ev.kind {
+	case eventKindHelloTimeout:
+		if s.runtime.state != StateAwaitHello {
+			return false
+		}
+		s.closeWithReason(websocket.StatusPolicyViolation, "hello timeout")
+		return true
+
 	case eventKindTimeout:
 		s.logger.Warn("session actor timeout",
 			"serial_number", s.serialNumber,
@@ -317,6 +320,10 @@ func (s *Session) handleEvent(ev sessionEvent) bool {
 
 	case eventKindClientFrame:
 		if ev.isBinary {
+			if s.runtime.state == StateAwaitHello {
+				s.closeWithReason(websocket.StatusPolicyViolation, "first message must be text hello")
+				return true
+			}
 			s.handleAudioFrame(ev.data)
 			return false
 		}
@@ -332,7 +339,7 @@ func (s *Session) handleTextMessage(data []byte) bool {
 		return s.handleHello(data)
 	}
 
-	msg, err := ParseClientMessageWithLimit(data, int(s.cfg.MaxWSTextMessageBytes))
+	msg, err := ParseClientMessage(data)
 	if err != nil {
 		s.logger.Warn("malformed client text message",
 			"serial_number", s.serialNumber,
@@ -397,11 +404,11 @@ func (s *Session) handleHello(data []byte) bool {
 			"serial_number", s.serialNumber,
 			"error", err,
 		)
-		s.closeWithReason(websocket.StatusPolicyViolation, err.Error())
+		s.closeWithReason(websocket.StatusPolicyViolation, "malformed hello")
 		return true
 	}
 
-	if err := ValidateClientHello(&helloMsg); err != nil {
+	if err := ValidateClientHello(&helloMsg, s.conn.Version()); err != nil {
 		s.logger.Warn("client hello validation failed",
 			"serial_number", s.serialNumber,
 			"error", err,
@@ -415,7 +422,11 @@ func (s *Session) handleHello(data []byte) bool {
 		s.runtime.helloTimer = nil
 	}
 
-	sessionId, _ := GenerateSessionId()
+	sessionId, err := GenerateSessionId()
+	if err != nil {
+		s.closeWithReason(websocket.StatusInternalError, "generate session id failed")
+		return true
+	}
 	s.runtime.sessionId = sessionId
 	s.atomicSessionId.Store(sessionId)
 
@@ -426,25 +437,20 @@ func (s *Session) handleHello(data []byte) bool {
 	}
 
 	// Hello 必须通过 Outbound Actor 实际写出
-	if s.outbound != nil {
-		writeCtx, cancel := context.WithTimeout(s.ctx, s.cfg.WebsocketWriteTimeout)
-		err := s.outbound.SendTextSession(writeCtx, helloRespBytes)
-		cancel()
-		if err != nil {
-			s.logger.Error("failed to write server hello",
-				"serial_number", s.serialNumber,
-				"error", err,
-			)
-			s.closeWithReason(websocket.StatusInternalError, "write hello failed")
-			return true
-		}
+	writeCtx, cancel := context.WithTimeout(s.ctx, s.cfg.WebsocketWriteTimeout)
+	err = s.outbound.SendTextSession(writeCtx, helloRespBytes)
+	cancel()
+	if err != nil {
+		s.logger.Error("failed to write server hello", "serial_number", s.serialNumber, "error", err)
+		s.closeWithReason(websocket.StatusInternalError, "write hello failed")
+		return true
 	}
 
 	s.runtime.state = StateReady
 	s.runtime.promptOnNextAuto = true
 
 	// 客户端若支持 MCP，使用 session 上下文启动后台发现
-	if helloMsg.SupportsMCP() && s.mcpBridge != nil && s.outbound != nil {
+	if helloMsg.SupportsMCP() && s.mcpBridge != nil {
 		s.mcpBridge.Enable(s.ctx, sessionId, s.outbound)
 	}
 
@@ -528,9 +534,7 @@ func (s *Session) handleAbort() {
 	}
 
 	// 2. 精准失效当前 Turn 尚未开始写入的下行
-	if s.outbound != nil {
-		s.outbound.InvalidateTurn(s.runtime.currentTurnId)
-	}
+	s.outbound.InvalidateTurn(s.runtime.currentTurnId)
 
 	if s.runtime.listeningTimer != nil {
 		s.runtime.listeningTimer.Stop()
@@ -587,7 +591,7 @@ func (s *Session) handleAudioFrame(data []byte) {
 
 // playGreetingPrompt 异步以 Session 作用域（turnId: 0）下发就绪提示音。
 func (s *Session) playGreetingPrompt() {
-	if !s.promptToneEnabled || s.outbound == nil || s.runtime.state == StateClosed {
+	if !s.promptToneEnabled || s.runtime.state == StateClosed {
 		return
 	}
 
@@ -649,10 +653,7 @@ func (s *Session) startTurn(mode string, prebuffer [][]byte, manualStop bool) {
 
 	s.runtime.state = StateTurnActive
 
-	var turnOutput voice.TurnOutput
-	if s.outbound != nil {
-		turnOutput = s.outbound.NewTurnOutput(turnId, s.runtime.sessionId)
-	}
+	turnOutput := s.outbound.NewTurnOutput(turnId, s.runtime.sessionId)
 
 	var toolSnapshotFn voice.ToolSnapshotFunc
 	if s.toolProvider != nil {
@@ -767,11 +768,12 @@ func (s *Session) handleTurnFinished(res voice.TurnResult) bool {
 
 func (s *Session) closeWithReason(code websocket.StatusCode, reason string) {
 	s.runtime.state = StateClosed
-	s.cancel()
-
-	if s.conn != nil {
-		_ = s.conn.Close(code, reason)
+	if s.runtime.turnCancel != nil {
+		s.runtime.turnCancel()
 	}
+	// Canceling an active Read can close the socket before the close frame is sent.
+	_ = s.conn.Close(code, reason)
+	s.cancel()
 }
 
 func (s *Session) cleanup() {
@@ -789,17 +791,13 @@ func (s *Session) cleanup() {
 			s.runtime.turnCancel()
 		}
 
-		if s.outbound != nil {
-			s.outbound.Close()
-		}
+		s.outbound.Close()
 
 		if s.mcpBridge != nil {
 			s.mcpBridge.Close()
 		}
 
-		if s.conn != nil {
-			_ = s.conn.Close(websocket.StatusNormalClosure, "session closed")
-		}
+		_ = s.conn.Close(websocket.StatusNormalClosure, "session closed")
 
 		close(s.done)
 	})

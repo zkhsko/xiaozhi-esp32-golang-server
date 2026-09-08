@@ -59,7 +59,7 @@ func TestAuthenticateUpgrade_Success_TableDataIsAuthority(t *testing.T) {
 	req.Header.Set("Client-Id", "fake-header-client-id")
 	req.Header.Set("User-Agent", "ESP32-Client/1.0")
 
-	tok, err := AuthenticateUpgrade(req, resolver, 0)
+	tok, err := AuthenticateUpgrade(req, resolver)
 	if err != nil {
 		t.Fatalf("expected authentication to succeed, got error: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestAuthenticateUpgrade_Success_NoDeviceHeaders(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+tokenStr)
 	req.Header.Set("Protocol-Version", "1")
 
-	tok, err := AuthenticateUpgrade(req, resolver, 0)
+	tok, err := AuthenticateUpgrade(req, resolver)
 	if err != nil {
 		t.Fatalf("expected auth success without device headers, got: %v", err)
 	}
@@ -133,27 +133,6 @@ func TestAuthenticateUpgrade_ValidationAndAuthFailures(t *testing.T) {
 				return nil
 			},
 			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "MissingProtocolVersion",
-			req: func() *http.Request {
-				r := httptest.NewRequest(http.MethodGet, "/xiaozhi/v1/", nil)
-				r.Header.Set("Authorization", "Bearer "+validToken)
-				return r
-			},
-			wantStatus: http.StatusBadRequest,
-			wantErr:    ErrInvalidProtocolVersion,
-		},
-		{
-			name: "InvalidProtocolVersion",
-			req: func() *http.Request {
-				r := httptest.NewRequest(http.MethodGet, "/xiaozhi/v1/", nil)
-				r.Header.Set("Authorization", "Bearer "+validToken)
-				r.Header.Set("Protocol-Version", "2")
-				return r
-			},
-			wantStatus: http.StatusBadRequest,
-			wantErr:    ErrInvalidProtocolVersion,
 		},
 		{
 			name: "MissingAuthorizationHeader",
@@ -209,24 +188,12 @@ func TestAuthenticateUpgrade_ValidationAndAuthFailures(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 			wantErr:    ErrInvalidToken,
 		},
-		{
-			name: "HeaderTooLarge",
-			req: func() *http.Request {
-				r := httptest.NewRequest(http.MethodGet, "/xiaozhi/v1/", nil)
-				r.Header.Set("Protocol-Version", "1")
-				r.Header.Set("Authorization", "Bearer "+validToken)
-				r.Header.Set("X-Custom-Large", strings.Repeat("a", 2048))
-				return r
-			},
-			wantStatus: http.StatusBadRequest,
-			wantErr:    ErrHeaderTooLarge,
-		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			r := tc.req()
-			tok, err := AuthenticateUpgrade(r, resolver, 0)
+			tok, err := AuthenticateUpgrade(r, resolver)
 			if err == nil {
 				t.Fatalf("expected error, got tok=%v", tok)
 			}
@@ -308,10 +275,40 @@ func TestHandler_DynamicLoading_FailFast(t *testing.T) {
 	}
 }
 
+func TestHandler_UpgradeHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		versions []string
+		header   string
+		status   int
+	}{
+		{"missing", nil, "", http.StatusBadRequest},
+		{"duplicate", []string{"1", "1"}, "", http.StatusBadRequest},
+		{"invalid", []string{"4"}, "", http.StatusBadRequest},
+		{"noncanonical", []string{"01"}, "", http.StatusBadRequest},
+		{"large_header", []string{"1"}, strings.Repeat("x", 2048), http.StatusBadRequest},
+		{"valid_requires_auth", []string{"1"}, "", http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewHandler(HandlerOptions{})
+			req := httptest.NewRequest(http.MethodGet, WebSocketPath, nil)
+			for _, value := range tc.versions {
+				req.Header.Add("Protocol-Version", value)
+			}
+			if tc.header != "" {
+				req.Header.Set("X-Large", tc.header)
+			}
+			response := httptest.NewRecorder()
+			h.ServeHTTP(response, req)
+			if response.Code != tc.status {
+				t.Fatalf("status = %d, want %d", response.Code, tc.status)
+			}
+		})
+	}
+}
+
 func TestSession_DeviceKey_SNIsUniqueIdentity(t *testing.T) {
-	sess := NewSession(context.Background(), Options{
-		SerialNumber: "sn-unique-identity-001",
-	})
+	sess := &Session{serialNumber: "sn-unique-identity-001"}
 
 	if sess.DeviceKey() != "sn-unique-identity-001" {
 		t.Errorf("expected DeviceKey %q, got %q", "sn-unique-identity-001", sess.DeviceKey())
@@ -322,15 +319,15 @@ func TestRegistry_SNBasedExclusion(t *testing.T) {
 	limiter := NewSessionLimiter(10)
 	reg := NewRegistry(limiter, nil)
 
-	s1 := NewSession(context.Background(), Options{
-		SerialNumber: "sn-common-001",
-	})
-	s2 := NewSession(context.Background(), Options{
-		SerialNumber: "sn-common-001",
-	})
-	s3 := NewSession(context.Background(), Options{
-		SerialNumber: "sn-another-002",
-	})
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	defer cancel1()
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	ctx3, cancel3 := context.WithCancel(context.Background())
+	defer cancel3()
+	s1 := &Session{serialNumber: "sn-common-001", ctx: ctx1, cancel: cancel1}
+	s2 := &Session{serialNumber: "sn-common-001", ctx: ctx2, cancel: cancel2}
+	s3 := &Session{serialNumber: "sn-another-002", ctx: ctx3, cancel: cancel3}
 
 	// 注册 s1
 	cleanup1, ok1 := reg.Register(s1)
@@ -339,7 +336,7 @@ func TestRegistry_SNBasedExclusion(t *testing.T) {
 	}
 	defer cleanup1()
 
-	if reg.GetBySerial("sn-common-001") != s1 {
+	if testSessionBySerial(reg, "sn-common-001") != s1 {
 		t.Errorf("expected to find s1 for sn-common-001")
 	}
 
@@ -350,7 +347,7 @@ func TestRegistry_SNBasedExclusion(t *testing.T) {
 	}
 	defer cleanup2()
 
-	if reg.GetBySerial("sn-common-001") != s2 {
+	if testSessionBySerial(reg, "sn-common-001") != s2 {
 		t.Errorf("expected to find s2 for sn-common-001")
 	}
 
@@ -361,10 +358,10 @@ func TestRegistry_SNBasedExclusion(t *testing.T) {
 	}
 	defer cleanup3()
 
-	if reg.GetBySerial("sn-common-001") != s2 {
+	if testSessionBySerial(reg, "sn-common-001") != s2 {
 		t.Errorf("expected s2 to still be active for sn-common-001")
 	}
-	if reg.GetBySerial("sn-another-002") != s3 {
+	if testSessionBySerial(reg, "sn-another-002") != s3 {
 		t.Errorf("expected s3 to be active for sn-another-002")
 	}
 }

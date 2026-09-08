@@ -13,7 +13,7 @@ import (
 	"xiaozhi-esp32-golang-server/internal/database"
 )
 
-// 常量定义：WebSocket 路径、请求头长度限制、协议版本与认证前缀。
+// 常量定义：WebSocket 路径、请求头长度限制与认证前缀。
 const (
 	// WebSocketPath 设备 WebSocket 连接接入路径。
 	WebSocketPath = "/xiaozhi/v1/"
@@ -24,20 +24,16 @@ const (
 	// MaxTotalHeaderBytes 所有请求头键值对累计最大长度（8192 字符）。
 	MaxTotalHeaderBytes = 8192
 
-	// ProtocolVersion WebSocket 协议版本号。
-	ProtocolVersion = "1"
-
 	// BearerPrefix Authorization 头要求的 Bearer 前缀。
 	BearerPrefix = "Bearer "
 )
 
 // 认证与请求校验相关的哨兵错误。
 var (
-	ErrHeaderTooLarge         = errors.New("request header fields too large")
-	ErrMissingToken           = errors.New("missing authorization header")
-	ErrInvalidTokenFormat     = errors.New("invalid authorization header format")
-	ErrInvalidToken           = errors.New("invalid authorization token")
-	ErrInvalidProtocolVersion = errors.New("invalid or missing protocol version")
+	ErrHeaderTooLarge     = errors.New("request header fields too large")
+	ErrMissingToken       = errors.New("missing authorization header")
+	ErrInvalidTokenFormat = errors.New("invalid authorization header format")
+	ErrInvalidToken       = errors.New("invalid authorization token")
 )
 
 // DeviceAgentResolver 定义 WebSocket 建连所需的设备 Token 校验与智能体快照单表分步解析契约。
@@ -77,7 +73,7 @@ func HTTPStatus(err error) int {
 	if errors.Is(err, ErrMissingToken) || errors.Is(err, ErrInvalidTokenFormat) || errors.Is(err, ErrInvalidToken) || errors.Is(err, database.ErrAccessTokenNotFound) {
 		return http.StatusUnauthorized
 	}
-	if errors.Is(err, ErrHeaderTooLarge) || errors.Is(err, ErrInvalidProtocolVersion) || errors.Is(err, database.ErrDeviceTypeNotFound) || errors.Is(err, database.ErrEmptyDeviceType) {
+	if errors.Is(err, ErrHeaderTooLarge) || errors.Is(err, database.ErrDeviceTypeNotFound) || errors.Is(err, database.ErrEmptyDeviceType) {
 		return http.StatusBadRequest
 	}
 	if errors.Is(err, database.ErrAgentConfigNotFound) ||
@@ -118,9 +114,9 @@ func ValidateHeaders(headers http.Header, maxSingle, maxTotal int) error {
 	return nil
 }
 
-// AuthenticateUpgrade 执行 WebSocket 升级前的请求头校验、协议版本检查与数据库 Token 认证。
+// AuthenticateUpgrade 执行 WebSocket 升级前的数据库 Token 认证。
 // 校验失败时返回附带 HTTP 状态码的 AuthError；成功时返回表里确定的设备 Access Token 实体。
-func AuthenticateUpgrade(r *http.Request, finder DeviceAgentResolver, maxHeaderBytes int) (*database.DeviceAccessToken, error) {
+func AuthenticateUpgrade(r *http.Request, finder DeviceAgentResolver) (*database.DeviceAccessToken, error) {
 	if r == nil {
 		return nil, &AuthError{
 			StatusCode: http.StatusBadRequest,
@@ -128,28 +124,7 @@ func AuthenticateUpgrade(r *http.Request, finder DeviceAgentResolver, maxHeaderB
 		}
 	}
 
-	// 1. 请求头长度限制校验
-	maxSingle := MaxSingleHeaderBytes
-	if maxHeaderBytes > 0 {
-		maxSingle = maxHeaderBytes
-	}
-	if err := ValidateHeaders(r.Header, maxSingle, MaxTotalHeaderBytes); err != nil {
-		return nil, &AuthError{
-			StatusCode: http.StatusBadRequest,
-			Err:        err,
-		}
-	}
-
-	// 2. 协议版本校验
-	protocolVer := strings.TrimSpace(r.Header.Get("Protocol-Version"))
-	if protocolVer != ProtocolVersion {
-		return nil, &AuthError{
-			StatusCode: http.StatusBadRequest,
-			Err:        ErrInvalidProtocolVersion,
-		}
-	}
-
-	// 3. Authorization Bearer Token 提取
+	// Authorization Bearer Token 提取
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		return nil, &AuthError{
@@ -181,7 +156,7 @@ func AuthenticateUpgrade(r *http.Request, finder DeviceAgentResolver, maxHeaderB
 		}
 	}
 
-	// 4. 从数据库查询 Access Token 并校验其有效性
+	// 从数据库查询 Access Token 并校验其有效性
 	tok, err := finder.FindDeviceAccessTokenByAccessToken(r.Context(), token)
 	if err != nil {
 		return nil, &AuthError{

@@ -44,10 +44,9 @@ func TestSession_PromptToneGreeting(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				conn := &mockWSConn{}
-				sess := NewSession(ctx, Options{
+				sess := newTestSession(t, ctx, conn, Options{
 					PromptToneEnabled: enabled,
 					ASRClient:         &waitingASRClient{},
-					Outbound:          NewOutboundActor(ctx, conn, 20, time.Second, nil, nil),
 				})
 				go func() { _ = sess.Run() }()
 				defer func() {
@@ -125,12 +124,11 @@ func TestSession_PromptToneTurnOptions(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			conn := &mockWSConn{}
-			sess := NewSession(ctx, Options{
+			sess := newTestSession(t, ctx, conn, Options{
 				PromptToneEnabled: enabled,
 				ASRClient:         &mockASRClient{text: "你好"},
 				LLMClient:         &mockLLMClient{chunks: []ai.LLMChunk{{Text: "你好呀。"}}},
 				TTSClient:         &mockTTSClient{},
-				Outbound:          NewOutboundActor(ctx, conn, 20, time.Second, nil, nil),
 			})
 			defer sess.cleanup()
 			if sess.handleHello([]byte(promptToneTestHello)) {
@@ -159,6 +157,12 @@ func TestSession_PromptToneTurnOptions(t *testing.T) {
 				wantFrames += len(framer.Feed(promptPCM))
 			}
 			wantFrames += len(framer.Flush())
+			if !waitForCondition(time.Second, func() bool {
+				messages := conn.getMessages()
+				return len(messages) > 0 && bytes.Contains(messages[len(messages)-1].payload, []byte(`"state":"stop"`))
+			}) {
+				t.Fatalf("incomplete output: %d messages", len(conn.getMessages()))
+			}
 			var audioFrames, starts, stops int
 			for _, message := range conn.getMessages() {
 				if message.msgType == websocket.MessageBinary {
