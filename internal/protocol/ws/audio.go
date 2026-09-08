@@ -19,6 +19,10 @@ func decodeAudio(version Version, data []byte, maxPayload int) ([]byte, error) {
 			uint64(binary.BigEndian.Uint32(data[12:16])) != uint64(len(payload)) {
 			return nil, ErrInvalidAudioFrame
 		}
+	} else if version == Version3 {
+		if data[0] != 0 || uint64(binary.BigEndian.Uint16(data[2:4])) != uint64(len(payload)) {
+			return nil, ErrInvalidAudioFrame
+		}
 	}
 	return payload, nil
 }
@@ -31,12 +35,20 @@ func encodeAudio(version Version, payload []byte) ([]byte, error) {
 		return payload, nil
 	}
 	headerSize := version.headerSize()
-	if uint64(len(payload)) > math.MaxUint32 || len(payload) > math.MaxInt-headerSize {
+	maxPayload := uint64(math.MaxUint32)
+	if version == Version3 {
+		maxPayload = math.MaxUint16
+	}
+	if uint64(len(payload)) > maxPayload || len(payload) > math.MaxInt-headerSize {
 		return nil, ErrMessageTooLarge
 	}
 	data := make([]byte, headerSize+len(payload))
-	binary.BigEndian.PutUint16(data[:2], uint16(version))
-	binary.BigEndian.PutUint32(data[12:16], uint32(len(payload)))
+	if version == Version2 {
+		binary.BigEndian.PutUint16(data[:2], uint16(version))
+		binary.BigEndian.PutUint32(data[12:16], uint32(len(payload)))
+	} else {
+		binary.BigEndian.PutUint16(data[2:4], uint16(len(payload)))
+	}
 	copy(data[headerSize:], payload)
 	return data, nil
 }

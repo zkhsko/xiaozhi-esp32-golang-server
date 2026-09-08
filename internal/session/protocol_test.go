@@ -22,7 +22,7 @@ import (
 	"xiaozhi-esp32-golang-server/internal/protocol/ws"
 )
 
-var testProtocolVersions = []ws.Version{ws.Version1, ws.Version2}
+var testProtocolVersions = []ws.Version{ws.Version1, ws.Version2, ws.Version3}
 
 func protocolHello(t *testing.T, version ws.Version) []byte {
 	t.Helper()
@@ -43,16 +43,27 @@ func deviceAudioPacket(t *testing.T, version ws.Version, payload []byte) []byte 
 	if version == ws.Version1 {
 		return bytes.Clone(payload)
 	}
-	header := struct {
-		Version   uint16
-		Type      uint16
-		Reserved  uint32
-		Timestamp uint32
-		Size      uint32
-	}{Version: 2, Size: uint32(len(payload))}
 	var packet bytes.Buffer
-	if err := binary.Write(&packet, binary.BigEndian, header); err != nil {
-		t.Fatal(err)
+	if version == ws.Version2 {
+		header := struct {
+			Version   uint16
+			Type      uint16
+			Reserved  uint32
+			Timestamp uint32
+			Size      uint32
+		}{Version: 2, Size: uint32(len(payload))}
+		if err := binary.Write(&packet, binary.BigEndian, header); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		header := struct {
+			Type     uint8
+			Reserved uint8
+			Size     uint16
+		}{Size: uint16(len(payload))}
+		if err := binary.Write(&packet, binary.BigEndian, header); err != nil {
+			t.Fatal(err)
+		}
 	}
 	packet.Write(payload)
 	return packet.Bytes()
@@ -63,12 +74,16 @@ func serverAudioPayload(t *testing.T, version ws.Version, packet []byte) []byte 
 	if version == ws.Version1 {
 		return packet
 	}
-	if len(packet) <= 16 {
-		t.Fatalf("short v2 packet: %x", packet)
+	headerSize := 16
+	if version == ws.Version3 {
+		headerSize = 4
 	}
-	payload := packet[16:]
+	if len(packet) <= headerSize {
+		t.Fatalf("short v%d packet: %x", version, packet)
+	}
+	payload := packet[headerSize:]
 	if !bytes.Equal(packet, deviceAudioPacket(t, version, payload)) {
-		t.Fatalf("invalid v2 downlink header: %x", packet[:16])
+		t.Fatalf("invalid v%d downlink header: %x", version, packet[:headerSize])
 	}
 	return payload
 }

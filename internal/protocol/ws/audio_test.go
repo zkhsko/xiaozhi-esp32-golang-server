@@ -24,6 +24,7 @@ func audioVectors(t testing.TB) []struct {
 	}{
 		{Version1, []byte{0x11, 0x22, 0x33}},
 		{Version2, v2},
+		{Version3, []byte{0, 0, 0, 3, 0x11, 0x22, 0x33}},
 	}
 }
 
@@ -105,13 +106,49 @@ func TestConnAudioVectors(t *testing.T) {
 	}
 }
 
+func TestAudioV3Validation(t *testing.T) {
+	valid := audioVectors(t)[2].wire
+	for _, wire := range [][]byte{nil, valid[:3], valid[:4], valid[:6], append(bytes.Clone(valid), 0x44)} {
+		if _, err := decodeAudio(Version3, wire, 1024); !errors.Is(err, ErrInvalidAudioFrame) {
+			t.Errorf("invalid v3 packet %x: %v", wire, err)
+		}
+	}
+	for _, offset := range []int{0, 2, 3} {
+		wire := bytes.Clone(valid)
+		wire[offset] = 0xff
+		if _, err := decodeAudio(Version3, wire, 1024); !errors.Is(err, ErrInvalidAudioFrame) {
+			t.Errorf("invalid v3 field at %d: %v", offset, err)
+		}
+	}
+	wire := bytes.Clone(valid)
+	wire[1] = 0xff
+	if payload, err := decodeAudio(Version3, wire, 1024); err != nil || !bytes.Equal(payload, valid[4:]) {
+		t.Fatalf("reserved field changed payload: %x, %v", payload, err)
+	}
+}
+
+func TestAudioV3SizeBoundary(t *testing.T) {
+	payload := bytes.Repeat([]byte{0x55}, 65535)
+	encoded, err := encodeAudio(Version3, payload)
+	if err != nil || len(encoded) != 65539 || !bytes.Equal(encoded[:4], []byte{0, 0, 0xff, 0xff}) {
+		t.Fatalf("maximum v3 frame length = %d, error = %v", len(encoded), err)
+	}
+	decoded, err := decodeAudio(Version3, encoded, 65535)
+	if err != nil || !bytes.Equal(decoded, payload) {
+		t.Fatalf("maximum v3 payload did not decode: %v", err)
+	}
+	if _, err := encodeAudio(Version3, append(payload, 0x55)); !errors.Is(err, ErrMessageTooLarge) {
+		t.Fatalf("v3 size overflow = %v", err)
+	}
+}
+
 func FuzzDecodeAudio(f *testing.F) {
 	f.Add([]byte{})
 	for _, vector := range audioVectors(f) {
 		f.Add(vector.wire)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		for _, version := range []Version{Version1, Version2} {
+		for _, version := range []Version{Version1, Version2, Version3} {
 			payload, err := decodeAudio(version, data, 1024)
 			if err != nil {
 				continue
