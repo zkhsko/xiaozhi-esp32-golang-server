@@ -49,6 +49,12 @@ type OTAHandler struct {
 
 // NewOTAHandler 创建 OTA 处理器实例。
 func NewOTAHandler(cfg *config.Config, db *database.Database, l *slog.Logger) *OTAHandler {
+	if cfg == nil {
+		panic("router: OTA configuration is required")
+	}
+	if err := cfg.Server.WebSocketVersion.Validate(); err != nil {
+		panic("router: OTA requires a supported websocket version")
+	}
 	if l == nil {
 		l = slog.Default()
 	}
@@ -193,7 +199,7 @@ func (h *OTAHandler) readAndValidateOTARequest(w http.ResponseWriter, r *http.Re
 	// 1. 校验请求头长度限制
 	maxHeaderBytes := MaxSingleHeaderBytes
 	maxTotalHeaderBytes := MaxTotalHeaderBytes
-	if h.cfg != nil && h.cfg.Server.MaxHTTPHeaderBytes > 0 {
+	if h.cfg.Server.MaxHTTPHeaderBytes > 0 {
 		maxTotalHeaderBytes = h.cfg.Server.MaxHTTPHeaderBytes
 	}
 	if err := validateHeaders(r.Header, maxHeaderBytes, maxTotalHeaderBytes); err != nil {
@@ -203,7 +209,7 @@ func (h *OTAHandler) readAndValidateOTARequest(w http.ResponseWriter, r *http.Re
 
 	// 2. 校验并读取请求正文
 	maxBodyBytes := int64(DefaultMaxBodyBytes)
-	if h.cfg != nil && h.cfg.Server.MaxHTTPBodyBytes > 0 {
+	if h.cfg.Server.MaxHTTPBodyBytes > 0 {
 		maxBodyBytes = h.cfg.Server.MaxHTTPBodyBytes
 	}
 

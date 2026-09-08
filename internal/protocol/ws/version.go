@@ -36,6 +36,16 @@ func (v Version) Validate() error {
 	return nil
 }
 
+// UnmarshalText applies the same version rules to configuration and HTTP input.
+func (v *Version) UnmarshalText(text []byte) error {
+	parsed, err := ParseVersion(string(text))
+	if err != nil {
+		return err
+	}
+	*v = parsed
+	return nil
+}
+
 func (v Version) headerSize() int {
 	switch v {
 	case Version2:

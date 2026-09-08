@@ -1,6 +1,7 @@
 server:
   listen_addr: ":8080"
   websocket_url: "wss://example.com/xiaozhi/v1/"
+  websocket_version: 1
   max_concurrent_sessions: 10
   shutdown_timeout: 10s
   http_read_timeout: 15s

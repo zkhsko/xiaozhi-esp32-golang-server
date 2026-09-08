@@ -6,11 +6,6 @@ import (
 	"time"
 )
 
-const (
-	// ProtocolVersion 固定协议版本号。
-	ProtocolVersion = 1
-)
-
 // ServerTimeInfo 定义服务端下发的时间同步信息。
 type ServerTimeInfo struct {
 	Timestamp      int64 `json:"timestamp"`                 // UTC 毫秒时间戳

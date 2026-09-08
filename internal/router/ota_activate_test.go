@@ -20,7 +20,7 @@ import (
 
 func TestOTAActivateWithHMAC_Success(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 
 	testSN := "sn-activate-test-1"
@@ -103,7 +103,8 @@ func TestOTAActivateWithHMAC_Reactivation_InvalidatesOldTokenAndBinding(t *testi
 	db := setupTestRouterDB(t)
 	cfg := &config.Config{
 		Server: config.ServerConfig{
-			WebSocketURL: "ws://localhost:8080/xiaozhi/v1/",
+			WebSocketURL:     "ws://localhost:8080/xiaozhi/v1/",
+			WebSocketVersion: 1,
 		},
 	}
 	otaHandler := NewOTAHandler(cfg, db, nil)
@@ -219,7 +220,7 @@ func TestOTAActivateWithHMAC_Reactivation_InvalidatesOldTokenAndBinding(t *testi
 
 func TestOTAActivateWithHMAC_DatabaseFailure_RollbackAndCacheRetained(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 
 	testSN := "sn-failure-001"
@@ -313,7 +314,7 @@ func TestOTAActivateWithHMAC_DatabaseFailure_RollbackAndCacheRetained(t *testing
 
 func TestOTAActivateWithHMAC_InvalidHMAC_CacheRetained(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 
 	testSN := "sn-invalid-hmac"
@@ -369,7 +370,7 @@ func TestOTAActivateWithHMAC_InvalidHMAC_CacheRetained(t *testing.T) {
 
 func TestOTAActivateWithHMAC_CredentialNotFoundOrUnavailable(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 
 	// Case 1: SN not in DB

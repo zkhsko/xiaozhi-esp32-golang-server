@@ -54,10 +54,7 @@ func (h *OTAHandler) handleOTALegacy(w http.ResponseWriter, r *http.Request, hea
 				"activated_at", act.ActivatedAt,
 			)
 
-			var wsURL, token string
-			if h.cfg != nil {
-				wsURL = h.cfg.Server.WebSocketURL
-			}
+			var token string
 
 			if act.SerialNumber != "" {
 				tok, err := h.db.FindDeviceAccessTokenBySerialNumber(r.Context(), act.SerialNumber)
@@ -77,9 +74,9 @@ func (h *OTAHandler) handleOTALegacy(w http.ResponseWriter, r *http.Request, hea
 			resp := Response{
 				ServerTime: currentServerTime(),
 				WebSocket: &WebSocketConfig{
-					URL:     wsURL,
+					URL:     h.cfg.Server.WebSocketURL,
 					Token:   token,
-					Version: ProtocolVersion,
+					Version: int(h.cfg.Server.WebSocketVersion),
 				},
 			}
 

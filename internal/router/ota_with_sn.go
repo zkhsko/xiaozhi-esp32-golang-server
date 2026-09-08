@@ -104,10 +104,7 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 				"activated_at", act.ActivatedAt,
 			)
 
-			var wsURL, token string
-			if h.cfg != nil {
-				wsURL = h.cfg.Server.WebSocketURL
-			}
+			var token string
 
 			// 查询 device_access_token 表：若存在未展示过的 Token，则仅在第一次请求校验全部通过后展示一次，随后更新标记为已展示
 			tok, err := h.db.FindDeviceAccessTokenBySerialNumber(r.Context(), headers.SerialNumber)
@@ -126,9 +123,9 @@ func (h *OTAHandler) handleOTASerialNumber(w http.ResponseWriter, r *http.Reques
 			resp := Response{
 				ServerTime: currentServerTime(),
 				WebSocket: &WebSocketConfig{
-					URL:     wsURL,
+					URL:     h.cfg.Server.WebSocketURL,
 					Token:   token,
-					Version: ProtocolVersion,
+					Version: int(h.cfg.Server.WebSocketVersion),
 				},
 			}
 

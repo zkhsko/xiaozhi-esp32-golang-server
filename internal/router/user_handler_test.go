@@ -54,7 +54,7 @@ func TestVerifyHMAC(t *testing.T) {
 
 func TestBindDeviceWithSN_Success_AndWebSocketAuth(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -180,7 +180,7 @@ func TestBindDeviceWithSN_Success_AndWebSocketAuth(t *testing.T) {
 
 func TestBindDeviceWithSN_DuplicateRequest_ReturnsBadRequest(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -217,7 +217,7 @@ func TestBindDeviceWithSN_DuplicateRequest_ReturnsBadRequest(t *testing.T) {
 
 func TestBindDeviceWithSN_DatabaseFailure_RollbackAndCacheRetained_AndRetrySuccess(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -312,7 +312,7 @@ func TestBindDeviceWithSN_DatabaseFailure_RollbackAndCacheRetained_AndRetrySucce
 
 func TestBindDeviceWithSN_Rebind_InvalidatesOldToken(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -388,7 +388,7 @@ func TestBindDeviceWithSN_Rebind_InvalidatesOldToken(t *testing.T) {
 
 func TestBindDeviceWithoutSN_Success_AndWebSocketAuth(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -551,7 +551,7 @@ func TestBindDeviceWithoutSN_HMACVerificationVariants(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			db := setupTestRouterDB(t)
-			cfg := &config.Config{}
+			cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 			otaHandler := NewOTAHandler(cfg, db, nil)
 			userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -601,7 +601,7 @@ func TestBindDeviceWithoutSN_HMACVerificationVariants(t *testing.T) {
 
 func TestBindDeviceWithoutSN_InvalidHMAC_FailsAndCacheRetained(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -687,7 +687,7 @@ func TestBindDeviceWithoutSN_InvalidHMAC_FailsAndCacheRetained(t *testing.T) {
 
 func TestBindDeviceWithoutSN_CredentialNotFound_FailsAndCacheRetained(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -720,7 +720,7 @@ func TestBindDeviceWithoutSN_CredentialNotFound_FailsAndCacheRetained(t *testing
 
 func TestBindDeviceWithoutSN_CredentialUnavailable_FailsAndCacheRetained(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -768,7 +768,7 @@ func TestBindDeviceWithoutSN_CredentialUnavailable_FailsAndCacheRetained(t *test
 
 func TestBindDeviceWithoutSN_MissingRequiredFields_BadRequest(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -818,7 +818,7 @@ func TestBindDeviceWithoutSN_MissingRequiredFields_BadRequest(t *testing.T) {
 
 func TestBindDeviceWithoutSN_DuplicateRequest_ReturnsBadRequest(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -871,7 +871,7 @@ func TestBindDeviceWithoutSN_DuplicateRequest_ReturnsBadRequest(t *testing.T) {
 
 func TestBindDeviceWithoutSN_DatabaseFailure_RollbackAndCacheRetained_AndRetrySuccess(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 
@@ -969,7 +969,7 @@ func TestBindDeviceWithoutSN_DatabaseFailure_RollbackAndCacheRetained_AndRetrySu
 
 func TestBindDeviceWithoutSN_Rebind_InvalidatesOldToken(t *testing.T) {
 	db := setupTestRouterDB(t)
-	cfg := &config.Config{}
+	cfg := &config.Config{Server: config.ServerConfig{WebSocketVersion: 1}}
 	otaHandler := NewOTAHandler(cfg, db, nil)
 	userHandler := NewUserHandler(cfg, db, otaHandler, nil)
 

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"xiaozhi-esp32-golang-server/internal/protocol/ws"
 )
 
 // 合法取值区间边界常量定义。
@@ -73,6 +75,7 @@ const (
 type ServerConfig struct {
 	ListenAddr            string        `yaml:"listen_addr"`
 	WebSocketURL          string        `yaml:"websocket_url"`
+	WebSocketVersion      ws.Version    `yaml:"websocket_version"`
 	MaxConcurrentSessions int           `yaml:"max_concurrent_sessions"`
 	ShutdownTimeout       time.Duration `yaml:"shutdown_timeout"`
 	HTTPReadTimeout       time.Duration `yaml:"http_read_timeout"`
@@ -127,7 +130,7 @@ func Load(path string) (*Config, error) {
 
 // LoadFromReader 从 io.Reader 解析 YAML 配置并完成全面校验。
 func LoadFromReader(r io.Reader) (*Config, error) {
-	var cfg Config
+	cfg := Config{Server: ServerConfig{WebSocketVersion: ws.Version1}}
 	dec := yaml.NewDecoder(r)
 	dec.KnownFields(true)
 	if err := dec.Decode(&cfg); err != nil {
@@ -161,6 +164,9 @@ func (c *Config) validateServer() error {
 	}
 	if err := validateWebSocketURL(c.Server.WebSocketURL); err != nil {
 		return fmt.Errorf("websocket_url: %w", err)
+	}
+	if err := c.Server.WebSocketVersion.Validate(); err != nil {
+		return fmt.Errorf("websocket_version: %w", err)
 	}
 	if err := validateInt("max_concurrent_sessions", c.Server.MaxConcurrentSessions, minConcurrentSessions, maxConcurrentSessions); err != nil {
 		return err

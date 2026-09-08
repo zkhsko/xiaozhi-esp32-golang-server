@@ -200,8 +200,11 @@ func TestHandlerProtocolVersions(t *testing.T) {
 	}
 	resolver.tokens["mismatch"] = &database.DeviceAccessToken{SerialNumber: "mismatch", AccessToken: "mismatch", DeviceType: "speaker"}
 	handler := NewHandler(HandlerOptions{
-		DB:      resolver,
-		Config:  &config.Config{Session: config.SessionConfig{MaxOpusPacketBytes: 128}},
+		DB: resolver,
+		Config: &config.Config{
+			Server:  config.ServerConfig{WebSocketVersion: ws.Version2},
+			Session: config.SessionConfig{MaxOpusPacketBytes: 128},
+		},
 		Limiter: NewSessionLimiter(len(testProtocolVersions) + 1),
 	})
 	server := httptest.NewServer(handler)
