@@ -11,7 +11,6 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/agentkit"
 	"xiaozhi-esp32-golang-server/internal/ai"
-	"xiaozhi-esp32-golang-server/internal/logger"
 )
 
 // SessionTextSender 定义发送会话级文本下行消息的接口。
@@ -28,22 +27,20 @@ type DownlinkMCPMessage struct {
 
 // MCPBridge 负责管理单个会话的设备 MCP 客户端生命周期、下行消息封包与上行响应分发。
 type MCPBridge struct {
-	mu          sync.RWMutex
-	sessionId   string
-	sender      SessionTextSender
-	client      *agentkit.DeviceMCPClient
-	logger      *slog.Logger
-	diagLimiter *logger.RateLimiter
+	mu        sync.RWMutex
+	sessionId string
+	sender    SessionTextSender
+	client    *agentkit.DeviceMCPClient
+	logger    *slog.Logger
 }
 
 // NewMCPBridge 创建配置就绪的 MCPBridge 实例。
-func NewMCPBridge(l *slog.Logger, diagLimiter *logger.RateLimiter) *MCPBridge {
+func NewMCPBridge(l *slog.Logger) *MCPBridge {
 	if l == nil {
 		l = slog.Default()
 	}
 	return &MCPBridge{
-		logger:      l,
-		diagLimiter: diagLimiter,
+		logger: l,
 	}
 }
 
@@ -116,12 +113,15 @@ func (b *MCPBridge) HandleInbound(sessionId string, msg *ClientMessage) {
 	b.mu.RUnlock()
 
 	if client == nil {
-		b.logDiag("mcp message ignored: device mcp not enabled for this session", sessionId)
+		b.logger.Warn("mcp message ignored: device mcp not enabled for this session",
+			"session_id", sessionId,
+		)
 		return
 	}
 
 	if msg.SessionId != "" && msg.SessionId != currentSessionId {
-		b.logDiag("mcp message ignored: session_id mismatch", sessionId,
+		b.logger.Warn("mcp message ignored: session_id mismatch",
+			"session_id", sessionId,
 			"expected", currentSessionId,
 			"actual", msg.SessionId,
 		)
@@ -129,13 +129,17 @@ func (b *MCPBridge) HandleInbound(sessionId string, msg *ClientMessage) {
 	}
 
 	if len(msg.Payload) == 0 {
-		b.logDiag("mcp message ignored: empty payload", sessionId)
+		b.logger.Warn("mcp message ignored: empty payload",
+			"session_id", sessionId,
+		)
 		return
 	}
 
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(msg.Payload, &obj); err != nil || obj == nil {
-		b.logDiag("mcp message ignored: payload is not a valid json object", sessionId)
+		b.logger.Warn("mcp message ignored: payload is not a valid json object",
+			"session_id", sessionId,
+		)
 		return
 	}
 
@@ -196,13 +200,4 @@ func (b *MCPBridge) Close() {
 	if client != nil {
 		client.Close()
 	}
-}
-
-// logDiag 限频记录诊断日志。
-func (b *MCPBridge) logDiag(msg string, sessionId string, args ...any) {
-	if b.diagLimiter != nil && !b.diagLimiter.Allow() {
-		return
-	}
-	allArgs := append([]any{"session_id", sessionId}, args...)
-	b.logger.Warn(msg, allArgs...)
 }

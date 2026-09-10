@@ -16,7 +16,6 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/ai"
 	"xiaozhi-esp32-golang-server/internal/audio"
-	"xiaozhi-esp32-golang-server/internal/logger"
 	"xiaozhi-esp32-golang-server/internal/protocol/ws"
 	"xiaozhi-esp32-golang-server/internal/voice"
 )
@@ -126,8 +125,7 @@ func NewSession(ctx context.Context, opts Options) *Session {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	events := make(chan sessionEvent, DefaultEventChannelCapacity)
-	diagLimiter := logger.NewDiagRateLimiter()
-	mcpBridge := NewMCPBridge(l, diagLimiter)
+	mcpBridge := NewMCPBridge(l)
 	toolProvider := NewToolProvider(mcpBridge, opts.AgentKitStore, l)
 	out := NewOutboundActor(
 		sessionCtx,

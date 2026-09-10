@@ -222,7 +222,7 @@ func LogAuthSuccess(l *slog.Logger, r *http.Request, serialNumber string) {
 	)
 }
 
-// RejectUpgrade 向客户端写入认证失败的 HTTP 响应并记录脱敏诊断日志，确保拒绝发生在协议升级之前。
+// RejectUpgrade 向客户端写入认证失败的 HTTP 响应并记录诊断日志，确保拒绝发生在协议升级之前。
 func RejectUpgrade(w http.ResponseWriter, r *http.Request, l *slog.Logger, err error) {
 	statusCode := HTTPStatus(err)
 	LogAuthRejection(l, r, err)

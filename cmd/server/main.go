@@ -10,14 +10,13 @@ import (
 
 	"xiaozhi-esp32-golang-server/internal/config"
 	"xiaozhi-esp32-golang-server/internal/database"
-	"xiaozhi-esp32-golang-server/internal/logger"
 	"xiaozhi-esp32-golang-server/internal/router"
 	"xiaozhi-esp32-golang-server/internal/server"
 	"xiaozhi-esp32-golang-server/internal/session"
 )
 
 func main() {
-	logger.InitDefault(os.Stdout, slog.LevelInfo)
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	configPath := flag.String("config", "config.yaml", "Path to YAML configuration file")
 	flag.Parse()

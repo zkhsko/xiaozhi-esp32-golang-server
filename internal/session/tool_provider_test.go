@@ -225,7 +225,7 @@ func TestToolProvider_DeviceToolCallLimit_8PerGeneration(t *testing.T) {
 	defer cancel()
 
 	sender := &dummySender{}
-	bridge := NewMCPBridge(slog.Default(), nil)
+	bridge := NewMCPBridge(slog.Default())
 
 	sender.onSend = func(c context.Context, payload json.RawMessage) error {
 		var req struct {

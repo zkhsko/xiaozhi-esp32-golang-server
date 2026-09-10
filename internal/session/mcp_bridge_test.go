@@ -78,7 +78,7 @@ func TestMCPBridge_SendMCPPayload(t *testing.T) {
 	defer cancel()
 
 	sender := &mockSessionSender{}
-	bridge := NewMCPBridge(slog.Default(), nil)
+	bridge := NewMCPBridge(slog.Default())
 	bridge.Enable(ctx, "test-sess-123", sender)
 
 	payload := json.RawMessage(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)
@@ -113,7 +113,7 @@ func TestMCPBridge_HandleInbound_ValidationAndForwarding(t *testing.T) {
 	defer cancel()
 
 	sender := &mockSessionSender{}
-	bridge := NewMCPBridge(slog.Default(), nil)
+	bridge := NewMCPBridge(slog.Default())
 	bridge.Enable(ctx, "sess-mcp-test", sender)
 
 	// 1. 非法 session_id（不匹配）应被忽略
