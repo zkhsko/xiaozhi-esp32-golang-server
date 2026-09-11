@@ -10,6 +10,12 @@ import (
 // ToolCloseSession 关闭会话工具名称常量。
 const ToolCloseSession = "server.close_session"
 
+func init() {
+	registerTool(ToolCloseSession, func(_ string) (ai.Tool, error) {
+		return GetCloseSessionTool(), nil
+	})
+}
+
 // CloseSessionInput 定义关闭会话工具的入参。
 type CloseSessionInput struct {
 	Reason string `json:"reason,omitempty" jsonschema:"description=关闭会话的原因（可选）"`

@@ -10,8 +10,11 @@ import (
 // ToolGetCurrentTime 获取当前时间工具名称常量。
 const ToolGetCurrentTime = "server.get_current_time"
 
-// GetCurrentTimeInput 定义获取当前时间工具的入参。
-type GetCurrentTimeInput struct{}
+func init() {
+	registerTool(ToolGetCurrentTime, func(_ string) (ai.Tool, error) {
+		return GetCurrentTimeTool(), nil
+	})
+}
 
 // GetCurrentTimeOutput 定义获取当前时间工具的结构化返回值。
 type GetCurrentTimeOutput struct {

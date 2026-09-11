@@ -39,6 +39,10 @@ const (
 	DefaultWeatherMaxResponseBytes = 256 * 1024
 )
 
+func init() {
+	registerTool(ToolGetCurrentWeather, NewWeatherToolFromConfig)
+}
+
 // WeatherConfig 定义从 agentkit_config 表中读取的天气工具配置结构体。
 type WeatherConfig struct {
 	APIKey   string `json:"api_key"`
@@ -331,9 +335,9 @@ func NewWeatherTool(cfg WeatherConfig) (ai.Tool, error) {
 }
 
 // NewWeatherToolFromConfig 从 JSON 配置字符串构造天气查询工具。
-func NewWeatherToolFromConfig(toolConfigJSON string) (ai.Tool, error) {
+func NewWeatherToolFromConfig(configJSON string) (ai.Tool, error) {
 	var cfg WeatherConfig
-	if err := json.Unmarshal([]byte(toolConfigJSON), &cfg); err != nil {
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return ai.Tool{}, fmt.Errorf("unmarshal weather tool config: %w", err)
 	}
 	return NewWeatherTool(cfg)

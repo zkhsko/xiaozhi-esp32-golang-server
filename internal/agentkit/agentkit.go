@@ -7,6 +7,22 @@ import (
 	"xiaozhi-esp32-golang-server/internal/ai"
 )
 
+type createToolFunc func(string) (ai.Tool, error)
+
+// constructorsByName 仅在包初始化阶段注册，运行期间只读。
+var constructorsByName = make(map[string]createToolFunc)
+
+func registerTool(name string, constructor createToolFunc) {
+	name = strings.TrimSpace(name)
+	if name == "" || constructor == nil {
+		panic("invalid agentkit tool registration")
+	}
+	if _, exists := constructorsByName[name]; exists {
+		panic(fmt.Sprintf("duplicate agentkit tool: %s", name))
+	}
+	constructorsByName[name] = constructor
+}
+
 // SessionCloser 是可选的工具结果接口，用于向会话层表明在当前轮次结束后应关闭会话。
 type SessionCloser interface {
 	ShouldCloseSession() bool
@@ -49,19 +65,12 @@ func BuildTools(items []ToolConfigItem) []ai.Tool {
 }
 
 // BuildTool 根据工具名称与 JSON 配置字符串构造对应的 AgentKit 内置工具。
-func BuildTool(toolName, toolConfigJSON string) (ai.Tool, error) {
-	switch strings.TrimSpace(toolName) {
-	case ToolGetCurrentWeather:
-		return NewWeatherToolFromConfig(toolConfigJSON)
-	case ToolGetWeatherForecast:
-		return NewWeatherForecastToolFromConfig(toolConfigJSON)
-	case ToolGetCurrentTime:
-		return GetCurrentTimeTool(), nil
-	case ToolCloseSession:
-		return GetCloseSessionTool(), nil
-	default:
+func BuildTool(toolName, configJSON string) (ai.Tool, error) {
+	constructor, exists := constructorsByName[strings.TrimSpace(toolName)]
+	if !exists {
 		return ai.Tool{}, fmt.Errorf("unsupported agentkit tool: %s", toolName)
 	}
+	return constructor(configJSON)
 }
 
 // AggregateTools 聚合服务端内置工具与设备 MCP 动态工具快照：

@@ -31,6 +31,10 @@ const (
 	DefaultWeatherForecastDays = 3
 )
 
+func init() {
+	registerTool(ToolGetWeatherForecast, NewWeatherForecastToolFromConfig)
+}
+
 // WeatherForecastConfig 定义从 agentkit_config 表中读取的天气预报工具配置结构体。
 type WeatherForecastConfig struct {
 	APIKey   string `json:"api_key"`
@@ -431,9 +435,9 @@ func NewWeatherForecastTool(cfg WeatherForecastConfig) (ai.Tool, error) {
 }
 
 // NewWeatherForecastToolFromConfig 从 JSON 配置字符串构造天气预报工具。
-func NewWeatherForecastToolFromConfig(toolConfigJSON string) (ai.Tool, error) {
+func NewWeatherForecastToolFromConfig(configJSON string) (ai.Tool, error) {
 	var cfg WeatherForecastConfig
-	if err := json.Unmarshal([]byte(toolConfigJSON), &cfg); err != nil {
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
 		return ai.Tool{}, fmt.Errorf("unmarshal weather forecast tool config: %w", err)
 	}
 	return NewWeatherForecastTool(cfg)
