@@ -200,7 +200,7 @@
         ref="bindFormRef"
         :model="bindDialog.form"
         :rules="bindRules"
-        label-width="110px"
+        label-width="125px"
       >
         <el-form-item label="激活验证码" prop="code">
           <el-input

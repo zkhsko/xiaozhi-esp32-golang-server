@@ -14,6 +14,7 @@
         <el-form-item label="服务平台">
           <el-select
             v-model="searchForm.provider"
+            placeholder="全部平台"
             clearable
             style="width: 160px;"
           >

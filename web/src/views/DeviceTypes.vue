@@ -13,6 +13,7 @@
         <el-form-item label="关联智能体">
           <el-select
             v-model="searchForm.agent_config_id"
+            placeholder="全部智能体"
             clearable
             filterable
             style="width: 200px;"

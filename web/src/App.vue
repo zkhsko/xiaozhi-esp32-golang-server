@@ -84,6 +84,7 @@ html, body, #app {
   margin: 0;
   padding: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background-color: #f8fafc;
 }
 
 .layout-container {
@@ -92,42 +93,64 @@ html, body, #app {
 
 .aside {
   background-color: #ffffff;
-  border-right: 1px solid #e4e7ed;
+  border-right: 1px solid #eef0f4;
   display: flex;
   flex-direction: column;
 }
 
 .logo {
-  height: 60px;
+  height: 56px;
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 0 18px;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid #f1f5f9;
   background-color: #ffffff;
 }
 
 .logo-icon {
-  font-size: 22px;
+  font-size: 20px;
   color: #409eff;
 }
 
 .logo-text {
-  font-size: 16px;
-  font-weight: 700;
-  color: #303133;
+  font-size: 15px;
+  font-weight: 650;
+  color: #0f172a;
+  letter-spacing: -0.2px;
 }
 
 .el-menu-vertical {
-  border-right: none;
-  background-color: transparent;
-  padding-top: 8px;
+  border-right: none !important;
+  background-color: transparent !important;
+  padding: 6px 0;
+}
+
+.el-menu-vertical .el-menu-item {
+  height: 40px;
+  line-height: 40px;
+  margin: 2px 8px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  color: #475569;
+  transition: all 0.15s ease;
+}
+
+.el-menu-vertical .el-menu-item:hover {
+  background-color: #f1f5f9;
+  color: #0f172a;
+}
+
+.el-menu-vertical .el-menu-item.is-active {
+  background-color: #ecf5ff;
+  color: #409eff;
+  font-weight: 600;
 }
 
 .header {
-  height: 60px;
+  height: 56px;
   background-color: #ffffff;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid #eef0f4;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -135,14 +158,83 @@ html, body, #app {
 }
 
 .header-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: #303133;
+  font-size: 15px;
+  font-weight: 650;
+  color: #0f172a;
+  letter-spacing: -0.2px;
 }
 
 .main-content {
-  background-color: #f5f7fa;
-  padding: 20px;
+  background-color: #f8fafc;
+  padding: 20px 24px;
   overflow-y: auto;
+}
+
+/* 全局卡片细腻微调 */
+.filter-card,
+.table-card {
+  border-radius: 8px !important;
+  border: 1px solid #eef0f4 !important;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.03) !important;
+  background-color: #ffffff;
+}
+
+/* 表格全局质感优化 */
+.el-table {
+  --el-table-header-bg-color: #f8fafc !important;
+  --el-table-header-text-color: #475569 !important;
+  --el-table-border-color: #f1f5f9 !important;
+  border-radius: 6px;
+}
+
+.el-table th.el-table__cell {
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  height: 42px;
+  background-color: #f8fafc !important;
+}
+
+.el-table td.el-table__cell {
+  font-size: 13px;
+  color: #334155;
+  padding: 10px 0;
+}
+
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: #fafbfe;
+}
+
+/* 弹窗防溢出与圆角规范 */
+.el-dialog {
+  border-radius: 10px !important;
+  overflow: hidden;
+  display: flex !important;
+  flex-direction: column !important;
+  max-height: 85vh !important;
+  margin-top: 7.5vh !important;
+}
+
+.el-dialog__header {
+  padding: 16px 20px !important;
+  margin-right: 0 !important;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.el-dialog__title {
+  font-size: 15px !important;
+  font-weight: 650 !important;
+  color: #0f172a !important;
+}
+
+.el-dialog__body {
+  flex: 1 !important;
+  overflow-y: auto !important;
+  padding: 20px 24px !important;
+}
+
+.el-dialog__footer {
+  padding: 12px 20px !important;
+  border-top: 1px solid #f1f5f9;
+  background-color: #fafbfc;
 }
 </style>

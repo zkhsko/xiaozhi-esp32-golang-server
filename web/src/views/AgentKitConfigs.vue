@@ -13,6 +13,7 @@
         <el-form-item label="启用状态">
           <el-select
             v-model="searchForm.enabled"
+            placeholder="全部状态"
             clearable
             style="width: 150px;"
           >
