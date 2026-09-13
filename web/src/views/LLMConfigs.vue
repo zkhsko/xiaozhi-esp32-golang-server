@@ -260,16 +260,17 @@
         <el-form-item label="配置名称" prop="name">
           <el-input
             v-model="configDialog.form.name"
+            placeholder="请输入配置名称，例如：阿里百炼 Qwen"
             maxlength="128"
             show-word-limit
             clearable
           />
-          <span class="form-item-tip">用于在 Agent 配置中展示与标识此 LLM 配置</span>
         </el-form-item>
 
         <el-form-item label="服务平台" prop="provider">
           <el-select
             v-model="configDialog.form.provider"
+            placeholder="请选择服务平台"
             filterable
             style="width: 100%;"
             @change="handleProviderChange"
@@ -281,44 +282,42 @@
               :value="provider.value"
             />
           </el-select>
-          <span class="form-item-tip">当前仅阿里百炼可启用，其他平台保留为暂未实现的占位配置</span>
+          <span class="form-item-tip">当前仅阿里百炼可启用，其他平台保留为占位配置</span>
         </el-form-item>
 
         <el-form-item label="服务端点" prop="endpoint">
           <el-input
             v-model="configDialog.form.endpoint"
+            placeholder="例如：https://dashscope.aliyuncs.com/compatible-mode/v1"
             clearable
           />
-          <span class="form-item-tip">LLM HTTP 协议端点地址，必须以 http:// 或 https:// 开头</span>
         </el-form-item>
 
         <el-form-item label="代理地址" prop="proxy_url">
           <el-input
             v-model="configDialog.form.proxy_url"
+            placeholder="选填，例如：http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
             clearable
           />
-          <span class="form-item-tip">代理服务器地址（支持 http://, https://, socks5://, socks5h://），非空即启用</span>
         </el-form-item>
 
         <el-form-item label="模型标识" prop="model">
           <el-input
             v-model="configDialog.form.model"
+            placeholder="例如：qwen-plus 或 gpt-4o"
             maxlength="255"
             clearable
           />
-          <span class="form-item-tip">大语言模型标识（如 qwen-max / gpt-4o / deepseek-chat）</span>
         </el-form-item>
 
         <el-form-item label="API Key" prop="api_key">
           <el-input
             v-model="configDialog.form.api_key"
+            placeholder="请输入 API Key（编辑时留空表示保留已有 Key）"
             type="password"
             show-password
             clearable
           />
-          <span class="form-item-tip">
-            {{ configDialog.isEdit ? '编辑时留空将保留已有 Key，如需修改请输入新 Key' : '用于访问 LLM 服务的 API Key 或鉴权凭据' }}
-          </span>
         </el-form-item>
 
         <el-form-item label="首 Token 超时" prop="first_token_timeout_ms">
@@ -329,8 +328,7 @@
             :step="500"
             style="width: 200px;"
           />
-          <span style="margin-left: 8px; color: #909399;">毫秒 (ms)</span>
-          <div class="form-item-tip">等待模型输出第一个 Token 的最大超时时间（3000 ~ 30000 毫秒）</div>
+          <span style="margin-left: 8px; color: var(--el-text-color-secondary);">毫秒 (ms)</span>
         </el-form-item>
 
         <el-form-item label="总超时时间" prop="overall_timeout_ms">
@@ -341,8 +339,7 @@
             :step="1000"
             style="width: 200px;"
           />
-          <span style="margin-left: 8px; color: #909399;">毫秒 (ms)</span>
-          <div class="form-item-tip">大模型完整回复流式生成的最大超时时间（10000 ~ 180000 毫秒，且需大于首 Token 超时）</div>
+          <span style="margin-left: 8px; color: var(--el-text-color-secondary);">毫秒 (ms)</span>
         </el-form-item>
 
         <el-form-item label="启用状态" prop="enabled">

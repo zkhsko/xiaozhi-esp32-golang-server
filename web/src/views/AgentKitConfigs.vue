@@ -6,6 +6,7 @@
         <el-form-item label="工具标识">
           <el-input
             v-model="searchForm.tool_name"
+            placeholder="支持搜索工具标识"
             clearable
             style="width: 220px;"
           />
@@ -180,6 +181,7 @@
         <el-form-item label="工具标识" prop="tool_name">
           <el-input
             v-model="dialog.form.tool_name"
+            placeholder="请输入工具标识，例如：weather_tool 或 get_current_time"
             clearable
           />
         </el-form-item>
@@ -187,8 +189,9 @@
         <el-form-item label="配置内容" prop="tool_config">
           <el-input
             v-model="dialog.form.tool_config"
+            placeholder='请输入合法的 JSON 配置参数，例如：{"api_key": "xxx"}'
             type="textarea"
-            :rows="10"
+            :rows="8"
             class="code-textarea"
           />
         </el-form-item>

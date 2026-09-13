@@ -240,6 +240,7 @@
         <el-form-item label="配置名称" prop="name">
           <el-input
             v-model="configDialog.form.name"
+            placeholder="请输入智能体名称，例如：小智智能助手"
             maxlength="128"
             show-word-limit
             clearable
@@ -249,6 +250,7 @@
         <el-form-item label="ASR 语音识别" prop="asr_config_id">
           <el-select
             v-model="configDialog.form.asr_config_id"
+            placeholder="请选择关联的 ASR 语音识别配置"
             filterable
             style="width: 100%;"
           >
@@ -264,6 +266,7 @@
         <el-form-item label="LLM 语言模型" prop="llm_config_id">
           <el-select
             v-model="configDialog.form.llm_config_id"
+            placeholder="请选择关联的 LLM 语言模型配置"
             filterable
             style="width: 100%;"
           >
@@ -279,6 +282,7 @@
         <el-form-item label="TTS 语音合成" prop="tts_config_id">
           <el-select
             v-model="configDialog.form.tts_config_id"
+            placeholder="请选择关联的 TTS 语音合成配置"
             filterable
             style="width: 100%;"
             @change="handleTTSChange"
@@ -293,31 +297,30 @@
         </el-form-item>
 
         <el-form-item label="发音人音色" prop="voice">
-          <el-input
+          <el-select
             v-model="configDialog.form.voice"
-            maxlength="128"
-            show-word-limit
-            clearable
-          />
-          <div v-if="suggestedVoices.length > 0" class="voice-suggestions">
-            <span class="suggestion-label">推荐音色：</span>
-            <el-tag
-              v-for="v in suggestedVoices"
-              :key="v"
-              size="small"
-              class="suggestion-tag"
-              @click="configDialog.form.voice = v"
-            >
-              {{ v }}
-            </el-tag>
-          </div>
+            :placeholder="configDialog.form.tts_config_id ? '请选择发音人音色' : '请先选择 TTS 语音合成配置'"
+            :disabled="!configDialog.form.tts_config_id"
+            filterable
+            allow-create
+            default-first-option
+            style="width: 100%;"
+          >
+            <el-option
+              v-for="item in ttsVoiceOptions"
+              :key="item.value"
+              :label="item.label"
+              :value="item.value"
+            />
+          </el-select>
         </el-form-item>
 
         <el-form-item label="系统提示词" prop="system_prompt">
           <el-input
             v-model="configDialog.form.system_prompt"
+            placeholder="请输入智能体的 System Prompt 系统人设提示词"
             type="textarea"
-            :rows="6"
+            :rows="4"
             maxlength="16384"
             show-word-limit
           />
@@ -464,7 +467,7 @@ const configRules: FormRules = {
     { required: true, message: '请选择关联的 TTS 语音合成配置', trigger: 'change' },
   ],
   voice: [
-    { required: true, message: '请输入发音人音色标识', trigger: 'blur' },
+    { required: true, message: '请选择发音人音色', trigger: 'change' },
     { max: 128, message: '音色标识不能超过 128 字符', trigger: 'blur' },
   ],
   system_prompt: [
@@ -473,35 +476,64 @@ const configRules: FormRules = {
   ],
 }
 
-// 推荐音色列表（根据当前选中的 TTS 配置解析）
-const suggestedVoices = computed(() => {
+interface VoiceOption {
+  label: string
+  value: string
+}
+
+// 关联 TTS 配置的音色选项列表
+const ttsVoiceOptions = computed<VoiceOption[]>(() => {
   if (!configDialog.form.tts_config_id) return []
   const selectedTTS = ttsOptions.value.find((t) => t.id === configDialog.form.tts_config_id)
   if (!selectedTTS || !selectedTTS.voices) return []
+  const raw = selectedTTS.voices.trim()
+  if (!raw) return []
+
   try {
-    const parsed = JSON.parse(selectedTTS.voices)
+    const parsed = JSON.parse(raw)
     if (Array.isArray(parsed)) {
-      return parsed.map((item: any) => (typeof item === 'string' ? item : item.name || item.id || String(item)))
+      return parsed
+        .map((item: any) => {
+          if (typeof item === 'string') {
+            return { label: item, value: item }
+          }
+          if (typeof item === 'object' && item !== null) {
+            const val = item.value || item.id || item.voice || item.name || ''
+            const name = item.label || item.name || item.title || val
+            return {
+              label: name !== val ? `${name} (${val})` : String(val),
+              value: String(val),
+            }
+          }
+          return { label: String(item), value: String(item) }
+        })
+        .filter((opt) => opt.value)
     }
   } catch {
-    // voices 非 JSON 数组时按英文逗号分隔
-    return selectedTTS.voices.split(',').map((s) => s.trim()).filter(Boolean)
+    // 降级为逗号分隔字符串
+    return raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => ({ label: s, value: s }))
   }
   return []
 })
 
-function handleTTSChange(newTTSId: number) {
-  // 若当前音色为空，且选中的 TTS 有推荐音色，自动填入首个音色
-  const selectedTTS = ttsOptions.value.find((t) => t.id === newTTSId)
-  if (selectedTTS && selectedTTS.voices && !configDialog.form.voice) {
-    try {
-      const parsed = JSON.parse(selectedTTS.voices)
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        configDialog.form.voice = typeof parsed[0] === 'string' ? parsed[0] : parsed[0].name || parsed[0].id || ''
-      }
-    } catch {
-      // ignore
+function handleTTSChange(newTTSId?: number) {
+  if (!newTTSId) {
+    configDialog.form.voice = ''
+    return
+  }
+  // 切换 TTS 配置时，若当前音色不在新音色列表中，自动选中首个可用音色
+  const options = ttsVoiceOptions.value
+  if (options.length > 0) {
+    const exists = options.some((opt) => opt.value === configDialog.form.voice)
+    if (!exists) {
+      configDialog.form.voice = options[0].value
     }
+  } else {
+    configDialog.form.voice = ''
   }
 }
 
@@ -890,29 +922,6 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
-}
-
-.voice-suggestions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.suggestion-label {
-  font-size: 12px;
-  color: #909399;
-}
-
-.suggestion-tag {
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.suggestion-tag:hover {
-  background-color: #409eff;
-  color: #ffffff;
 }
 
 .prompt-viewer {

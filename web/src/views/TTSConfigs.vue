@@ -267,16 +267,17 @@
         <el-form-item label="配置名称" prop="name">
           <el-input
             v-model="configDialog.form.name"
+            placeholder="请输入配置名称，例如：阿里百炼 TTS"
             maxlength="128"
             show-word-limit
             clearable
           />
-          <span class="form-item-tip">用于在 Agent 配置中展示与标识此 TTS 配置</span>
         </el-form-item>
 
         <el-form-item label="服务平台" prop="provider">
           <el-select
             v-model="configDialog.form.provider"
+            placeholder="请选择或输入服务平台"
             filterable
             allow-create
             default-first-option
@@ -291,47 +292,45 @@
         <el-form-item label="服务端点" prop="endpoint">
           <el-input
             v-model="configDialog.form.endpoint"
+            placeholder="例如：wss://dashscope.aliyuncs.com/api-ws/v1/inference/"
             clearable
           />
-          <span class="form-item-tip">TTS WebSocket 协议地址，必须以 ws:// 或 wss:// 开头</span>
         </el-form-item>
 
         <el-form-item label="代理地址" prop="proxy_url">
           <el-input
             v-model="configDialog.form.proxy_url"
+            placeholder="选填，例如：http://127.0.0.1:7890 或 socks5://127.0.0.1:1080"
             clearable
           />
-          <span class="form-item-tip">代理服务器地址（支持 http://, https://, socks5://, socks5h://），非空即启用</span>
         </el-form-item>
 
         <el-form-item label="模型标识" prop="model">
           <el-input
             v-model="configDialog.form.model"
+            placeholder="例如：cosyvoice-v1 或 tts-1"
             maxlength="255"
             clearable
           />
-          <span class="form-item-tip">语音合成模型标识（如 cosyvoice-v1 / cosyvoice-v2 / tts-1）</span>
         </el-form-item>
 
         <el-form-item label="API Key" prop="api_key">
           <el-input
             v-model="configDialog.form.api_key"
+            placeholder="请输入 API Key（编辑时留空表示保留已有 Key）"
             type="password"
             show-password
             clearable
           />
-          <span class="form-item-tip">
-            {{ configDialog.isEdit ? '编辑时留空将保留已有 Key，如需修改请输入新 Key' : '用于访问 TTS 服务的 API Key 或鉴权凭据' }}
-          </span>
         </el-form-item>
 
         <el-form-item label="音色配置" prop="voices">
           <el-input
             v-model="configDialog.form.voices"
+            placeholder='JSON 数组格式，例如：["longxiaochun", "longwan"]'
             type="textarea"
-            :rows="5"
+            :rows="3"
           />
-          <span class="form-item-tip">音色列表必须为合法 JSON 格式（如 ["longanlingxi", "longxiaochun"] 或音色对象数组）</span>
         </el-form-item>
 
         <el-form-item label="连接超时" prop="connect_timeout_ms">
@@ -342,8 +341,7 @@
             :step="500"
             style="width: 200px;"
           />
-          <span style="margin-left: 8px; color: #909399;">毫秒 (ms)</span>
-          <div class="form-item-tip">WebSocket 建立连接的最大超时时间（3000 ~ 30000 毫秒）</div>
+          <span style="margin-left: 8px; color: var(--el-text-color-secondary);">毫秒 (ms)</span>
         </el-form-item>
 
         <el-form-item label="启用状态" prop="enabled">

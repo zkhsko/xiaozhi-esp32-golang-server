@@ -207,29 +207,26 @@
         <el-form-item label="激活验证码" prop="code">
           <el-input
             v-model="bindDialog.form.code"
-            placeholder="请输入设备屏幕显示的 6 位验证码"
+            placeholder="请输入设备屏幕显示的 6 位数字验证码"
             maxlength="6"
             clearable
           />
-          <span class="form-item-tip">设备连网后屏幕上展示的 6 位数字激活码</span>
         </el-form-item>
 
         <el-form-item label="设备序列号" prop="sn">
           <el-input
             v-model="bindDialog.form.sn"
-            placeholder="选填（带出厂 SN 设备无需填写）"
+            placeholder="选填（出厂自带 SN 的设备无需填写）"
             clearable
           />
-          <span class="form-item-tip">仅针对未烧录出厂 SN 的设备需要手动输入</span>
         </el-form-item>
 
         <el-form-item label="出厂 HMAC Key" prop="hmac">
           <el-input
             v-model="bindDialog.form.hmac"
-            placeholder="选填（无 SN 设备需输入 64 位 Key）"
+            placeholder="选填（无出厂 SN 设备激活时需填 64 位 Key）"
             clearable
           />
-          <span class="form-item-tip">仅无出厂 SN 设备在手动激活绑定时校验</span>
         </el-form-item>
       </el-form>
 
@@ -262,7 +259,7 @@
         <el-form-item label="Device-Id">
           <el-input
             v-model="editDialog.form.device_id"
-            placeholder="如 MAC 地址或设备 Id"
+            placeholder="例如：MAC 地址或设备标识"
             clearable
           />
         </el-form-item>
@@ -270,7 +267,7 @@
         <el-form-item label="Client-Id">
           <el-input
             v-model="editDialog.form.client_id"
-            placeholder="如客户端实例标识"
+            placeholder="例如：客户端实例标识"
             clearable
           />
         </el-form-item>

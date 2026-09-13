@@ -6,6 +6,7 @@
         <el-form-item label="设备类型">
           <el-input
             v-model="searchForm.device_type"
+            placeholder="支持搜索设备类型"
             clearable
             style="width: 200px;"
           />
@@ -175,16 +176,17 @@
         <el-form-item label="设备类型" prop="device_type">
           <el-input
             v-model="configDialog.form.device_type"
+            placeholder="请输入设备类型标识，例如：default 或 esp32-s3-box"
             maxlength="32"
             show-word-limit
             clearable
           />
-          <span class="form-item-tip">设备类型唯一标识，通常由小写字母、数字和连字符组成（最大 32 字符）</span>
         </el-form-item>
 
         <el-form-item label="关联智能体" prop="agent_config_id">
           <el-select
             v-model="configDialog.form.agent_config_id"
+            placeholder="请选择关联的智能体"
             filterable
             style="width: 100%;"
           >

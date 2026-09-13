@@ -14,7 +14,7 @@
         <el-form-item label="设备类型">
           <el-input
             v-model="searchForm.device_type"
-            placeholder="如 default"
+            placeholder="例如：default"
             clearable
             style="width: 160px;"
           />
@@ -197,17 +197,16 @@
               controls-position="right"
               style="width: 100%;"
             />
-            <span class="form-item-tip">单次最多可生成 1000 个凭证</span>
+            <span class="form-item-tip">单次最多可批量生成 1000 个凭证</span>
           </el-form-item>
 
           <el-form-item label="设备类型" prop="device_type">
             <el-input
               v-model="generateDialog.form.device_type"
-              placeholder="默认 default"
+              placeholder="默认 default，对应设备类型标识"
               clearable
               style="width: 100%;"
             />
-            <span class="form-item-tip">用于关联对应的 AI Agent 配置</span>
           </el-form-item>
         </el-form>
       </div>
@@ -281,7 +280,7 @@
         <el-form-item label="设备类型">
           <el-input
             v-model="editDialog.form.device_type"
-            placeholder="如 default"
+            placeholder="请输入设备类型，例如：default"
             clearable
           />
         </el-form-item>
