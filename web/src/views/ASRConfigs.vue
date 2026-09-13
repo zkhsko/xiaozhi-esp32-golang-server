@@ -19,9 +19,12 @@
             style="width: 160px;"
           >
             <el-option label="全部平台" value="" />
-            <el-option label="阿里百炼" value="dashscope" />
-            <el-option label="火山引擎" value="volcengine" />
-            <el-option label="OpenAI" value="openai" />
+            <el-option
+              v-for="provider in asrProviderOptions"
+              :key="provider.value"
+              :label="provider.label"
+              :value="provider.value"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="启用状态">
@@ -91,11 +94,11 @@
         <el-table-column prop="provider" label="服务平台" width="130" align="center">
           <template #default="{ row }">
             <el-tag
-              :type="row.provider === 'dashscope' ? 'primary' : row.provider === 'volcengine' ? 'warning' : 'info'"
+              :type="getProviderTagType(row.provider)"
               effect="plain"
               size="small"
             >
-              {{ row.provider || 'dashscope' }}
+              {{ getProviderLabel(row.provider) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -283,9 +286,12 @@
             default-first-option
             style="width: 100%;"
           >
-            <el-option label="阿里百炼" value="dashscope" />
-            <el-option label="火山引擎" value="volcengine" />
-            <el-option label="OpenAI" value="openai" />
+            <el-option
+              v-for="provider in asrProviderOptions"
+              :key="provider.value"
+              :label="provider.label"
+              :value="provider.value"
+            />
           </el-select>
         </el-form-item>
 
@@ -413,6 +419,34 @@ import {
   batchDeleteASRConfigs,
   type ASRConfigItem,
 } from '../api/asrConfig'
+
+const asrProviderOptions = [
+  { label: '阿里百炼', value: 'dashscope' },
+  { label: '火山引擎', value: 'volcengine' },
+  { label: 'OpenAI', value: 'openai' },
+] as const
+
+function normalizeASRProvider(provider: string): string {
+  return provider?.trim().toLowerCase() || 'dashscope'
+}
+
+function getProviderLabel(provider: string): string {
+  const normalized = normalizeASRProvider(provider)
+  return asrProviderOptions.find((option) => option.value === normalized)?.label || (provider?.trim() || 'dashscope')
+}
+
+function getProviderTagType(provider: string): '' | 'primary' | 'success' | 'warning' | 'info' | 'danger' {
+  switch (normalizeASRProvider(provider)) {
+    case 'dashscope':
+      return 'primary'
+    case 'volcengine':
+      return 'warning'
+    case 'openai':
+      return 'info'
+    default:
+      return 'info'
+  }
+}
 
 // 搜索表单
 const searchForm = reactive({
