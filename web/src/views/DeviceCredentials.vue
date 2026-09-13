@@ -175,8 +175,10 @@
     <el-dialog
       v-model="generateDialog.visible"
       title="批量生成设备出厂凭证"
-      width="680px"
+      width="560px"
+      align-center
       :close-on-click-modal="false"
+      destroy-on-close
       @closed="handleGenerateDialogClosed"
     >
       <div v-if="!generateDialog.generatedItems.length">
@@ -193,7 +195,7 @@
               :max="1000"
               :step="1"
               controls-position="right"
-              style="width: 200px;"
+              style="width: 100%;"
             />
             <span class="form-item-tip">单次最多可生成 1000 个凭证</span>
           </el-form-item>
@@ -202,7 +204,8 @@
             <el-input
               v-model="generateDialog.form.device_type"
               placeholder="默认 default"
-              style="width: 260px;"
+              clearable
+              style="width: 100%;"
             />
             <span class="form-item-tip">用于关联对应的 AI Agent 配置</span>
           </el-form-item>
@@ -261,8 +264,10 @@
     <el-dialog
       v-model="editDialog.visible"
       title="编辑设备出厂凭证"
-      width="480px"
+      width="500px"
+      align-center
       :close-on-click-modal="false"
+      destroy-on-close
     >
       <el-form
         ref="editFormRef"
@@ -675,12 +680,6 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
-}
-
-.form-item-tip {
-  margin-left: 12px;
-  font-size: 12px;
-  color: #909399;
 }
 
 .generate-result {

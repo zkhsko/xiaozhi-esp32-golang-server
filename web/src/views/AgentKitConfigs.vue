@@ -165,7 +165,8 @@
     <el-dialog
       v-model="dialog.visible"
       :title="dialog.isEdit ? '编辑内建工具配置' : '新建内建工具配置'"
-      width="680px"
+      width="600px"
+      align-center
       :close-on-click-modal="false"
       destroy-on-close
     >
@@ -173,7 +174,7 @@
         ref="formRef"
         :model="dialog.form"
         :rules="rules"
-        label-width="110px"
+        label-width="100px"
         status-icon
       >
         <el-form-item label="工具标识" prop="tool_name">
@@ -220,6 +221,7 @@
       v-model="detailDialog.visible"
       title="工具配置参数详情"
       width="600px"
+      align-center
       destroy-on-close
     >
       <div class="detail-content">

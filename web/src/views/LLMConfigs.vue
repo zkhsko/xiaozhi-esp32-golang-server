@@ -246,6 +246,7 @@
       v-model="configDialog.visible"
       :title="configDialog.isEdit ? '编辑 LLM 大语言模型配置' : '新建 LLM 大语言模型配置'"
       width="600px"
+      align-center
       :close-on-click-modal="false"
       destroy-on-close
     >
@@ -896,13 +897,5 @@ onMounted(() => {
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
-}
-
-.form-item-tip {
-  display: block;
-  font-size: 12px;
-  color: #909399;
-  line-height: 1.4;
-  margin-top: 4px;
 }
 </style>

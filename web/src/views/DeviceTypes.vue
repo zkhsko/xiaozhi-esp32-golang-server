@@ -161,6 +161,7 @@
       v-model="configDialog.visible"
       :title="configDialog.isEdit ? '编辑设备类型' : '新建设备类型'"
       width="560px"
+      align-center
       :close-on-click-modal="false"
       destroy-on-close
     >
@@ -168,7 +169,7 @@
         ref="configFormRef"
         :model="configDialog.form"
         :rules="configRules"
-        label-width="120px"
+        label-width="110px"
         label-position="right"
       >
         <el-form-item label="设备类型" prop="device_type">
@@ -565,14 +566,6 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
-}
-
-.form-item-tip {
-  display: block;
-  font-size: 12px;
-  color: #909399;
-  line-height: 1.4;
-  margin-top: 4px;
 }
 
 .copy-btn {

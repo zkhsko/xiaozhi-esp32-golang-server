@@ -253,6 +253,7 @@
       v-model="configDialog.visible"
       :title="configDialog.isEdit ? '编辑 ASR 语音识别配置' : '新建 ASR 语音识别配置'"
       width="600px"
+      align-center
       :close-on-click-modal="false"
       destroy-on-close
     >
@@ -367,6 +368,8 @@
       v-model="hotwordsDialog.visible"
       title="ASR 识别热词详情"
       width="560px"
+      align-center
+      destroy-on-close
     >
       <div class="hotwords-viewer">
         <div class="viewer-header">
@@ -924,14 +927,6 @@ onMounted(() => {
   margin-top: 16px;
   display: flex;
   justify-content: flex-end;
-}
-
-.form-item-tip {
-  display: block;
-  font-size: 12px;
-  color: #909399;
-  line-height: 1.4;
-  margin-top: 4px;
 }
 
 .hotwords-viewer {

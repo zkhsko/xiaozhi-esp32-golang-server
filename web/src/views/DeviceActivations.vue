@@ -184,8 +184,10 @@
     <el-dialog
       v-model="bindDialog.visible"
       title="激活设备"
-      width="520px"
+      width="560px"
+      align-center
       :close-on-click-modal="false"
+      destroy-on-close
       @closed="handleBindDialogClosed"
     >
       <el-alert
@@ -244,12 +246,14 @@
       v-model="editDialog.visible"
       title="编辑设备激活记录"
       width="500px"
+      align-center
       :close-on-click-modal="false"
+      destroy-on-close
     >
       <el-form
         ref="editFormRef"
         :model="editDialog.form"
-        label-width="110px"
+        label-width="100px"
       >
         <el-form-item label="设备序列号">
           <el-input :model-value="editDialog.form.serial_number" disabled />
@@ -656,14 +660,6 @@ onMounted(() => {
 .copy-btn {
   padding: 2px 4px;
   height: auto;
-}
-
-.form-item-tip {
-  display: block;
-  font-size: 12px;
-  color: #909399;
-  line-height: 1.4;
-  margin-top: 4px;
 }
 
 .pagination-wrapper {

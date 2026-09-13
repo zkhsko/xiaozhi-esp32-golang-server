@@ -225,7 +225,8 @@
     <el-dialog
       v-model="configDialog.visible"
       :title="configDialog.isEdit ? '编辑 Agent 智能体配置' : '新建 Agent 智能体配置'"
-      width="640px"
+      width="620px"
+      align-center
       :close-on-click-modal="false"
       destroy-on-close
     >
@@ -233,7 +234,7 @@
         ref="configFormRef"
         :model="configDialog.form"
         :rules="configRules"
-        label-width="120px"
+        label-width="110px"
         label-position="right"
       >
         <el-form-item label="配置名称" prop="name">
@@ -328,9 +329,9 @@
             active-text="开启"
             inactive-text="关闭"
           />
-          <div class="text-muted">
+          <span class="form-item-tip">
             控制首次交互、唤醒和回复结束时的提示音，不影响回复语音。保存后仅新会话生效，已连接设备需重连。
-          </div>
+          </span>
         </el-form-item>
 
         <el-form-item label="启用状态" prop="enabled">
@@ -355,6 +356,8 @@
       v-model="promptDialog.visible"
       title="Agent 系统提示词详情"
       width="600px"
+      align-center
+      destroy-on-close
     >
       <div class="prompt-viewer">
         <div class="viewer-header">
