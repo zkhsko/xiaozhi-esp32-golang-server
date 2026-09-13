@@ -69,7 +69,6 @@
         <el-table-column prop="tool_name" label="工具标识 (Tool Name)" min-width="220">
           <template #default="{ row }">
             <div class="tool-name-cell">
-              <el-icon class="tool-icon"><Tools /></el-icon>
               <span class="code-font strong-text">{{ row.tool_name }}</span>
               <el-tooltip content="复制工具标识" placement="top">
                 <el-button
@@ -270,7 +269,6 @@ import {
   Delete,
   Refresh,
   Edit,
-  Tools,
   CopyDocument,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -594,11 +592,6 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.tool-icon {
-  font-size: 16px;
-  color: #409eff;
 }
 
 .strong-text {

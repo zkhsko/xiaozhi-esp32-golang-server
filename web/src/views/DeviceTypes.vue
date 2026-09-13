@@ -74,7 +74,6 @@
         <el-table-column prop="device_type" label="设备类型标识 (Device Type)" min-width="220">
           <template #default="{ row }">
             <div class="device-type-cell">
-              <el-icon class="type-icon"><Cpu /></el-icon>
               <span class="code-font strong-text">{{ row.device_type }}</span>
               <el-tooltip content="复制设备类型" placement="top">
                 <el-button
@@ -221,7 +220,6 @@ import {
   Refresh,
   CopyDocument,
   Edit,
-  Cpu,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -523,11 +521,6 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.type-icon {
-  color: #409eff;
-  font-size: 16px;
 }
 
 .strong-text {

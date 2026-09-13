@@ -68,10 +68,7 @@
 
         <el-table-column prop="name" label="配置名称" min-width="160">
           <template #default="{ row }">
-            <div class="name-cell">
-              <el-icon class="name-icon"><UserFilled /></el-icon>
-              <span class="name-text">{{ row.name }}</span>
-            </div>
+            <span class="name-text">{{ row.name }}</span>
           </template>
         </el-table-column>
 
@@ -395,7 +392,6 @@ import {
   Refresh,
   CopyDocument,
   Edit,
-  UserFilled,
 } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
@@ -859,19 +855,8 @@ onMounted(() => {
   gap: 10px;
 }
 
-.name-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 500;
-}
-
-.name-icon {
-  color: #409eff;
-  font-size: 16px;
-}
-
 .name-text {
+  font-weight: 500;
   color: #303133;
 }
 
